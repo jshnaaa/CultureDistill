@@ -221,12 +221,19 @@ Loss = -log(σ(s_chosen - s_rejected))
 
 ### 5.5 收敛标准与质量验证
 
+**PRM 精度目标**：验证集 Pairwise Accuracy 在 65%-70% 即可为 GRPO 提供稳定对比信号，目标设为 68%。
+
+PRM 的作用是辅助 reward 信号，不需要追求高精度：
+- 精度过低（< 65%）：对比信号不可靠，GRPO 梯度方向错误
+- 精度合理（65%-70%）：提供稳定辅助信号，配合 R_ans 主信号足够
+- 训练集与验证集 Pairwise Accuracy 差距 > 10%：PRM 过拟合，对 GRPO 在线采样的新路径（分布外样本）打分不准，导致 reward hacking
+
 **收敛标准**：验证集 Pairwise Accuracy > 68%，连续 2 个 epoch 不提升即停止。
 
 **精度不足时的调整**：
 - 增加 LLM Judge 强标签比例
-- 降低 learning rate（1e-5 → 5e-6）
-- 检查文化分布是否均匀（某些文化样本极少会导致该文化的 reward 失准）
+- 调整训练超参数（降低 lr 至 5e-6，或调整 batch size）
+- 检查文化样本分布，确保每个文化都有足够数据（某些文化样本极少会导致该文化的 reward 失准）
 
 **Culture Sensitivity 验证**：同一 question，不同 culture 输入时，PRM 对各文化最高分路径的内容应有实质差异。
 
