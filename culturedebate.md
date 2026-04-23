@@ -175,24 +175,52 @@ Value Head：Linear(hidden_size → 1) + Sigmoid
 
 若一个组内所有路径都正确或都错误，跳过该样本（无对比信号）。
 
-**来源 B：LLM Judge 强标签（抽样，约 300-400 对）**
+**来源 B：细粒度监督标签（抽样，约 300-500 条路径）**
 
-从来源 A 的数据中随机抽取约 300-500 条路径，使用 Qwen2.5-72B 打文化一致性分：
+从来源 A 的数据中随机抽取约 300-500 条路径，对推理路径的文化一致性进行打分（0.1-0.9 之间的连续值）。打分来源有两种方式，可单独使用或结合使用：
+
+**方式一：人类评审员标注**
+
+由 5 位具有对应文化背景的评审员对每条路径独立打分，取加权平均作为最终分数。
+
+优点：感知细粒度文化差异能力强（语气、隐含价值观等 LLM 难以捕捉的信号）；不存在 LLM 的西方文化偏见；标注结果可解释性强。
+
+缺点：成本高、速度慢；需要每种文化都有对应母语背景的评审员，20 种文化难以全覆盖；评审员之间一致性差（Inter-Annotator Agreement 通常 < 0.7），需要多数投票或加权平均处理分歧。
+
+适用场景：少量高质量标注（100-200 条），用于验证 LLM Judge 标注质量，或作为 PRM 验证集的参考标签。
+
+**方式二：LLM-as-a-Judge**
+
+使用 Qwen2.5-72B 或同等规模模型批量打分：
 
 ```
 输入：(question, culture, reasoning_path)
-输出：1-5 的整数分
+输出：0.1-0.9 之间的连续分数
 
 Prompt：
 "You are evaluating whether the following reasoning reflects
 the cultural values and norms of [COUNTRY].
 Question: [question]
 Reasoning: [reasoning path]
-Rate the cultural consistency on a scale of 1-5.
-Respond with only a number from 1 to 5."
+Rate the cultural consistency as a decimal between 0.1 and 0.9,
+where 0.9 = perfectly reflects [COUNTRY]'s cultural values,
+0.1 = does not reflect [COUNTRY]'s cultural values at all.
+Respond with only a decimal number."
 ```
 
-归一化到 0-1 后，同一题内 score 差值 > 1 的两条路径构成 pairwise 对（chosen = 高分，rejected = 低分）。
+优点：成本低、速度快，可覆盖全量数据；一致性高；与 MAS 生成 pipeline 无缝衔接。
+
+缺点：存在西方文化偏见（对非西方文化的判断准确性低于西方文化）；对细粒度文化差异感知能力弱于领域专家；评分分布可能集中于中间值。
+
+适用场景：大量弱监督标注（300-500 条），作为 PRM 训练的主要强标签来源。
+
+**两种方式的结合使用**
+
+推荐 LLM Judge 覆盖全量，人类评审员抽样验证（50-100 条），计算两者的 Spearman 相关系数：
+- 相关系数 > 0.6：LLM Judge 可信，继续使用
+- 相关系数 < 0.5：增加人类标注比例或更换 Judge 模型
+
+归一化到 0-1 后，同一题内 score 差值 > 0.2 的两条路径构成 pairwise 对（chosen = 高分，rejected = 低分）。
 
 最终 PRM 训练数据：约 1800-2400 个 pairwise 对（弱标签为主，强标签补充质量）。
 
@@ -507,7 +535,59 @@ AgentArk/
 
 ---
 
-## 11. 关键设计决策记录
+## 11. 实战工程细节
+
+### 11.1 答案格式解析
+
+模型生成的答案格式不可控（如输出"Yes"而非"yes"，或"Option A"而非"1"），导致 R_ans 全为 0，GRPO 无梯度，训练静默失败。
+
+处理方式：在 reward 计算前加鲁棒的答案抽取逻辑，用正则匹配多种格式变体；对无法解析的输出记录日志并赋予 R_ans=0 而非跳过，保留样本参与训练。
+
+### 11.2 文化样本分布不均衡
+
+20 种文化在数据集中样本数差异可能较大，导致 PRM 对低频文化打分不准，GRPO 对低频文化的梯度信号弱，最终模型在低频文化上表现差。
+
+处理方式：PRM 训练时按文化做 weighted sampling，确保每种文化在每个 epoch 内都有足够样本；GRPO 训练时同样做文化均衡采样；评估时分文化报告 accuracy，不只看总体均值。
+
+### 11.3 推理路径长度差异
+
+不同文化、不同问题的推理路径长度差异大，统一 padding 到最长序列会浪费显存，降低有效 batch size。
+
+处理方式：按序列长度分桶（length bucketing），同一 batch 内的序列长度相近；设置 max_sequence_length=512，超长路径截断并记录截断率，截断率 > 10% 时需要增大 max_sequence_length。
+
+### 11.4 Reference Model 显存管理
+
+GRPO 需要同时保留 policy model 和 reference model，reference 冻结但仍占显存。4 卡 A100 下 8B policy + 8B reference 共约 64GB 权重，加上优化器和激活值会超出预算。
+
+处理方式：reference model 开启 `cpu_offload`，在需要计算 KL 时才加载到 GPU；或使用 ZeRO-3 分片 reference model（但会增加通信开销）。
+
+### 11.5 Checkpoint 管理与最优模型选取
+
+文化任务容易过拟合，训练后期 reward/mean 持续上升但 val_accuracy 不再提升甚至下降，若只保存最后一个 checkpoint 会丢失最优模型。
+
+处理方式：保存所有 checkpoint（或至少每 5 轮保存一次）；最终取 val_accuracy 最高的 checkpoint 作为最终模型；同时记录对应的训练轮次，便于分析过拟合发生的时间点。
+
+### 11.6 MAS 生成阶段的工程问题
+
+20000 个样本 × 5 条路径 = 100000 次 LLM 调用，若使用外部 API 会面临限速和中断风险。
+
+处理方式：实现断点续传（记录已完成的样本 id，重启时跳过）；做并发控制（参考 agentark 的 `reserve_unprocessed_queries` 逻辑）；对每次调用加重试机制（最多 3 次，失败后记录 error 而非丢弃样本）。
+
+### 11.7 PRM 打分的批量推理效率
+
+GRPO 在线采样阶段，每轮生成 40000 条路径后需要用 PRM 批量打分，若逐条调用 PRM 会成为瓶颈。
+
+处理方式：PRM 使用 vLLM 或直接批量前向推理（0.6B 模型批量推理极快）；PRM 推理时关闭梯度（`torch.no_grad()`）；将 PRM 常驻 GPU，不在每轮重新加载。
+
+### 11.8 多轮训练的随机性控制
+
+文化任务数据量小，不同随机种子下收敛轮次可能差异较大（如一次 10 轮、一次 30 轮），单次实验结论不可靠。
+
+处理方式：至少跑 3 个不同随机种子；报告均值和标准差；若标准差过大（> 5% accuracy），说明训练不稳定，需要调整 learning rate 或 KL 系数。
+
+---
+
+## 12. 关键设计决策记录
 
 | 决策点 | 选择 | 理由 |
 |--------|------|------|
@@ -517,7 +597,7 @@ AgentArk/
 | PRM 规模 | Qwen3-0.6B | 文化 reward 判断是语义分类，不需要大模型；节省显存 |
 | Reward 设计 | R_ans(α=1.0) + R_cultural(β=0.3) | R_ans 作锚点，PRM 误差不主导梯度 |
 | Reward clip | clip(0.1, 0.9) | 避免极端分数，减轻误差叠加 |
-| PRM 训练数据 | MAS 弱标签 + LLM Judge 强标签 | 弱标签保证数量，强标签保证质量 |
+| PRM 训练数据 | MAS 弱标签 + 人类/LLM Judge 强标签 | 弱标签保证数量，强标签补充质量；LLM Judge 为主，人类标注验证可信度 |
 | 数据分割 | 按 question 分割 | 防止 PRM 和 GRPO 数据泄露 |
 | 图结构 | 不引入 | 无实质计算作用，增加实现复杂度 |
 | 两类数据 | 混合训练，不同 prompt 格式 | 共享文化知识，保留任务差异 |
