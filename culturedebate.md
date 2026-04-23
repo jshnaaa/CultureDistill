@@ -237,14 +237,43 @@ PRM 的作用是辅助 reward 信号，不需要追求高精度：
 
 **Culture Sensitivity 验证**：同一 question，不同 culture 输入时，PRM 对各文化最高分路径的内容应有实质差异。
 
-### 5.6 Reward 误差控制
+### 5.6 Reward 信号设计原理
 
-PRM 本身存在误差，GRPO 阶段误差会进一步叠加，采用以下机制控制：
+**R_ans（主信号）** 完全依赖 gold label，是可验证奖励：预测答案与 gold 匹配则 R_ans=1，否则为 0。梯度可靠，训练方向明确，是 GRPO 的主导信号。
 
-1. **R_ans 作为锚点**：可验证奖励占主导（α=1.0），PRM 仅作辅助（β=0.3），主信号不依赖 PRM
-2. **Reward clip**：`clip(prm_score, 0.1, 0.9)`，避免极端分数主导梯度
-3. **KL 惩罚**：`init_kl_coef` 约束 policy 偏离 reference 的上界，间接限制 reward hacking
-4. **验证集监控**：每 5 轮评估 val_accuracy，PRM 误差导致 policy 跑偏时 val_accuracy 会下降，及时早停
+**R_cultural（辅助信号）** 依赖 PRM 对推理路径的评分，判断路径是否符合文化特征。PRM 的训练数据来自两类监督信号：answer correctness 弱标签（gold 路径 vs 非 gold 路径）和 LLM Judge 细粒度监督信号（文化一致性评分，非 ground truth，是另一模型的判断）。权重较小（β=0.3），避免 PRM 偏差主导训练。
+
+```
+R_total = α * R_ans + β * R_cultural
+```
+
+训练方向主要靠 ground truth 保证正确性，文化风格靠 PRM 细化差异。
+
+### 5.7 Reward 风险与缓解策略
+
+**风险1：PRM 误差累积**
+
+PRM 是小模型预测的辅助 reward，本身存在偏差。在 GRPO 中，R_cultural 的误差信号会被梯度放大，可能引导模型偏离正确文化表达，尤其当 β 过大或 reward clip 设置不合理时。风险体现为不同文化下的 reasoning 路径趋同，或 val_accuracy 下降。
+
+缓解策略：保持 α > β；clip(prm_score, 0.1, 0.9)；KL 惩罚约束 policy 偏离 reference。
+
+**风险2：数据量小导致过拟合**
+
+GRPO 训练数据仅 4000 个 prompt，文化任务收敛快，模型容易在少量样本上过拟合，val_accuracy 不再反映真实泛化能力。
+
+缓解策略：每 5 轮评估验证集；train_acc - val_acc > 15% 时立即早停；保存所有 checkpoint，取 val_accuracy 最高点。
+
+**风险3：Reward scale 不一致**
+
+R_ans 是离散 0/1，R_cultural 是连续 0.1-0.9，梯度 scale 不一致。若不调节权重，policy 更新可能偏向辅助信号，导致 reward hacking 或训练不稳定。
+
+缓解策略：α=1.0，β=0.3 的经验设置；reward normalization 或 clip。
+
+**风险4：GRPO 收敛依赖 MAS 数据质量**
+
+MAS 生成路径的多样性和文化一致性决定了 R_cultural 的有效性。若路径不够多样或文化倾向不明显，GRPO 无法学到细粒度文化差异。
+
+缓解策略：k=5 条路径保证 intra-cultural variation；使用 aggregator 汇总提高路径 gold label 准确性。
 
 ---
 
