@@ -23,7 +23,7 @@ class ReconcileMAS:
       ===== Solution 1 ===== ... ===== Solution N+1 ===== (consensus)
     """
 
-    def __init__(self, model_name, tensor_parallel_size=4, config_path=None, temperature=0.7, max_tokens=1024):
+    def __init__(self, model_name, tensor_parallel_size=2, config_path=None, temperature=0.7, max_tokens=1024):
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "configs", "reconcile_config.yaml")
         cfg = load_config(config_path)
@@ -39,13 +39,15 @@ class ReconcileMAS:
             model=model_name,
             tensor_parallel_size=tensor_parallel_size,
             trust_remote_code=True,
-            gpu_memory_utilization=0.9,
+            gpu_memory_utilization=0.85,
+            dtype="bfloat16",
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Llama-3 uses <|eot_id|> as the end-of-turn token
         self.sampling_params = SamplingParams(
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            stop=["</s>", "<|im_end|>", "<|endoftext|>"],
+            stop=["<|eot_id|>", "<|end_of_text|>", "</s>"],
         )
 
     # ------------------------------------------------------------------

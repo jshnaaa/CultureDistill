@@ -6,19 +6,18 @@ Output format mirrors AgentArk LLM Debate so that the existing
 label.py / split_solutions pipeline can be reused directly.
 
 Usage:
-    # Debug with sample data
+    # Debug with sample data (single example, prints to stdout, no file written)
     python Cul/generate_culture_data.py \
         --input_file Cul/data/sample.json \
-        --output_file Cul/data/sample_generated.jsonl \
-        --model_name Qwen/Qwen2.5-7B-Instruct \
-        --use_vllm --tensor_parallel_size 1 --debug
+        --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
+        --use_vllm --tensor_parallel_size 2 --debug
 
     # Full dataset
     python Cul/generate_culture_data.py \
         --input_file /path/to/culturellm.json \
         --output_file results/CultureLLM/reconcile_infer.jsonl \
-        --model_name Qwen/Qwen2.5-7B-Instruct \
-        --use_vllm --tensor_parallel_size 4
+        --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
+        --use_vllm --tensor_parallel_size 2
 """
 
 import os
@@ -78,13 +77,13 @@ def main():
                         help="Path to CultureLLM JSON dataset")
     parser.add_argument("--output_file", type=str, default=None,
                         help="Output JSONL path (default: auto-generated beside input)")
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-7B-Instruct",
+    parser.add_argument("--model_name", type=str, default="/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
                         help="HuggingFace model name or local path")
     parser.add_argument("--config_path", type=str, default=None,
                         help="Path to reconcile_config.yaml (default: Cul/configs/reconcile_config.yaml)")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_tokens", type=int, default=1024)
-    parser.add_argument("--tensor_parallel_size", type=int, default=4)
+    parser.add_argument("--tensor_parallel_size", type=int, default=2)
     parser.add_argument("--use_vllm", action="store_true",
                         help="Use vLLM batch inference (recommended)")
     parser.add_argument("--batch_size", type=int, default=16,
