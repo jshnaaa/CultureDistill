@@ -23,7 +23,7 @@ class ReconcileMAS:
       ===== Solution 1 ===== ... ===== Solution N+1 ===== (consensus)
     """
 
-    def __init__(self, model_name, tensor_parallel_size=2, config_path=None, temperature=0.7, max_tokens=1024):
+    def __init__(self, model_name, tensor_parallel_size=1, config_path=None, temperature=0.7, max_tokens=1024):
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "configs", "reconcile_config.yaml")
         cfg = load_config(config_path)

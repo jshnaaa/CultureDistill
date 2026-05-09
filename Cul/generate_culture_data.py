@@ -10,14 +10,14 @@ Usage:
     python Cul/generate_culture_data.py \
         --input_file Cul/data/sample.json \
         --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
-        --use_vllm --tensor_parallel_size 2 --debug
+        --use_vllm --tensor_parallel_size 1 --debug
 
     # Full dataset
     python Cul/generate_culture_data.py \
         --input_file /path/to/culturellm.json \
         --output_file results/CultureLLM/reconcile_infer.jsonl \
         --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
-        --use_vllm --tensor_parallel_size 2
+        --use_vllm --tensor_parallel_size 1
 """
 
 import os
@@ -83,7 +83,7 @@ def main():
                         help="Path to reconcile_config.yaml (default: Cul/configs/reconcile_config.yaml)")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_tokens", type=int, default=1024)
-    parser.add_argument("--tensor_parallel_size", type=int, default=2)
+    parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--use_vllm", action="store_true",
                         help="Use vLLM batch inference (recommended)")
     parser.add_argument("--batch_size", type=int, default=16,

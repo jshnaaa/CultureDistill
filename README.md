@@ -31,7 +31,7 @@ While large language model (LLM) multi-agent systems achieve superior reasoning 
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git.sh clone <repository-url>
 cd AgentArk
 
 # Create virtual environment

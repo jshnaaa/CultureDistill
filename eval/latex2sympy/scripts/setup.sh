@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Get relative path of the root directory of the project
-rdir=`git rev-parse --git-dir`
+rdir=`git.sh rev-parse --git.sh-dir`
 rel_path="$(dirname "$rdir")"
 # Change to that path and run the file
 cd $rel_path
