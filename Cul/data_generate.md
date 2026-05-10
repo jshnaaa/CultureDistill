@@ -118,7 +118,8 @@ python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
       --output_file /autodl-fs/data/CulturalBench_mas_inference.jsonl \
       --model_name llama \
-      --use_vllm --tensor_parallel_size 2 --max_samples 5
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 5 --num_debate_rounds 0
 shutdown
 
 # 全量生成（max_samples 0 = 全量）
@@ -126,7 +127,8 @@ python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
       --output_file /autodl-fs/data/CulturalBench_mas_inference.jsonl \
       --model_name llama \
-      --use_vllm --tensor_parallel_size 2 --max_samples 0
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 0 --num_debate_rounds 0
 ```
 
 `--model_name` 支持别名或完整路径：

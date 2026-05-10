@@ -93,6 +93,8 @@ def main():
                         help="Samples per vLLM batch")
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Number of samples to process. 0 = all samples.")
+    parser.add_argument("--num_debate_rounds", type=int, default=None,
+                        help="Number of debate rounds. Overrides config value if specified.")
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -153,6 +155,7 @@ def main():
         config_path=args.config_path,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        num_debate_rounds=args.num_debate_rounds,
     )
 
     lock = threading.Lock()

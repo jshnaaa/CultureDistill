@@ -27,14 +27,15 @@ class ReconcileMAS:
     """
 
     def __init__(self, model_name, tensor_parallel_size=1, config_path=None,
-                 temperature=0.7, max_tokens=1024):
+                 temperature=0.7, max_tokens=1024, num_debate_rounds=None):
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "configs", "reconcile_config.yaml")
         cfg = load_config(config_path)
 
         self.culture_roles = cfg["culture_roles"]
         self.num_agents = len(self.culture_roles)
-        self.num_debate_rounds = cfg["num_debate_rounds"]
+        # Command-line argument overrides config value
+        self.num_debate_rounds = num_debate_rounds if num_debate_rounds is not None else cfg["num_debate_rounds"]
         self.judge_system_prompt = cfg["judge"]["system_prompt"].strip()
         self.temperature = temperature
         self.max_tokens = max_tokens
