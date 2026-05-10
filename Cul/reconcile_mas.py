@@ -145,9 +145,19 @@ class ReconcileMAS:
     @staticmethod
     def _extract_answer(text):
         """Extract numeric answer 1-4 from agent/judge response."""
+        # Pattern 1: "Answer: 3" or "Answer: 3."
         m = re.search(r"Answer\s*:\s*([1-4])", text, re.IGNORECASE)
         if m:
             return m.group(1)
+        # Pattern 2: "correct answer is: 4" / "answer is 4" / "The answer is: 4."
+        m = re.search(r"answer\s+is\s*:?\s*([1-4])\b", text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # Pattern 3: "option 3" / "option: 3"
+        m = re.search(r"option\s*:?\s*([1-4])\b", text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # Fallback: last standalone digit 1-4 in text
         digits = re.findall(r"\b([1-4])\b", text)
         return digits[-1] if digits else None
 
