@@ -102,8 +102,8 @@ Cul/
 ├── generate_culture_data.py       # 数据生成入口脚本
 ├── clean_dataset.py               # 数据集字段清洗工具
 └── data/
-    ├── CulturalBench_mas.json             # 原始数据集（1227 条）
-    └── CulturalBench_mas_inference.jsonl  # 生成结果
+    └── CulturalBench_mas.json             # 原始数据集（1227 条）
+# 生成结果保存至：/autodl-fs/data/CulturalBench_mas_inference.jsonl
 ```
 
 ---
@@ -116,7 +116,7 @@ cd autodl-tmp/distill
 sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
-      --output_file Cul/data/CulturalBench_mas_inference.jsonl \
+      --output_file /autodl-fs/data/CulturalBench_mas_inference.jsonl \
       --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
       --use_vllm --tensor_parallel_size 2 --max_samples 5
 
@@ -125,7 +125,7 @@ cd autodl-tmp/distill
 sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
-      --output_file Cul/data/CulturalBench_mas_inference.jsonl \
+      --output_file /autodl-fs/data/CulturalBench_mas_inference.jsonl \
       --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
       --use_vllm --tensor_parallel_size 2 --max_samples 0
 ```
