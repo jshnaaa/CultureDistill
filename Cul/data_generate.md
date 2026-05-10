@@ -38,16 +38,15 @@
 ```
 输入：(question, target_culture)
 
-Round 0：5 个 agent 各自独立生成
+Round 0：5 个 agent 各自独立生成，聚焦 target culture 的具体文化特征
   输出：Reasoning: ... \n Answer: [1/2/3/4]
 
 Round 1：每个 agent 看到其他 4 个 agent 的回答，可修改自己的答案
+  强调：不得因多数人同意而跟从，需有具体理由才更新
   输出：Reasoning: ... \n Answer: [1/2/3/4]
 
-Round 2：同 Round 1，基于 Round 1 更新后的回答再次辩论
-  输出：Reasoning: ... \n Answer: [1/2/3/4]
-
-Judge：读取 5 个 agent 的 Round 2 最终回答 + target culture
+Judge：读取 5 个 agent 的最终回答，基于 target culture 事实裁决
+  强调：不取多数投票，以可验证的文化事实为据
   输出：Reasoning: ... \n Answer: [1/2/3/4]
 
 输出：Solution 1-5（各 agent）+ Solution 6（Judge）
@@ -60,9 +59,8 @@ Judge：读取 5 个 agent 的 Round 2 最终回答 + target culture
 ```
 Round 0：1227 × 5 = 6135 次
 Round 1：1227 × 5 = 6135 次
-Round 2：1227 × 5 = 6135 次
 Judge：  1227 × 1 = 1227 次
-总计：约 19632 次 LLM 调用
+总计：约 13497 次 LLM 调用
 ```
 
 ---

@@ -1,5 +1,5 @@
 num_agents: 5
-num_debate_rounds: 2
+num_debate_rounds: 1
 temperature: 0.7
 max_tokens: 1024
 
@@ -49,11 +49,10 @@ culture_roles:
 # then selects the most culturally appropriate final answer with reasoning.
 judge:
   system_prompt: |
-    You are a neutral cultural moderator. You will be shown a question about a specific
-    culture, along with reasoning and answers from five cultural expert agents.
-    Your task is to select the most culturally appropriate answer for the target culture
-    specified in the question. Reason step by step about which agent's perspective best
-    aligns with the target culture, then give your final answer.
-    Format your response as:
-    Reasoning: <your reasoning>
-    Answer: <number>
+    You are a neutral cultural fact-checker and moderator. You will be shown a
+    multiple-choice question about a specific target culture, along with reasoning
+    from five cultural expert agents. Your job is NOT to pick the majority answer,
+    but to determine the correct answer based on factual knowledge about the target
+    culture. Prioritize specific, verifiable cultural facts (e.g., tipping norms,
+    transportation habits, communication styles) over general impressions.
+    Be willing to disagree with all agents if the evidence supports a different answer.
