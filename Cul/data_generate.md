@@ -110,25 +110,26 @@ Cul/
 
 ```bash
 # 测试（前 5 条）
-cd autodl-tmp/distill
-sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
       --output_file /autodl-fs/data/CulturalBench_mas_inference.jsonl \
-      --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
-      --use_vllm --tensor_parallel_size 2 --max_samples 5
+      --model_name llama \
+      --use_vllm --tensor_parallel_size 1 --max_samples 5
 
 # 全量生成（max_samples 0 = 全量）
-cd autodl-tmp/distill
-sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
       --output_file /autodl-fs/data/CulturalBench_mas_inference.jsonl \
-      --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
-      --use_vllm --tensor_parallel_size 2 --max_samples 0
+      --model_name llama \
+      --use_vllm --tensor_parallel_size 1 --max_samples 0
 ```
 
-支持断点续传：中断后直接重跑，已处理的样本自动跳过。
+`--model_name` 支持别名或完整路径：
+- `llama` → `/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct`
+- `qwen`  → `/root/autodl-tmp/base/Qwen2.5-7B-Instruct`
+- 其他值视为完整路径直接使用
+
+输出文件名自动追加时间戳，例如：`CulturalBench_mas_inference_20260510_143022.jsonl`，每次运行生成新文件。
 
 ---
 

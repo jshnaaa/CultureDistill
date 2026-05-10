@@ -26,6 +26,7 @@ import re
 import json
 import argparse
 import threading
+from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
 
@@ -80,7 +81,7 @@ def main():
     parser.add_argument("--output_file", type=str, default=None,
                         help="Output JSONL path (default: auto-generated beside input)")
     parser.add_argument("--model_name", type=str, required=True,
-                        help="HuggingFace model name or local path")
+                        help="Model alias (llama / qwen) or full local path")
     parser.add_argument("--config_path", type=str, default=None,
                         help="Path to reconcile_config.yaml")
     parser.add_argument("--temperature", type=float, default=0.7)
@@ -95,14 +96,29 @@ def main():
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
-    # Output path
+    # Model alias resolution
     # ------------------------------------------------------------------
+    MODEL_ALIASES = {
+        "llama": "/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
+        "qwen":  "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
+    }
+    args.model_name = MODEL_ALIASES.get(args.model_name.lower(), args.model_name)
+    print(f"Model: {args.model_name}")
+
+    # ------------------------------------------------------------------
+    # Output path: append timestamp before extension
+    # ------------------------------------------------------------------
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.output_file is None:
         stem = Path(args.input_file).stem
         args.output_file = str(
-            Path(args.input_file).parent / f"{stem}_reconcile_infer.jsonl"
+            Path(args.input_file).parent / f"{stem}_reconcile_infer_{timestamp}.jsonl"
         )
+    else:
+        p = Path(args.output_file)
+        args.output_file = str(p.parent / f"{p.stem}_{timestamp}{p.suffix}")
     os.makedirs(os.path.dirname(os.path.abspath(args.output_file)), exist_ok=True)
+    print(f"Output file: {args.output_file}")
 
     # ------------------------------------------------------------------
     # Load and convert dataset
