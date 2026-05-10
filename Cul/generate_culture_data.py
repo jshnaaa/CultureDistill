@@ -12,12 +12,12 @@ Usage:
         --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
         --use_vllm --tensor_parallel_size 1 --debug
 
-    # Full dataset
+    # Full CulturalBench dataset (1227 samples)
     python Cul/generate_culture_data.py \
-        --input_file /path/to/culturellm.json \
-        --output_file results/CultureLLM/reconcile_infer.jsonl \
+        --input_file Cul/data/CulturalBench_merge_gen.json \
+        --output_file Cul/data/CulturalBench_reconcile_infer.jsonl \
         --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
-        --use_vllm --tensor_parallel_size 1
+        --use_vllm --tensor_parallel_size 1 --batch_size 8
 """
 
 import os
@@ -45,25 +45,34 @@ def load_dataset(path):
 
 def convert_sample(item):
     """
-    Convert CultureLLM format to the internal query/gt/country format.
+    Convert CulturalBench / CultureLLM format to internal query/gt/country format.
 
-    Input:
-        {
-            "instruction": "### Question: ... ### Answer: ",
-            "output": "1",
-            "Country": "Arabic"
-        }
+    Supports two formats:
+      - CultureLLM:     has explicit "Country" field
+      - CulturalBench:  no "Country" field; country extracted from instruction text
+
+    Input examples:
+        CultureLLM:    {"instruction": "...", "output": "1", "Country": "Arabic"}
+        CulturalBench: {"instruction": "...", "output": "1", "label": "1"}
+
     Output:
-        {"query": "### Question: ...", "gt": "1", "country": "Arabic"}
+        {"query": "### Question: ...", "gt": "1", "country": "Netherlands"}
     """
+    import re
     instruction = item["instruction"]
-    # Strip trailing '### Answer:' prompt suffix so query is clean
     query = instruction.split("### Answer:")[0].strip()
-    return {
-        "query": query,
-        "gt": str(item["output"]).strip(),
-        "country": item.get("Country", ""),
-    }
+
+    # Prefer explicit Country field; fall back to regex extraction from instruction
+    if "Country" in item and item["Country"]:
+        country = item["Country"].strip()
+    else:
+        m = re.search(r"country or language that is (.+?)\.", instruction)
+        country = m.group(1).strip() if m else ""
+
+    # Prefer "output" field; fall back to "label"
+    gt = str(item.get("output", item.get("label", ""))).strip()
+
+    return {"query": query, "gt": gt, "country": country}
 
 
 # ---------------------------------------------------------------------------

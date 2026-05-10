@@ -48,65 +48,128 @@ y ~ P(y | x, c)，中间经过显式或隐式推理路径 r
 
 ## 3. 多智能体数据生成
 
-### 3.1 Agent 设计
+### 3.1 数据集
 
-每个 Agent 代表一种具体文化（国家级），system prompt：
+使用 **CulturalBench**（`Cul/data/CulturalBench_merge_gen.json`），共 1227 条样本，涵盖荷兰、越南、埃及、英国等多国文化，答案格式为选项 1-4。原始字段：`instruction`、`output`（gold label）、`label`，国家信息从 instruction 文本中提取。
+
+### 3.2 框架：RECONCILE
+
+采用 **RECONCILE** 框架替代同质 LLM Debate，核心区别：每个 agent 代表不同文化视角（异质），而非同一文化的多个副本（同质）。这使得辩论过程能够产生真实的跨文化观点碰撞，而不只是同一文化的多样化表达。
+
+### 3.3 Agent 设计
+
+设定 4 个异质文化 agent，按地理区域划分，通过 system prompt 注入文化身份：
+
+| Agent | 文化角色 | 核心文化倾向 |
+|-------|---------|-------------|
+| Agent 0 | Asian Culture | 集体主义、孝道、等级尊重、社会和谐 |
+| Agent 1 | European Culture | 个人主义、理性主义、世俗化、工作生活平衡 |
+| Agent 2 | American Culture | 个人自由、实用主义、竞争意识、直接表达 |
+| Agent 3 | Oceanian Culture | 平等主义、多元文化包容、社区意识 |
+
+每个 agent 的 system prompt 在整个辩论过程中保持不变，确保文化立场一致。
+
+文化粒度采用双层设计：生成阶段使用地区级 agent（4类）；训练输入使用国家级 culture token（`[Egypt]`、`[Japan]` 等，与数据集粒度对齐）。
+
+### 3.4 完整生成流程
 
 ```
-You are a cultural expert representing [COUNTRY].
-When answering questions, reason strictly from the perspective of
-[COUNTRY]'s cultural values, social norms, and behavioral tendencies.
-Consider factors such as family structure, social hierarchy,
-collectivism/individualism, religious influence, and historical context
-specific to [COUNTRY].
+输入：1227 条 (question, country) 样本
+
+┌─────────────────────────────────────────────────────────┐
+│  Round 0：独立初始回答                                    │
+│  4 个 agent 各自独立生成，互不可见                          │
+│  输出格式：Reasoning: <推理过程>\nAnswer: <1/2/3/4>        │
+└──────────────────────────┬──────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────┐
+│  Round 1：第一轮辩论                                      │
+│  每个 agent 读取其他 3 个 agent 的完整回答                  │
+│  结合自身文化立场，决定是否修改答案                           │
+│  输出格式：Reasoning: <更新后推理>\nAnswer: <1/2/3/4>      │
+└──────────────────────────┬──────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────┐
+│  Round 2：第二轮辩论（同 Round 1）                         │
+│  基于 Round 1 更新后的回答再次交叉参考                       │
+└──────────────────────────┬──────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────┐
+│  共识聚合：多数投票                                        │
+│  4 个 agent 最终答案 → Counter → 取票数最多的答案           │
+│  平票时：优先选与 target country 地理最近的 agent 的答案     │
+└─────────────────────────────────────────────────────────┘
+                           ↓
+输出：每条样本包含 5 个 Solution 的 jsonl 文件
 ```
 
-文化粒度采用双层设计：生成阶段使用国家级 agent（细粒度，与数据集对齐）；训练输入使用国家级 culture token（`[Egypt]`、`[Japan]` 等）。
+### 3.5 批量推理优化
 
-### 3.2 多路径采样策略
-
-对每个样本 `(x, c)`，让同一文化 agent 生成 k=5 条推理路径：
+每一轮内，将所有样本 × 所有 agent 的 prompt 合并为一个 vLLM batch 请求，最大化 GPU 利用率：
 
 ```
-"Generate a reasoning path that reflects [COUNTRY]'s cultural perspective.
-Your reasoning should be internally consistent with this culture's values,
-but may emphasize different aspects such as family bonds, social hierarchy,
-religious principles, or community norms."
+Round 0：1227 samples × 4 agents = 4908 个并行请求
+Round 1：1227 samples × 4 agents = 4908 个并行请求
+Round 2：1227 samples × 4 agents = 4908 个并行请求
+总计：14724 次 LLM 调用
 ```
 
-目的：保证 intra-cultural variation（路径多样但文化一致），为 GRPO 提供足够的对比信号。
+轮次之间保持顺序（Round N 依赖 Round N-1 的输出），轮次内部完全并行。
 
-对于 etiquette 数据（NormAD），推理路径格式为：
-```
-Cultural Value → Social Rule → Situational Judgment → Answer
-```
+### 3.6 输入输出格式
 
-对于 survey 数据（CultureLLM），推理路径格式为：
-```
-Cultural Background → Preference Tendency → Answer
-```
-
-### 3.3 多智能体方法选择
-
-采用 LLM Debate 作为主要 MAS 方法：多个同文化 agent 独立生成初始答案，互相看到其他 agent 的推理后更新自己的答案，最终 aggregator 汇总生成最终答案。
-
-每条样本最终生成数据格式：
-
+**输入**（每条原始样本）：
 ```json
 {
-  "id": "normad_001",
-  "dataset": "NormAD",
-  "culture": "Egypt",
-  "question": "...",
-  "paths": [
-    {"id": 1, "reasoning": "In Egyptian culture, family honor is paramount...", "answer": "yes"},
-    {"id": 2, "reasoning": "Egyptian social norms emphasize respect for elders...", "answer": "yes"},
-    {"id": 3, "reasoning": "From a religious perspective common in Egypt...", "answer": "no"}
-  ],
-  "gold": "yes",
-  "labels": [true, true, false]
+  "instruction": "### Question: Give me the answer from 1 to 4: ...",
+  "output": "1",
+  "label": "1"
 }
 ```
+
+**内部转换格式**：
+```json
+{"query": "### Question: ...", "gt": "1", "country": "Netherlands"}
+```
+
+**输出**（每条生成样本，与 AgentArk 格式完全一致）：
+```json
+{
+  "query": "### Question: ...",
+  "gt": "1",
+  "country": "Netherlands",
+  "response": "===== Solution 1 =====\nReasoning: ...\nAnswer: 1\n===== Solution 2 =====\n...\n===== Solution 5 =====\nConsensus Answer: 1\n"
+}
+```
+
+Solution 1-4 为各 agent 第 2 轮辩论后的最终回答，Solution 5 为多数投票共识答案。该格式可直接复用 AgentArk 的 `label.py` 中的 `split_solutions` 逻辑。
+
+### 3.7 运行命令
+
+```bash
+# 单条调试（不写文件，打印到终端）
+python Cul/generate_culture_data.py \
+    --input_file Cul/data/sample.json \
+    --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
+    --use_vllm --tensor_parallel_size 1 --debug
+
+# 全量生成（1227 条，断点续传）
+python Cul/generate_culture_data.py \
+    --input_file Cul/data/CulturalBench_merge_gen.json \
+    --output_file Cul/data/CulturalBench_reconcile_infer.jsonl \
+    --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
+    --use_vllm --tensor_parallel_size 1 --batch_size 8
+```
+
+### 3.8 相关代码文件
+
+| 文件 | 功能 |
+|------|------|
+| `Cul/reconcile_mas.py` | RECONCILE 核心逻辑：agent 初始化、prompt 构造、辩论轮次、共识聚合 |
+| `Cul/generate_culture_data.py` | 入口脚本：数据加载转换、断点续传、批量推理、结果写入 |
+| `Cul/configs/reconcile_config.yaml` | 4个文化角色 system prompt + 超参（轮数、温度等） |
+| `Cul/data/CulturalBench_merge_gen.json` | 原始数据集（1227 条） |
+| `Cul/data/CulturalBench_reconcile_infer.jsonl` | 生成结果（输出） |
 
 ---
 
