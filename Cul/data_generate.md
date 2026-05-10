@@ -113,6 +113,7 @@ Cul/
 ```bash
 # 测试（前 5 条）
 cd autodl-tmp/distill
+sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
       --output_file Cul/data/CulturalBench_mas_inference.jsonl \
@@ -121,6 +122,7 @@ python Cul/generate_culture_data.py \
 
 # 全量生成（max_samples 0 = 全量）
 cd autodl-tmp/distill
+sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
       --output_file Cul/data/CulturalBench_mas_inference.jsonl \
