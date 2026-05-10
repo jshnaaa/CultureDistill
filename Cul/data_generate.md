@@ -111,6 +111,7 @@ Cul/
 ```bash
 # 测试（前 5 条）
 cd autodl-tmp/distill
+source /etc/network_turbo
 sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
