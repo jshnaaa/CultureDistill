@@ -15,15 +15,19 @@ class ReconcileMAS:
     """
     RECONCILE-style multi-agent debate for cultural alignment tasks.
 
-    4 heterogeneous agents (Asian / European / American / Oceanian),
+    4 heterogeneous agents (Asian / Western / Latin American / African),
     each injected with a cultural system prompt. Runs num_debate_rounds
-    rounds of debate, then aggregates via majority vote.
+    rounds of debate, then a Judge agent selects the final answer.
 
     Output format mirrors AgentArk LLM Debate:
-      ===== Solution 1 ===== ... ===== Solution N+1 ===== (consensus)
+      ===== Solution 1 ===== (Agent 0)
+      ...
+      ===== Solution 4 ===== (Agent 3)
+      ===== Solution 5 ===== (Judge consensus)
     """
 
-    def __init__(self, model_name, tensor_parallel_size=1, config_path=None, temperature=0.7, max_tokens=1024):
+    def __init__(self, model_name, tensor_parallel_size=1, config_path=None,
+                 temperature=0.7, max_tokens=1024):
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "configs", "reconcile_config.yaml")
         cfg = load_config(config_path)
@@ -31,6 +35,7 @@ class ReconcileMAS:
         self.culture_roles = cfg["culture_roles"]
         self.num_agents = len(self.culture_roles)
         self.num_debate_rounds = cfg["num_debate_rounds"]
+        self.judge_system_prompt = cfg["judge"]["system_prompt"].strip()
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.model_name = model_name
@@ -43,7 +48,7 @@ class ReconcileMAS:
             dtype="bfloat16",
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        # Llama-3 uses <|eot_id|> as the end-of-turn token
+        # Llama-3 end-of-turn tokens
         self.sampling_params = SamplingParams(
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -54,6 +59,16 @@ class ReconcileMAS:
     # Prompt builders
     # ------------------------------------------------------------------
 
+    def _apply_chat(self, system, user):
+        """Apply Llama-3 chat template."""
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        return self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
     def _build_initial_prompt(self, agent_idx, question):
         system = self.culture_roles[agent_idx]["system_prompt"].strip()
         user = (
@@ -63,15 +78,10 @@ class ReconcileMAS:
             "Reasoning: <your reasoning>\n"
             "Answer: <number>"
         )
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-        return self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        return self._apply_chat(system, user)
 
     def _build_debate_prompt(self, agent_idx, question, other_responses):
+        """other_responses: list of (agent_name, response_text)"""
         system = self.culture_roles[agent_idx]["system_prompt"].strip()
 
         others_text = ""
@@ -80,21 +90,37 @@ class ReconcileMAS:
 
         user = (
             f"{question}\n\n"
-            "These are the responses from agents with different cultural perspectives:\n"
+            "These are the responses from agents representing other cultural perspectives:\n"
             f"{others_text}\n"
-            "Consider these perspectives carefully. You may update your answer if "
-            "persuaded, but maintain your own cultural reasoning.\n"
+            "Consider these perspectives carefully. You may update your answer if persuaded, "
+            "but maintain your own cultural reasoning.\n"
             "Please provide your updated response in the format:\n"
             "Reasoning: <your reasoning>\n"
             "Answer: <number>"
         )
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-        return self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+        return self._apply_chat(system, user)
+
+    def _build_judge_prompt(self, question, agent_responses):
+        """
+        agent_responses: list of (agent_name, response_text)
+        Judge reads all responses and the target culture embedded in the question,
+        then selects the most culturally appropriate answer.
+        """
+        responses_text = ""
+        for name, resp in agent_responses:
+            responses_text += f"\n[{name}]:\n{resp}\n"
+
+        user = (
+            f"Question (the target culture is specified within it):\n{question}\n\n"
+            "Here are the responses from four cultural expert agents:\n"
+            f"{responses_text}\n"
+            "Based on the target culture specified in the question, select the most "
+            "culturally appropriate answer. Reason step by step.\n"
+            "Format:\n"
+            "Reasoning: <your reasoning>\n"
+            "Answer: <number>"
         )
+        return self._apply_chat(self.judge_system_prompt, user)
 
     # ------------------------------------------------------------------
     # Answer extraction
@@ -102,48 +128,44 @@ class ReconcileMAS:
 
     @staticmethod
     def _extract_answer(text):
-        """Extract the numeric answer from agent response."""
-        # Match 'Answer: N' pattern first
+        """Extract numeric answer 1-4 from agent/judge response."""
         m = re.search(r"Answer\s*:\s*([1-4])", text, re.IGNORECASE)
         if m:
             return m.group(1)
-        # Fallback: last standalone digit 1-4
         digits = re.findall(r"\b([1-4])\b", text)
         return digits[-1] if digits else None
 
     # ------------------------------------------------------------------
-    # Majority vote consensus
+    # Fallback consensus (majority vote, used only if judge fails)
     # ------------------------------------------------------------------
 
-    def _consensus(self, answers, target_culture):
+    def _majority_vote(self, answers, target_culture):
         valid = [a for a in answers if a is not None]
         if not valid:
             return None
-
         counts = Counter(valid)
         top_count = counts.most_common(1)[0][1]
         top_answers = [a for a, c in counts.items() if c == top_count]
-
         if len(top_answers) == 1:
             return top_answers[0]
-
-        # Tie-breaking: prefer the agent whose culture is closest to target_culture
-        target_lower = target_culture.lower()
-        priority_map = {
-            "asian": 0,
-            "european": 1,
-            "american": 2,
-            "oceanian": 3,
+        # Tie-break: prefer agent whose region matches target culture
+        region_keywords = {
+            0: ["asia", "china", "japan", "korea", "india", "vietnam", "arab", "iran",
+                "pakistan", "indonesia", "malaysia", "philippines", "thailand", "arabic"],
+            1: ["europe", "uk", "france", "germany", "netherlands", "spain", "italy",
+                "sweden", "norway", "denmark", "finland", "poland", "portugal"],
+            2: ["america", "united states", "canada", "usa", "north america"],
+            3: ["latin", "south america", "brazil", "mexico", "argentina", "chile",
+                "colombia", "peru", "venezuela", "central america"],
+            4: ["africa", "nigeria", "kenya", "ethiopia", "ghana", "south africa",
+                "egypt", "morocco", "tanzania", "senegal", "uganda"],
         }
-        # Find which agent index maps to target culture region
-        for idx, role in enumerate(self.culture_roles):
-            role_key = role["name"].split()[0].lower()
-            if role_key in target_lower or target_lower in role_key:
-                candidate = answers[idx]
+        target_lower = target_culture.lower()
+        for agent_idx, keywords in region_keywords.items():
+            if any(kw in target_lower for kw in keywords):
+                candidate = answers[agent_idx]
                 if candidate in top_answers:
                     return candidate
-
-        # Last resort: return first top answer
         return top_answers[0]
 
     # ------------------------------------------------------------------
@@ -154,10 +176,9 @@ class ReconcileMAS:
         question = sample["query"]
         target_culture = sample.get("country", "")
 
-        # agent_responses[i] = latest response text for agent i
         agent_responses = [""] * self.num_agents
 
-        # Round 0: initial independent responses
+        # Round 0: independent initial responses
         prompts = [self._build_initial_prompt(i, question) for i in range(self.num_agents)]
         outputs = self.llm.generate(prompts, self.sampling_params)
         for i, out in enumerate(outputs):
@@ -165,7 +186,6 @@ class ReconcileMAS:
 
         # Debate rounds
         for _ in range(self.num_debate_rounds):
-            new_responses = [""] * self.num_agents
             prompts = []
             for i in range(self.num_agents):
                 others = [
@@ -173,21 +193,30 @@ class ReconcileMAS:
                     for j in range(self.num_agents) if j != i
                 ]
                 prompts.append(self._build_debate_prompt(i, question, others))
-
             outputs = self.llm.generate(prompts, self.sampling_params)
             for i, out in enumerate(outputs):
-                new_responses[i] = out.outputs[0].text.strip()
-            agent_responses = new_responses
+                agent_responses[i] = out.outputs[0].text.strip()
 
-        # Extract final answers
-        final_answers = [self._extract_answer(r) for r in agent_responses]
-        consensus = self._consensus(final_answers, target_culture)
+        # Judge: read all final responses and select best answer
+        all_responses = [
+            (self.culture_roles[i]["name"], agent_responses[i])
+            for i in range(self.num_agents)
+        ]
+        judge_prompt = self._build_judge_prompt(question, all_responses)
+        judge_output = self.llm.generate([judge_prompt], self.sampling_params)
+        judge_response = judge_output[0].outputs[0].text.strip()
+        judge_answer = self._extract_answer(judge_response)
 
-        # Format output: Solution 1..N = agent responses, Solution N+1 = consensus
+        # Fallback to majority vote if judge fails to produce valid answer
+        if judge_answer is None:
+            final_answers = [self._extract_answer(r) for r in agent_responses]
+            judge_answer = self._majority_vote(final_answers, target_culture)
+
+        # Format: Solution 1-4 = agent final responses, Solution 5 = judge
         formatted = ""
         for i, resp in enumerate(agent_responses):
             formatted += f"===== Solution {i + 1} =====\n{resp}\n"
-        formatted += f"===== Solution {self.num_agents + 1} =====\nConsensus Answer: {consensus}\n"
+        formatted += f"===== Solution {self.num_agents + 1} =====\n{judge_response}\n"
 
         return {"response": formatted}
 
@@ -198,13 +227,12 @@ class ReconcileMAS:
     def inference_batch(self, samples):
         """
         Batch all agent×sample prompts per round to maximise GPU utilisation.
-        Round structure is kept sequential (each round depends on previous).
+        Rounds are sequential; within each round all prompts run in parallel.
         """
         n = len(samples)
         questions = [s["query"] for s in samples]
         countries = [s.get("country", "") for s in samples]
 
-        # agent_responses[sample_idx][agent_idx]
         agent_responses = [[""] * self.num_agents for _ in range(n)]
 
         # Round 0
@@ -213,7 +241,6 @@ class ReconcileMAS:
             for ai in range(self.num_agents):
                 prompts.append(self._build_initial_prompt(ai, questions[si]))
                 meta.append((si, ai))
-
         outputs = self.llm.generate(prompts, self.sampling_params)
         for out, (si, ai) in zip(outputs, meta):
             agent_responses[si][ai] = out.outputs[0].text.strip()
@@ -229,23 +256,41 @@ class ReconcileMAS:
                     ]
                     prompts.append(self._build_debate_prompt(ai, questions[si], others))
                     meta.append((si, ai))
-
             outputs = self.llm.generate(prompts, self.sampling_params)
             new_responses = [[""] * self.num_agents for _ in range(n)]
             for out, (si, ai) in zip(outputs, meta):
                 new_responses[si][ai] = out.outputs[0].text.strip()
             agent_responses = new_responses
 
+        # Judge: batch all judge prompts
+        judge_prompts = []
+        for si in range(n):
+            all_responses = [
+                (self.culture_roles[ai]["name"], agent_responses[si][ai])
+                for ai in range(self.num_agents)
+            ]
+            judge_prompts.append(self._build_judge_prompt(questions[si], all_responses))
+
+        judge_outputs = self.llm.generate(judge_prompts, self.sampling_params)
+
         # Build results
         results = []
         for si in range(n):
-            final_answers = [self._extract_answer(agent_responses[si][ai]) for ai in range(self.num_agents)]
-            consensus = self._consensus(final_answers, countries[si])
+            judge_response = judge_outputs[si].outputs[0].text.strip()
+            judge_answer = self._extract_answer(judge_response)
+
+            if judge_answer is None:
+                final_answers = [
+                    self._extract_answer(agent_responses[si][ai])
+                    for ai in range(self.num_agents)
+                ]
+                fallback = self._majority_vote(final_answers, countries[si])
+                judge_response += f"\n[Fallback majority vote]: {fallback}"
 
             formatted = ""
-            for ai, resp in enumerate(agent_responses[si]):
-                formatted += f"===== Solution {ai + 1} =====\n{resp}\n"
-            formatted += f"===== Solution {self.num_agents + 1} =====\nConsensus Answer: {consensus}\n"
+            for ai in range(self.num_agents):
+                formatted += f"===== Solution {ai + 1} =====\n{agent_responses[si][ai]}\n"
+            formatted += f"===== Solution {self.num_agents + 1} =====\n{judge_response}\n"
 
             results.append({"response": formatted})
 

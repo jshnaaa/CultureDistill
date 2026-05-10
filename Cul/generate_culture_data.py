@@ -1,34 +1,34 @@
 """
-Entry point for generating cultural alignment reasoning data
-using the RECONCILE multi-agent framework.
+Generate cultural alignment reasoning data using the RECONCILE MAS framework.
 
 Output format mirrors AgentArk LLM Debate so that the existing
 label.py / split_solutions pipeline can be reused directly.
 
 Usage:
-    # Debug with sample data (single example, prints to stdout, no file written)
+    # Run on 5 samples (quick test)
     python Cul/generate_culture_data.py \
-        --input_file Cul/data/sample.json \
-        --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
-        --use_vllm --tensor_parallel_size 1 --debug
+        --input_file Cul/data/CulturalBench_mas.json \
+        --output_file Cul/data/CulturalBench_mas_inference.jsonl \
+        --model_name <path/to/model> \
+        --use_vllm --tensor_parallel_size 1 --max_samples 5
 
-    # Full CulturalBench dataset (1227 samples)
+    # Full dataset (max_samples 0 = all)
     python Cul/generate_culture_data.py \
-        --input_file Cul/data/CulturalBench_merge_gen.json \
-        --output_file Cul/data/CulturalBench_reconcile_infer.jsonl \
-        --model_name /root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct \
-        --use_vllm --tensor_parallel_size 1 --batch_size 8
+        --input_file Cul/data/CulturalBench_mas.json \
+        --output_file Cul/data/CulturalBench_mas_inference.jsonl \
+        --model_name <path/to/model> \
+        --use_vllm --tensor_parallel_size 1 --max_samples 0
 """
 
 import os
 import sys
+import re
 import json
 import argparse
 import threading
 from pathlib import Path
 from tqdm import tqdm
 
-# Allow imports from project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.utils import write_to_jsonl, reserve_unprocessed_queries
 
@@ -40,6 +40,8 @@ from utils.utils import write_to_jsonl, reserve_unprocessed_queries
 def load_dataset(path):
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+    if isinstance(data, dict):
+        data = list(data.values())[0]
     return data
 
 
@@ -47,31 +49,21 @@ def convert_sample(item):
     """
     Convert CulturalBench / CultureLLM format to internal query/gt/country format.
 
-    Supports two formats:
-      - CultureLLM:     has explicit "Country" field
-      - CulturalBench:  no "Country" field; country extracted from instruction text
+    CulturalBench fields: instruction, input (empty), output
+    CultureLLM fields:    instruction, output, Country
 
-    Input examples:
-        CultureLLM:    {"instruction": "...", "output": "1", "Country": "Arabic"}
-        CulturalBench: {"instruction": "...", "output": "1", "label": "1"}
-
-    Output:
-        {"query": "### Question: ...", "gt": "1", "country": "Netherlands"}
+    Returns: {"query": str, "gt": str, "country": str}
     """
-    import re
     instruction = item["instruction"]
     query = instruction.split("### Answer:")[0].strip()
 
-    # Prefer explicit Country field; fall back to regex extraction from instruction
     if "Country" in item and item["Country"]:
         country = item["Country"].strip()
     else:
         m = re.search(r"country or language that is (.+?)\.", instruction)
         country = m.group(1).strip() if m else ""
 
-    # Prefer "output" field; fall back to "label"
     gt = str(item.get("output", item.get("label", ""))).strip()
-
     return {"query": query, "gt": gt, "country": country}
 
 
@@ -80,27 +72,26 @@ def convert_sample(item):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate cultural reasoning data via RECONCILE MAS")
-
+    parser = argparse.ArgumentParser(
+        description="Generate cultural reasoning data via RECONCILE MAS"
+    )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to CultureLLM JSON dataset")
+                        help="Path to CulturalBench JSON dataset")
     parser.add_argument("--output_file", type=str, default=None,
                         help="Output JSONL path (default: auto-generated beside input)")
-    parser.add_argument("--model_name", type=str, default="/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
+    parser.add_argument("--model_name", type=str, required=True,
                         help="HuggingFace model name or local path")
     parser.add_argument("--config_path", type=str, default=None,
-                        help="Path to reconcile_config.yaml (default: Cul/configs/reconcile_config.yaml)")
+                        help="Path to reconcile_config.yaml")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_tokens", type=int, default=1024)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--use_vllm", action="store_true",
                         help="Use vLLM batch inference (recommended)")
-    parser.add_argument("--batch_size", type=int, default=16,
-                        help="Number of samples per vLLM batch")
-    parser.add_argument("--max_samples", type=int, default=None,
-                        help="Limit number of samples (for testing)")
-    parser.add_argument("--debug", action="store_true",
-                        help="Run one sample and print output without writing")
+    parser.add_argument("--batch_size", type=int, default=8,
+                        help="Samples per vLLM batch")
+    parser.add_argument("--max_samples", type=int, default=0,
+                        help="Number of samples to process. 0 = all samples.")
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -108,45 +99,25 @@ def main():
     # ------------------------------------------------------------------
     if args.output_file is None:
         stem = Path(args.input_file).stem
-        args.output_file = str(Path(args.input_file).parent / f"{stem}_reconcile_infer.jsonl")
+        args.output_file = str(
+            Path(args.input_file).parent / f"{stem}_reconcile_infer.jsonl"
+        )
     os.makedirs(os.path.dirname(os.path.abspath(args.output_file)), exist_ok=True)
 
     # ------------------------------------------------------------------
     # Load and convert dataset
     # ------------------------------------------------------------------
     raw_data = load_dataset(args.input_file)
-    if isinstance(raw_data, dict):
-        # Some datasets wrap the list in a dict
-        raw_data = list(raw_data.values())[0]
-
     dataset = [convert_sample(item) for item in raw_data]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
 
-    if args.max_samples is not None:
+    # max_samples=0 means all; otherwise take first N
+    if args.max_samples > 0:
         dataset = dataset[: args.max_samples]
+        print(f"Using first {args.max_samples} samples (max_samples={args.max_samples})")
 
     # ------------------------------------------------------------------
-    # Debug mode: run one sample, print, exit
-    # ------------------------------------------------------------------
-    if args.debug:
-        from Cul.reconcile_mas import ReconcileMAS
-        mas = ReconcileMAS(
-            model_name=args.model_name,
-            tensor_parallel_size=args.tensor_parallel_size,
-            config_path=args.config_path,
-            temperature=args.temperature,
-            max_tokens=args.max_tokens,
-        )
-        sample = dataset[0]
-        print(f"\n[DEBUG] Query: {sample['query']}")
-        print(f"[DEBUG] GT: {sample['gt']} | Country: {sample['country']}\n")
-        result = mas.inference(sample)
-        output = {**sample, **result}
-        print(json.dumps(output, indent=2, ensure_ascii=False))
-        return
-
-    # ------------------------------------------------------------------
-    # Filter already-processed samples (resume support)
+    # Resume: skip already-processed samples
     # ------------------------------------------------------------------
     dataset = reserve_unprocessed_queries(args.output_file, dataset)
     print(f"After resume filter: {len(dataset)} samples remaining")
@@ -171,15 +142,12 @@ def main():
     lock = threading.Lock()
 
     if args.use_vllm:
-        # Batch processing
-        batch_size = args.batch_size
-        for start in tqdm(range(0, len(dataset), batch_size), desc="Batches"):
-            batch = dataset[start: start + batch_size]
+        for start in tqdm(range(0, len(dataset), args.batch_size), desc="Batches"):
+            batch = dataset[start: start + args.batch_size]
             results = mas.inference_batch(batch)
             for sample, result in zip(batch, results):
                 write_to_jsonl(lock, args.output_file, {**sample, **result})
     else:
-        # Sequential (fallback, no vLLM)
         for sample in tqdm(dataset, desc="Samples"):
             result = mas.inference(sample)
             write_to_jsonl(lock, args.output_file, {**sample, **result})
