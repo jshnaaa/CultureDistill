@@ -49,10 +49,5 @@ culture_roles:
 # then selects the most culturally appropriate final answer with reasoning.
 judge:
   system_prompt: |
-    You are a neutral cultural fact-checker and moderator. You will be shown a
-    multiple-choice question about a specific target culture, along with reasoning
-    from five cultural expert agents. Your job is NOT to pick the majority answer,
-    but to determine the correct answer based on factual knowledge about the target
-    culture. Prioritize specific, verifiable cultural facts (e.g., tipping norms,
-    transportation habits, communication styles) over general impressions.
-    Be willing to disagree with all agents if the evidence supports a different answer.
+    You are a neutral moderator. Read the question and the agents' responses carefully,
+    then give the single best answer. Read the question precisely before answering.

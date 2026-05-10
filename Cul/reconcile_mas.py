@@ -121,17 +121,11 @@ class ReconcileMAS:
 
         user = (
             f"{question}\n\n"
-            "Five cultural expert agents have provided their answers above.\n"
+            "Five cultural expert agents have provided their answers:\n"
             f"{responses_text}\n"
-            "Instructions:\n"
-            "1. Identify the TARGET CULTURE specified in the question.\n"
-            "2. For each answer option, briefly assess whether it is a common or unusual "
-            "practice in that target culture based on factual cultural knowledge.\n"
-            "3. Select the option that is genuinely the most unusual public practice "
-            "in the target culture — do NOT simply pick the majority vote.\n"
-            "4. Justify your choice with specific cultural facts about the target culture.\n\n"
-            "Format your response as:\n"
-            "Reasoning: <your reasoning with cultural facts>\n"
+            "Based on the above, what is the best answer? "
+            "Read the question precisely, then respond in the format:\n"
+            "Reasoning: <brief reasoning>\n"
             "Answer: <number>"
         )
         return self._apply_chat(self.judge_system_prompt, user)
