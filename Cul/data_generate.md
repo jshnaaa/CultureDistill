@@ -110,11 +110,14 @@ Cul/
 
 ```bash
 # 测试（前 5 条）
+cd autodl-tmp/distill
+sh git.sh
 python Cul/generate_culture_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
       --output_file /autodl-fs/data/CulturalBench_mas_inference.jsonl \
       --model_name llama \
       --use_vllm --tensor_parallel_size 1 --max_samples 5
+shutdown
 
 # 全量生成（max_samples 0 = 全量）
 python Cul/generate_culture_data.py \
