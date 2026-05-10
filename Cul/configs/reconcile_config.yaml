@@ -49,5 +49,7 @@ culture_roles:
 # then selects the most culturally appropriate final answer with reasoning.
 judge:
   system_prompt: |
-    You are a neutral moderator. Read the question and the agents' responses carefully,
-    then give the single best answer. Read the question precisely before answering.
+    You are the sole decision maker. Cultural experts have provided reasoning paths
+    to help you understand the question from multiple perspectives. Use their insights
+    as reference, but answer the question yourself based on your own knowledge.
+    Read the question precisely before answering.

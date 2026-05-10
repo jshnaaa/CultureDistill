@@ -29,28 +29,28 @@
 
 ### 3.2 Judge Agent
 
-辩论结束后，Judge 读取所有 agent 的最终回答及题目中的 target culture，输出带推理的最终答案。相比纯多数投票，Judge 能根据 target culture 做有偏向的裁决，并在平票时给出有据可查的理由。Judge 失效（无法提取有效答案）时自动 fallback 到多数投票。
+Judge 是唯一的答案决策者。Agent 的推理路径仅作为参考输入，Judge 基于自身知识独立回答问题，不受任何 agent 答案的影响。这样既保留了多文化视角的推理多样性，又避免了 agent 角色扮演干扰模型本身的文化知识。
 
 ---
 
-## 4. RECONCILE 框架流程
+## 4. RECONCILE 框架流程（方向 B）
 
 ```
 输入：(question, target_culture)
 
-Round 0：5 个 agent 各自独立生成，聚焦 target culture 的具体文化特征
+Round 0：5 个 agent 各自独立生成文化分析（仅推理，不给答案）
+  输出：Reasoning: <cultural analysis>
+
+Round 1：每个 agent 看到其他 4 个 agent 的分析，细化自己的推理
+  输出：Reasoning: <refined cultural analysis>
+
+Judge：读取 5 条推理路径，独立回答问题（不受 agent 答案影响）
   输出：Reasoning: ... \n Answer: [1/2/3/4]
 
-Round 1：每个 agent 看到其他 4 个 agent 的回答，可修改自己的答案
-  强调：不得因多数人同意而跟从，需有具体理由才更新
-  输出：Reasoning: ... \n Answer: [1/2/3/4]
-
-Judge：读取 5 个 agent 的最终回答，基于 target culture 事实裁决
-  强调：不取多数投票，以可验证的文化事实为据
-  输出：Reasoning: ... \n Answer: [1/2/3/4]
-
-输出：Solution 1-5（各 agent）+ Solution 6（Judge）
+输出：Solution 1-5（各 agent 推理）+ Solution 6（Judge 最终答案）
 ```
+
+**方向 B 的核心逻辑**：agent 只负责提供多元文化视角的推理，不做答案决策；Judge 作为唯一决策者，使用自身的模型知识回答，多文化推理路径仅作为辅助参考。这样避免了 agent 角色扮演干扰答案准确率，同时保留了推理多样性。
 
 ### 4.1 批量推理优化
 
@@ -85,7 +85,7 @@ Judge：  1227 × 1 = 1227 次
 }
 ```
 
-Solution 1-5 为各 agent Round 2 最终回答，Solution 6 为 Judge 输出，可直接复用 AgentArk `label.py` 的 `split_solutions` 逻辑。
+Solution 1-5 为各 agent Round 1 最终推理路径（无答案），Solution 6 为 Judge 独立给出的最终答案，可直接复用 AgentArk `label.py` 的 `split_solutions` 逻辑。PRM 训练使用 Solution 6 的答案与 gold label 对比打标签。
 
 ---
 
