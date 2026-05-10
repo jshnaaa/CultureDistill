@@ -48,11 +48,18 @@ class ReconcileMAS:
             dtype="bfloat16",
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        # Llama-3 end-of-turn tokens
+        stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
+        # Agents use high temperature for diverse reasoning paths
         self.sampling_params = SamplingParams(
-            temperature=self.temperature,
+            temperature=0.9,
             max_tokens=self.max_tokens,
-            stop=["<|eot_id|>", "<|end_of_text|>", "</s>"],
+            stop=stop_tokens,
+        )
+        # Judge uses low temperature for stable, accurate answer selection
+        self.judge_sampling_params = SamplingParams(
+            temperature=0.3,
+            max_tokens=self.max_tokens,
+            stop=stop_tokens,
         )
 
     # ------------------------------------------------------------------
@@ -121,17 +128,11 @@ class ReconcileMAS:
 
         user = (
             f"{question}\n\n"
-            "Five cultural expert agents have provided their answers above.\n"
+            "Five cultural expert agents have responded:\n"
             f"{responses_text}\n"
-            "Instructions:\n"
-            "1. Identify the TARGET CULTURE specified in the question.\n"
-            "2. For each answer option, briefly assess whether it is a common or unusual "
-            "practice in that target culture based on factual cultural knowledge.\n"
-            "3. Select the option that is genuinely the most unusual public practice "
-            "in the target culture — do NOT simply pick the majority vote.\n"
-            "4. Justify your choice with specific cultural facts about the target culture.\n\n"
-            "Format your response as:\n"
-            "Reasoning: <your reasoning with cultural facts>\n"
+            "Read the question carefully, consider the agents' reasoning and debate, "
+            "then give your final answer.\n\n"
+            "Reasoning: <brief reasoning>\n"
             "Answer: <number>"
         )
         return self._apply_chat(self.judge_system_prompt, user)
@@ -217,7 +218,7 @@ class ReconcileMAS:
             for i in range(self.num_agents)
         ]
         judge_prompt = self._build_judge_prompt(question, all_responses)
-        judge_output = self.llm.generate([judge_prompt], self.sampling_params)
+        judge_output = self.llm.generate([judge_prompt], self.judge_sampling_params)
         judge_response = judge_output[0].outputs[0].text.strip()
         judge_answer = self._extract_answer(judge_response)
 
@@ -285,7 +286,7 @@ class ReconcileMAS:
             ]
             judge_prompts.append(self._build_judge_prompt(questions[si], all_responses))
 
-        judge_outputs = self.llm.generate(judge_prompts, self.sampling_params)
+        judge_outputs = self.llm.generate(judge_prompts, self.judge_sampling_params)
 
         # Build results
         results = []

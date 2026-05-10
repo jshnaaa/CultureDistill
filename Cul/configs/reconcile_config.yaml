@@ -1,6 +1,6 @@
 num_agents: 5
 num_debate_rounds: 1
-temperature: 0.7
+temperature: 0.9   # agent temperature; judge uses 0.3 (hardcoded in reconcile_mas.py)
 max_tokens: 1024
 
 # 5 cultural agents: Asian / European / North American / Latin American / African
