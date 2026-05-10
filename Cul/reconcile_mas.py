@@ -15,13 +15,15 @@ class ReconcileMAS:
     """
     RECONCILE-style multi-agent debate for cultural alignment tasks.
 
-    Direction B: agents provide cultural reasoning paths only (no answer decision).
-    The Judge reads all reasoning and answers the question independently.
+    4 heterogeneous agents (Asian / Western / Latin American / African),
+    each injected with a cultural system prompt. Runs num_debate_rounds
+    rounds of debate, then a Judge agent selects the final answer.
 
-    5 heterogeneous agents (Asian / European / North American / Latin American / African).
     Output format mirrors AgentArk LLM Debate:
-      ===== Solution 1 ===== ... ===== Solution 5 ===== (agents)
-      ===== Solution 6 ===== (Judge final answer)
+      ===== Solution 1 ===== (Agent 0)
+      ...
+      ===== Solution 4 ===== (Agent 3)
+      ===== Solution 5 ===== (Judge consensus)
     """
 
     def __init__(self, model_name, tensor_parallel_size=1, config_path=None,
@@ -46,6 +48,7 @@ class ReconcileMAS:
             dtype="bfloat16",
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Llama-3 end-of-turn tokens
         self.sampling_params = SamplingParams(
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -57,6 +60,7 @@ class ReconcileMAS:
     # ------------------------------------------------------------------
 
     def _apply_chat(self, system, user):
+        """Apply Llama-3 chat template."""
         messages = [
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
@@ -66,27 +70,24 @@ class ReconcileMAS:
         )
 
     def _build_initial_prompt(self, agent_idx, question):
-        """
-        Agent only provides cultural reasoning — no final answer required.
-        This preserves the model's own knowledge for the Judge stage.
-        """
         system = self.culture_roles[agent_idx]["system_prompt"].strip()
         user = (
             f"{question}\n\n"
-            "From your cultural perspective, analyze how the target culture specified "
-            "in the question would approach this topic. Focus on specific cultural norms, "
-            "habits, and values relevant to each option. "
-            "Provide your cultural analysis only — do NOT give a final answer number.\n\n"
+            "Instructions:\n"
+            "1. First, identify the TARGET CULTURE specified in the question.\n"
+            "2. Think about what specific norms, habits, and values are characteristic "
+            "of that target culture — not your own cultural background.\n"
+            "3. Use your cultural knowledge to evaluate which option is most unusual "
+            "or least common as a public practice IN THAT TARGET CULTURE.\n"
+            "4. Provide concise reasoning focused on the target culture's specific traits.\n\n"
             "Format your response as:\n"
-            "Reasoning: <your cultural analysis of the options>"
+            "Reasoning: <your reasoning about the target culture>\n"
+            "Answer: <number>"
         )
         return self._apply_chat(system, user)
 
     def _build_debate_prompt(self, agent_idx, question, other_responses):
-        """
-        Agent reviews other perspectives and refines its cultural analysis.
-        Still no final answer — reasoning paths only.
-        """
+        """other_responses: list of (agent_name, response_text)"""
         system = self.culture_roles[agent_idx]["system_prompt"].strip()
 
         others_text = ""
@@ -95,20 +96,24 @@ class ReconcileMAS:
 
         user = (
             f"{question}\n\n"
-            "Other cultural experts have provided these analyses:\n"
+            "Other cultural experts have provided these perspectives:\n"
             f"{others_text}\n"
-            "Review these perspectives and refine your own cultural analysis. "
-            "You may agree, disagree, or add new insights. "
-            "Do NOT give a final answer number — provide cultural reasoning only.\n\n"
+            "Instructions:\n"
+            "1. Review the other agents' reasoning critically — do NOT simply follow the majority.\n"
+            "2. If you find a factual error or a stronger argument, update your answer and explain why.\n"
+            "3. If you still believe your original answer is correct, maintain it and defend it.\n"
+            "4. Stay focused on specific, factual knowledge about the TARGET CULTURE in the question.\n\n"
             "Format your response as:\n"
-            "Reasoning: <your refined cultural analysis>"
+            "Reasoning: <your updated reasoning>\n"
+            "Answer: <number>"
         )
         return self._apply_chat(system, user)
 
     def _build_judge_prompt(self, question, agent_responses):
         """
-        Judge reads all cultural reasoning paths and answers the question independently.
-        The Judge is not influenced by any agent's answer — only by their reasoning.
+        agent_responses: list of (agent_name, response_text)
+        Judge reads all responses and the target culture embedded in the question,
+        then selects the most culturally appropriate final answer.
         """
         responses_text = ""
         for name, resp in agent_responses:
@@ -116,21 +121,28 @@ class ReconcileMAS:
 
         user = (
             f"{question}\n\n"
-            "Five cultural experts have analyzed this question from different perspectives:\n"
+            "Five cultural expert agents have provided their answers above.\n"
             f"{responses_text}\n"
-            "Using the cultural insights above as reference, answer the question yourself. "
-            "Read the question precisely and give the single best answer.\n\n"
-            "Reasoning: <your reasoning>\n"
+            "Instructions:\n"
+            "1. Identify the TARGET CULTURE specified in the question.\n"
+            "2. For each answer option, briefly assess whether it is a common or unusual "
+            "practice in that target culture based on factual cultural knowledge.\n"
+            "3. Select the option that is genuinely the most unusual public practice "
+            "in the target culture — do NOT simply pick the majority vote.\n"
+            "4. Justify your choice with specific cultural facts about the target culture.\n\n"
+            "Format your response as:\n"
+            "Reasoning: <your reasoning with cultural facts>\n"
             "Answer: <number>"
         )
         return self._apply_chat(self.judge_system_prompt, user)
 
     # ------------------------------------------------------------------
-    # Answer extraction (Judge only)
+    # Answer extraction
     # ------------------------------------------------------------------
 
     @staticmethod
     def _extract_answer(text):
+        """Extract numeric answer 1-4 from agent/judge response."""
         m = re.search(r"Answer\s*:\s*([1-4])", text, re.IGNORECASE)
         if m:
             return m.group(1)
@@ -138,21 +150,55 @@ class ReconcileMAS:
         return digits[-1] if digits else None
 
     # ------------------------------------------------------------------
+    # Fallback consensus (majority vote, used only if judge fails)
+    # ------------------------------------------------------------------
+
+    def _majority_vote(self, answers, target_culture):
+        valid = [a for a in answers if a is not None]
+        if not valid:
+            return None
+        counts = Counter(valid)
+        top_count = counts.most_common(1)[0][1]
+        top_answers = [a for a, c in counts.items() if c == top_count]
+        if len(top_answers) == 1:
+            return top_answers[0]
+        # Tie-break: prefer agent whose region matches target culture
+        region_keywords = {
+            0: ["asia", "china", "japan", "korea", "india", "vietnam", "arab", "iran",
+                "pakistan", "indonesia", "malaysia", "philippines", "thailand", "arabic"],
+            1: ["europe", "uk", "france", "germany", "netherlands", "spain", "italy",
+                "sweden", "norway", "denmark", "finland", "poland", "portugal"],
+            2: ["america", "united states", "canada", "usa", "north america"],
+            3: ["latin", "south america", "brazil", "mexico", "argentina", "chile",
+                "colombia", "peru", "venezuela", "central america"],
+            4: ["africa", "nigeria", "kenya", "ethiopia", "ghana", "south africa",
+                "egypt", "morocco", "tanzania", "senegal", "uganda"],
+        }
+        target_lower = target_culture.lower()
+        for agent_idx, keywords in region_keywords.items():
+            if any(kw in target_lower for kw in keywords):
+                candidate = answers[agent_idx]
+                if candidate in top_answers:
+                    return candidate
+        return top_answers[0]
+
+    # ------------------------------------------------------------------
     # Single-sample inference
     # ------------------------------------------------------------------
 
     def inference(self, sample):
         question = sample["query"]
+        target_culture = sample.get("country", "")
 
         agent_responses = [""] * self.num_agents
 
-        # Round 0: independent cultural analysis (no answers)
+        # Round 0: independent initial responses
         prompts = [self._build_initial_prompt(i, question) for i in range(self.num_agents)]
         outputs = self.llm.generate(prompts, self.sampling_params)
         for i, out in enumerate(outputs):
             agent_responses[i] = out.outputs[0].text.strip()
 
-        # Debate rounds: refine cultural analysis
+        # Debate rounds
         for _ in range(self.num_debate_rounds):
             prompts = []
             for i in range(self.num_agents):
@@ -165,7 +211,7 @@ class ReconcileMAS:
             for i, out in enumerate(outputs):
                 agent_responses[i] = out.outputs[0].text.strip()
 
-        # Judge: answers the question based on all cultural reasoning
+        # Judge: read all final responses and select best answer
         all_responses = [
             (self.culture_roles[i]["name"], agent_responses[i])
             for i in range(self.num_agents)
@@ -173,7 +219,14 @@ class ReconcileMAS:
         judge_prompt = self._build_judge_prompt(question, all_responses)
         judge_output = self.llm.generate([judge_prompt], self.sampling_params)
         judge_response = judge_output[0].outputs[0].text.strip()
+        judge_answer = self._extract_answer(judge_response)
 
+        # Fallback to majority vote if judge fails to produce valid answer
+        if judge_answer is None:
+            final_answers = [self._extract_answer(r) for r in agent_responses]
+            judge_answer = self._majority_vote(final_answers, target_culture)
+
+        # Format: Solution 1-4 = agent final responses, Solution 5 = judge
         formatted = ""
         for i, resp in enumerate(agent_responses):
             formatted += f"===== Solution {i + 1} =====\n{resp}\n"
@@ -192,6 +245,7 @@ class ReconcileMAS:
         """
         n = len(samples)
         questions = [s["query"] for s in samples]
+        countries = [s.get("country", "") for s in samples]
 
         agent_responses = [[""] * self.num_agents for _ in range(n)]
 
@@ -233,9 +287,19 @@ class ReconcileMAS:
 
         judge_outputs = self.llm.generate(judge_prompts, self.sampling_params)
 
+        # Build results
         results = []
         for si in range(n):
             judge_response = judge_outputs[si].outputs[0].text.strip()
+            judge_answer = self._extract_answer(judge_response)
+
+            if judge_answer is None:
+                final_answers = [
+                    self._extract_answer(agent_responses[si][ai])
+                    for ai in range(self.num_agents)
+                ]
+                fallback = self._majority_vote(final_answers, countries[si])
+                judge_response += f"\n[Fallback majority vote]: {fallback}"
 
             formatted = ""
             for ai in range(self.num_agents):
