@@ -163,83 +163,253 @@ R_cultural = clip(prm_score, 0.1, 0.9)
 
 ## 5. Process Reward Model（PRM）训练
 
-### 5.1 模型架构
+### 5.1 整体流程概览
 
 ```
-Base Model：Qwen3-0.6B（显存约 1.2GB/卡）
-Reward Head：Linear(hidden_size → 1) + Sigmoid
-输入：[Culture Token] + [Question] + [Reasoning Path] + [Answer]
-输出：标量分数 s ∈ (0, 1)
+MAS 推理数据（1227条 × 6 Solutions）
+        ↓
+Step 1: 构造 PRM 训练数据集（pairwise 格式）
+        ↓
+Step 2: 基座模型改造（添加 reward head）
+        ↓
+Step 3: Preference Learning 训练（Bradley-Terry loss）
+        ↓
+Step 4: 验证与质量评估
+        ↓
+冻结 PRM，供 GRPO 阶段使用
 ```
 
-取最后一个 token 的 hidden state 经 reward head 得分，不生成文字。
+**注意**：PRM 训练不是标准 SFT（监督微调），而是 **Preference Learning（偏好学习）**。SFT 的目标是让模型生成正确的文字输出；PRM 的目标是让模型对 pairwise 路径打出正确的相对顺序分数。两者的数据格式、损失函数、输出层完全不同。
 
-**Reward head 说明**：与 PPO critic 的 value head 结构相同（`Linear(hidden_size → 1)`），但语义不同：critic value head 输出期望累积 reward V(s)，reward head 输出路径质量评分 r。GRPO 不存在 critic model，此处 reward head 仅属于 PRM。选择 reward head 而非生成式打分的原因：GRPO 在线采样阶段需批量打分约 40000 条路径，reward head 输出连续标量，速度快且与 Bradley-Terry loss 直接兼容。
+---
 
-### 5.2 训练数据构造
+### 5.2 Step 1：构造 PRM 训练数据集
 
-**来源 A：MAS 弱标签（全量，约 1500-2000 对）**
+#### 5.2.1 数据来源与划分
+
+基于已生成的 MAS 推理数据（`CulturalBench_mas_inference_20260510_192023.jsonl`，1227条），按 question 维度划分：
 
 ```
-同一 (question, culture) 下：
-  chosen   = answer == gold 的路径
-  rejected = answer != gold 的路径
+1227 条样本
+├── 70%（858条）→ PRM 训练集
+├── 15%（184条）→ PRM 验证集
+└── 15%（185条）→ 留作 GRPO 训练集（不参与 PRM 训练）
 ```
 
-所有路径都对或都错时跳过（无对比信号）。
+#### 5.2.2 来源 A：Answer Correctness 弱标签（全量）
 
-**来源 B：细粒度监督标签（抽样，约 300-500 条路径）**
+对 PRM 训练集的每条样本，从 Solution 1-5（agent 路径）中构造 pairwise 对：
 
-两种方式：
+```
+同一 (question, country) 下：
+  chosen   = answer == gold 的推理路径
+  rejected = answer != gold 的推理路径
+```
+
+跳过条件：所有 agent 路径全部答对或全部答错（无对比信号）。
+
+根据全量数据统计：
+- 有效样本（有 PRM 对）：786/1227 = 64.1%
+- 平均每样本 3.10 对
+- 预计总 pairwise 对：约 2436 对（858条 × 64.1% × 3.10）
+
+pairwise 数据格式：
+```json
+{
+  "question": "### Question: ...",
+  "country": "Vietnam",
+  "chosen": "Reasoning: In Vietnamese culture...\nAnswer: 3",
+  "rejected": "Reasoning: In Vietnamese culture...\nAnswer: 1"
+}
+```
+
+#### 5.2.3 来源 B：文化一致性细粒度标签（抽样强标签）
+
+从来源 A 的 chosen 路径中随机抽取约 300-500 条，使用 LLM Judge（Qwen2.5-72B）对推理路径的文化一致性打分（0.1-0.9 连续值）：
+
+```
+Prompt：
+"You are evaluating whether the following reasoning reflects
+the cultural values and norms of [COUNTRY].
+Question: [question]
+Reasoning: [reasoning path]
+Rate the cultural consistency as a decimal between 0.1 and 0.9.
+Respond with only a decimal number."
+```
+
+构造规则：同一题内 score 差值 > 0.2 的两条路径构成 pairwise 对。额外贡献约 300-400 个高质量对。
+
+两种强标签方式对比：
 
 | 方式 | 优点 | 缺点 | 适用场景 |
 |------|------|------|---------|
-| 人类评审员（5位） | 细粒度文化感知强，无西方偏见 | 成本高，IAA < 0.7，难以覆盖所有文化 | 少量验证（100-200条） |
-| LLM Judge（Qwen2.5-72B） | 低成本，速度快，一致性高 | 西方文化偏见，评分集中 | 主要强标签来源（300-500条） |
+| 人类评审员（5位） | 文化感知细腻，无西方偏见 | 成本高，IAA < 0.7，难覆盖全部文化 | 抽样验证（50-100条） |
+| LLM Judge（Qwen2.5-72B） | 低成本，速度快，一致性高 | 西方文化偏见，评分分布集中 | 主要强标签来源（300-500条） |
 
-推荐 LLM Judge 覆盖全量，人类评审员抽样验证，计算 Spearman 相关系数（>0.6 则 LLM Judge 可信）。
+推荐 LLM Judge 覆盖全量，人类评审员抽样验证，计算两者 Spearman 相关系数（> 0.6 则 LLM Judge 可信）。
 
-同一题内 score 差值 > 0.2 的两条路径构成 pairwise 对。最终约 1800-2400 对。
-
-### 5.3 训练方式
-
-Bradley-Terry ranking loss：
+#### 5.2.4 最终数据集规模
 
 ```
-Loss = -log(σ(s_chosen - s_rejected))
+弱标签 pairwise 对：约 2436 对
+强标签 pairwise 对：约 300-400 对
+─────────────────────────────
+PRM 训练集总计：约 2700-2800 对
+PRM 验证集：按同比例构造，约 580-600 对
 ```
 
-### 5.4 训练配置（4卡 A100）
+---
 
-| 参数 | 值 |
-|------|----|
-| epochs | 3-5 |
-| learning rate | 1e-5 |
-| batch size | 32 pairs（每卡 8 对） |
-| max sequence length | 1024 tokens |
-| optimizer | AdamW |
-| warmup ratio | 0.05 |
-| bf16 | True |
-| gradient checkpointing | True |
+### 5.3 Step 2：基座模型改造
 
-预计训练时间：约 15-30 分钟。
+#### 5.3.1 基座选择
 
-### 5.5 收敛标准
+```
+Base Model：Qwen3-0.6B
+理由：文化 reward 判断是语义分类问题，不需要复杂推理；
+     0.6B 参数量轻量，显存仅 ~1.2GB，不占 GRPO 的显存预算。
+```
 
-验证集 Pairwise Accuracy 目标 68%（65%-70% 即可提供稳定信号，不需要追求更高）：
-- < 65%：对比信号不可靠
-- train/val 差距 > 10%：过拟合，对在线采样新路径打分不准，导致 reward hacking
+#### 5.3.2 添加 Reward Head
 
-精度不足时：增加强标签比例；降低 lr 至 5e-6；检查文化样本分布均衡性。
+在基座 LLM 之上添加一个线性层作为 reward head：
+
+```python
+class CultureRewardModel(nn.Module):
+    def __init__(self, base_model):
+        super().__init__()
+        self.model = base_model          # Qwen3-0.6B，保留原始权重
+        hidden_size = base_model.config.hidden_size
+        self.reward_head = nn.Linear(hidden_size, 1)  # 新增，随机初始化
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True
+        )
+        # 取最后一个 token 的 hidden state
+        last_hidden = outputs.hidden_states[-1][:, -1, :]
+        score = self.reward_head(last_hidden).squeeze(-1)  # (batch,)
+        return torch.sigmoid(score)      # 映射到 (0, 1)
+```
+
+**为什么取最后一个 token**：自回归模型的最后一个 token 的 hidden state 对整个序列有最完整的上下文表示，是序列级打分的标准做法（RLHF reward model 的通用实现）。
+
+**为什么加 Sigmoid**：将原始 logit 压缩到 (0,1)，与 clip(0.1, 0.9) 配合使用，避免极端分数主导梯度。
+
+**Reward head vs 生成式打分**：GRPO 在线采样阶段需要对约 12000 条路径批量打分，生成式打分（让模型输出"0.8"这样的文字）速度慢且不稳定；reward head 输出连续标量，一次前向传播即得分数，与 Bradley-Terry loss 直接兼容。
+
+#### 5.3.3 参数冻结策略
+
+训练时有两种策略：
+
+| 策略 | 做法 | 优点 | 缺点 |
+|------|------|------|------|
+| 全参数微调 | base model + reward head 均参与训练 | 表示能力强 | 显存大，容易过拟合（数据量小） |
+| 冻结 base，只训 reward head | 仅 reward head 参与训练 | 显存小，防过拟合 | 表示能力受限 |
+| LoRA 微调 | base model 用 LoRA，reward head 全参 | 平衡两者 | 实现略复杂 |
+
+**推荐**：先用"冻结 base + 只训 reward head"快速验证，若 Pairwise Accuracy < 65% 再改用 LoRA。
+
+---
+
+### 5.4 Step 3：Preference Learning 训练
+
+#### 5.4.1 训练目标
+
+PRM 训练不是 SFT（不优化 token 预测 loss），而是 **Preference Learning**——让模型学会对 chosen 路径打出比 rejected 路径更高的分数。
+
+#### 5.4.2 损失函数：Bradley-Terry Ranking Loss
+
+```python
+def bradley_terry_loss(score_chosen, score_rejected):
+    # score_chosen, score_rejected: (batch,) ∈ (0,1)
+    return -torch.log(torch.sigmoid(score_chosen - score_rejected)).mean()
+```
+
+直觉：最大化 chosen 分数高于 rejected 分数的概率。当 score_chosen >> score_rejected 时，loss → 0；当两者相等时，loss = log(2) ≈ 0.693。
+
+#### 5.4.3 数据加载格式
+
+每个 batch 包含 N 个 pairwise 对，每对有 chosen 和 rejected 两条序列：
+
+```python
+# 输入序列构造
+def build_input(question, country, reasoning_path):
+    return f"[{country}]\n{question}\n{reasoning_path}"
+
+# batch 格式
+{
+    "chosen_input_ids":   (N, seq_len),
+    "chosen_attention_mask": (N, seq_len),
+    "rejected_input_ids": (N, seq_len),
+    "rejected_attention_mask": (N, seq_len),
+}
+
+# 前向传播
+score_chosen  = model(chosen_input_ids, chosen_attention_mask)   # (N,)
+score_rejected = model(rejected_input_ids, rejected_attention_mask)  # (N,)
+loss = bradley_terry_loss(score_chosen, score_rejected)
+```
+
+#### 5.4.4 训练配置（单卡 RTX 4090 / 4卡 A100）
+
+| 参数 | 值 | 说明 |
+|------|----|------|
+| base model | Qwen3-0.6B | |
+| 参数冻结 | 冻结 base，仅训 reward head | 防过拟合 |
+| epochs | 3-5 | |
+| learning rate | 1e-4（reward head）/ 0（base frozen） | reward head 随机初始化，需较大 lr |
+| batch size | 32 pairs（4卡：每卡 8 对） | |
+| max sequence length | 1024 tokens | |
+| optimizer | AdamW（weight_decay=0.01） | |
+| warmup ratio | 0.05 | |
+| bf16 | True（A100）/ fp16（V100） | |
+| gradient checkpointing | True | |
+
+预计训练时间：约 10-20 分钟（数据量小，收敛快）。
+
+---
+
+### 5.5 Step 4：验证与质量评估
+
+#### 5.5.1 核心指标：Pairwise Accuracy
+
+```
+Pairwise Accuracy = 
+  PRM 对 chosen 打分高于 rejected 的比例
+
+目标：验证集 Pairwise Accuracy > 68%
+```
+
+- < 65%：对比信号不可靠，需要调整
+- 65%-70%：稳定区间，足够为 GRPO 提供辅助信号
+- train/val 差距 > 10%：过拟合，reward head 对新路径打分不准
+
+#### 5.5.2 文化敏感性验证
+
+同一 question，输入不同 country token，PRM 对各文化最高分路径内容应有实质差异。若不同文化的最高分路径内容高度相似，说明 PRM 没有学到文化区分能力。
+
+#### 5.5.3 精度不足时的调整
+
+| 问题 | 调整方案 |
+|------|---------|
+| Pairwise Acc < 65% | 增加 LLM Judge 强标签比例；降低 lr 至 5e-6 |
+| 过拟合（train-val > 10%） | 改用 LoRA 微调替代全参；增加 weight decay |
+| 文化分布不均 | 按文化 weighted sampling，确保低频文化有足够样本 |
+| 不同文化分数无差异 | 检查 country token 是否正确注入输入序列 |
+
+---
 
 ### 5.6 Reward 风险与缓解策略
 
 | 风险 | 缓解策略 |
 |------|---------|
-| PRM 误差累积：R_cultural 误差被梯度放大 | α > β；clip(0.1, 0.9)；KL 惩罚 |
-| 数据量小导致过拟合 | 每 5 轮评估；train-val gap > 15% 早停 |
+| PRM 误差累积：R_cultural 误差被梯度放大 | α > β（1.0 vs 0.3）；clip(0.1, 0.9)；KL 惩罚 |
+| 数据量小导致过拟合 | 冻结 base；每 5 轮评估；train-val gap > 15% 早停 |
 | Reward scale 不一致（R_ans 离散，R_cultural 连续） | α=1.0, β=0.3；reward normalization |
-| MAS 路径多样性不足，R_cultural 无对比信号 | 独立生成（0轮辩论），确保 agent 多样性 |
+| MAS 路径多样性不足 | 0轮辩论独立生成，保证 agent 答案多样性 |
 
 ---
 
