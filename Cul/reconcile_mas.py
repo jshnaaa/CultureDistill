@@ -81,15 +81,10 @@ class ReconcileMAS:
         system = self.culture_roles[agent_idx]["system_prompt"].strip()
         user = (
             f"{question}\n\n"
-            "Instructions:\n"
-            "1. First, identify the TARGET CULTURE specified in the question.\n"
-            "2. Think about what specific norms, habits, and values are characteristic "
-            "of that target culture — not your own cultural background.\n"
-            "3. Use your cultural knowledge to evaluate which option is most unusual "
-            "or least common as a public practice IN THAT TARGET CULTURE.\n"
-            "4. Provide concise reasoning focused on the target culture's specific traits.\n\n"
-            "Format your response as:\n"
-            "Reasoning: <your reasoning about the target culture>\n"
+            "Identify the TARGET CULTURE in the question. "
+            "Reason about its specific customs and values first, "
+            "then use your own cultural perspective as a reference if helpful.\n\n"
+            "Reasoning: <your reasoning>\n"
             "Answer: <number>"
         )
         return self._apply_chat(system, user)
@@ -104,25 +99,17 @@ class ReconcileMAS:
 
         user = (
             f"{question}\n\n"
-            "Other cultural experts have provided these perspectives:\n"
+            "Other cultural experts have responded:\n"
             f"{others_text}\n"
-            "Instructions:\n"
-            "1. Review the other agents' reasoning critically — do NOT simply follow the majority.\n"
-            "2. If you find a factual error or a stronger argument, update your answer and explain why.\n"
-            "3. If you still believe your original answer is correct, maintain it and defend it.\n"
-            "4. Stay focused on specific, factual knowledge about the TARGET CULTURE in the question.\n\n"
-            "Format your response as:\n"
+            "Review their reasoning. Update your answer if you find stronger evidence, "
+            "otherwise defend your original. Stay focused on the TARGET CULTURE.\n\n"
             "Reasoning: <your updated reasoning>\n"
             "Answer: <number>"
         )
         return self._apply_chat(system, user)
 
     def _build_judge_prompt(self, question, agent_responses):
-        """
-        agent_responses: list of (agent_name, response_text)
-        Judge reads all responses and the target culture embedded in the question,
-        then selects the most culturally appropriate final answer.
-        """
+        """Judge weighs agent perspectives against verifiable cultural facts."""
         responses_text = ""
         for name, resp in agent_responses:
             responses_text += f"\n[{name}]:\n{resp}\n"
@@ -131,9 +118,10 @@ class ReconcileMAS:
             f"{question}\n\n"
             "Five cultural expert agents have responded:\n"
             f"{responses_text}\n"
-            "Read the question carefully, consider the agents' reasoning and debate, "
-            "then give your final answer.\n\n"
-            "Reasoning: <brief reasoning>\n"
+            "Determine the correct answer using verifiable facts about the TARGET CULTURE. "
+            "Reference the agents' reasoning as supporting evidence, "
+            "but do not simply follow the majority.\n\n"
+            "Reasoning: <your reasoning, referencing agents as needed>\n"
             "Answer: <number>"
         )
         return self._apply_chat(self.judge_system_prompt, user)
