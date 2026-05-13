@@ -581,19 +581,22 @@ Step 8: 评估
   base 模型 vs SFT 模型 vs GRPO 蒸馏模型 vs MAS Oracle
 ```
 
-### 8.1 PRM 代码结构
+### 8.1 代码结构
 
 ```
-Cul/prm/
-├── split_dataset.py   # 按 5:2:3 划分 MAS 推理数据
-├── label_data.py      # LLM-as-a-Judge 打分 + 构造 pairwise 对
-└── train_prm.py       # Qwen3-0.6B 全参微调，Bradley-Terry loss
+Cul/
+├── prm/
+│   ├── split_dataset.py   # 按 5:2:3 划分 MAS 推理数据
+│   ├── label_data.py      # LLM-as-a-Judge 打分 + 构造 pairwise 对
+│   └── train_prm.py       # Qwen3-0.6B 全参微调，Bradley-Terry loss
+└── grpo/
+    └── train_grpo.py      # GRPO 训练，DeepSpeed ZeRO-3，2卡运行
 ```
 
 ### 8.2 PRM 运行命令
 
 ```bash
-# Step 1: 划分数据集
+# Step 1: 划分数据集（5:2:3）
 python Cul/prm/split_dataset.py \
     --input_file /autodl-fs/data/CulturalBench_mas_inference_20260510_192023.jsonl \
     --output_dir /autodl-fs/data/splits \
@@ -613,7 +616,7 @@ python Cul/prm/label_data.py \
     --model_name  llama \
     --batch_size  32
 
-# Step 3: 训练 PRM
+# Step 3: 训练 PRM（单卡，约 11GB 显存）
 python Cul/prm/train_prm.py \
     --train_file /autodl-fs/data/prm/prm_train_pairs.jsonl \
     --val_file   /autodl-fs/data/prm/prm_val_pairs.jsonl \
@@ -621,6 +624,34 @@ python Cul/prm/train_prm.py \
     --epochs     5 \
     --batch_size 16 \
     --lr         1e-5
+```
+
+### 8.3 GRPO 运行命令
+
+```bash
+# GRPO 训练（2卡 RTX 4090，ZeRO-3，约 28GB/卡）
+deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
+    --model_name     llama \
+    --grpo_data      /autodl-fs/data/splits/grpo_train.jsonl \
+    --val_data       /autodl-fs/data/splits/prm_val.jsonl \
+    --prm_path       /autodl-fs/models/prm_qwen3_0.6b/best \
+    --output_dir     /autodl-fs/models/grpo_llama_culture \
+    --n_samples      10 \
+    --max_rounds     30 \
+    --eval_every     5 \
+    --prompt_batch   4 \
+    --lr             5e-7
+
+# 使用 Qwen2.5-7B 作为 student 模型
+deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
+    --model_name     qwen \
+    --grpo_data      /autodl-fs/data/splits/grpo_train.jsonl \
+    --val_data       /autodl-fs/data/splits/prm_val.jsonl \
+    --prm_path       /autodl-fs/models/prm_qwen3_0.6b/best \
+    --output_dir     /autodl-fs/models/grpo_qwen_culture \
+    --n_samples      10 \
+    --max_rounds     30 \
+    --eval_every     5
 ```
 
 `--model_name` 支持 `llama`（Llama-3.1-8B-Instruct）或 `qwen`（Qwen2.5-7B-Instruct）或完整路径。
