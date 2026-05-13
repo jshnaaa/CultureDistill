@@ -546,42 +546,86 @@ response_length 暴增       # 加长度惩罚
 
 ---
 
-## 8. 完整 Pipeline
+## 8. 实验设计与完整 Pipeline
+
+### 8.1 三种蒸馏方案
+
+实验对比三种蒸馏配置，验证 SFT 和 RL 各自的贡献及组合效果：
+
+| 方案 | 训练流程 | 起始模型 |
+|------|---------|---------|
+| SFT-only | base → SFT | base model |
+| RL-only | base → GRPO | base model |
+| SFT + RL | base → SFT → GRPO | SFT checkpoint |
+
+**SFT-only**：用 MAS 数据中正确推理路径做监督微调，简单直接，作为最强 baseline。
+**RL-only**：从 base 直接做 GRPO，验证 RL 不依赖 SFT 时的下限。文化任务答案空间小（1-4），base 模型已有文化知识，reward 不稀疏，这个方案成立。
+**SFT + RL**：SFT 先让模型学会输出格式（`Reasoning: ... Answer: N`），GRPO 再做质量提升，通常效果最好。
+
+**理论预期**：SFT+RL ≥ RL-only ≥ SFT-only（文化任务的具体排序需实验验证，是论文贡献之一）。
+
+---
+
+### 8.2 完整 Pipeline
 
 ```
-Step 1: 数据准备
+Step 1: 数据准备与划分
   CulturalBench（1227 条）
-  → 按 question 划分（5:2:3）：
-    PRM 训练集(50%, 614条) / PRM 验证集兼分布内测试集(20%, 245条) / GRPO 训练集(30%, 368条)
+  split_dataset.py → prm_train(614) / prm_val(245) / grpo_train(368)
 
 Step 2: MAS 数据生成（异质 RECONCILE）
-  5个文化 agent 独立生成推理路径（0轮辩论）+ Judge 裁决
-  → 输出 jsonl（Solution 1-5: agent，Solution 6: Judge）
+  5个文化 agent 独立生成 + Judge 裁决
+  → CulturalBench_mas_inference.jsonl（Solution 1-5: agent，Solution 6: Judge）
 
-Step 3: 数据集划分
-  split_dataset.py → prm_train.jsonl / prm_val.jsonl / grpo_train.jsonl
-
-Step 4: LLM-as-a-Judge 打分 + 构造 pairwise 对
-  label_data.py（Llama-3.1-8B 或 Qwen2.5-7B 打分）
+Step 3: PRM 训练数据构造
+  label_data.py（LLM-as-a-Judge 打分 + pairwise 对构造）
   → prm_train_pairs.jsonl / prm_val_pairs.jsonl
 
-Step 5: PRM 训练
+Step 4: PRM 训练
   train_prm.py（Qwen3-0.6B 全参微调，Bradley-Terry loss）
   → /autodl-fs/models/prm_qwen3_0.6b/best/
 
-Step 6: SFT 预训练（Judge 轨迹优先）
-  训练数据：Judge 轨迹（Solution 6）作为核心 SFT 数据
+Step 5a: SFT 训练（SFT-only 和 SFT+RL 共用）
+  train_sft.py（grpo_train 中正确路径 + Judge 路径作为监督数据）
+  → /autodl-fs/models/sft_llama/  或  /autodl-fs/models/sft_qwen/
 
-Step 7: GRPO 训练
-  Policy：Llama-3.1-8B 或 Qwen2.5-7B
-  Reward：R_total = 0.7 * R_ans + 0.3 * R_cultural（PRM 冻结）
-  时间：约 5-15 小时
+Step 5b: GRPO 训练 × 2种配置
+  RL-only:  base model → GRPO
+  SFT + RL: SFT checkpoint → GRPO
+  → /autodl-fs/models/grpo_llama_rlo/   （RL-only）
+  → /autodl-fs/models/grpo_llama_sft/   （SFT+RL）
 
-Step 8: 评估
-  base 模型 vs SFT 模型 vs GRPO 蒸馏模型 vs MAS Oracle
+Step 6: 评估（在 prm_val 上）
+  Base / SFT-only / RL-only / SFT+RL vs MAS Oracle
 ```
 
-### 8.1 代码结构
+---
+
+### 8.3 SFT 训练数据构造
+
+SFT 的训练数据来自 `grpo_train.jsonl`（368条）的 MAS 推理数据：
+
+**正样本选取规则：**
+- Solution 1-5（agent 路径）中 answer == gold 的路径
+- Solution 6（Judge 路径）中 answer == gold 的路径（优先级更高，体现创新点2）
+
+**输入输出格式：**
+```
+输入：[{country}]\n{question}
+输出：Reasoning: {reasoning}\nAnswer: {answer}
+```
+
+**数据量估算：**
+```
+grpo_train 368条 × 平均 2-3 条正确路径/样本 ≈ 700-1100 条 SFT 样本
+（含 Judge 路径约额外 200-300 条，answer==gold 的比例约 68%）
+```
+
+数据量偏少，训练时使用较小 lr（1e-5）和早停（连续 2 epoch val_acc 不提升即停）。
+
+---
+
+### 8.4 代码结构
 
 ```
 Cul/
@@ -589,11 +633,17 @@ Cul/
 │   ├── split_dataset.py   # 按 5:2:3 划分 MAS 推理数据
 │   ├── label_data.py      # LLM-as-a-Judge 打分 + 构造 pairwise 对
 │   └── train_prm.py       # Qwen3-0.6B 全参微调，Bradley-Terry loss
+├── sft/
+│   └── train_sft.py       # SFT 监督微调（正确路径 + Judge 路径）
 └── grpo/
     └── train_grpo.py      # GRPO 训练，DeepSpeed ZeRO-3，2卡运行
+                           # --pretrain_path 可指定 SFT checkpoint（SFT+RL）
+                           # 或留空从 base 开始（RL-only）
 ```
 
-### 8.2 PRM 运行命令
+---
+
+### 8.5 PRM 运行命令
 
 ```bash
 # Step 1: 划分数据集（5:2:3）
@@ -602,7 +652,7 @@ python Cul/prm/split_dataset.py \
     --output_dir /autodl-fs/data/splits \
     --seed 42
 
-# Step 2a: 对 PRM 训练集打分并构造 pairwise 对（用 llama 打分）
+# Step 2a: 对 PRM 训练集打分并构造 pairwise 对
 python Cul/prm/label_data.py \
     --input_file  /autodl-fs/data/splits/prm_train.jsonl \
     --output_file /autodl-fs/data/prm/prm_train_pairs.jsonl \
@@ -626,35 +676,54 @@ python Cul/prm/train_prm.py \
     --lr         1e-5
 ```
 
-### 8.3 GRPO 运行命令
+### 8.6 SFT 运行命令
 
 ```bash
-# GRPO 训练（2卡 RTX 4090，ZeRO-3，约 28GB/卡）
-deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
-    --model_name     llama \
-    --grpo_data      /autodl-fs/data/splits/grpo_train.jsonl \
-    --val_data       /autodl-fs/data/splits/prm_val.jsonl \
-    --prm_path       /autodl-fs/models/prm_qwen3_0.6b/best \
-    --output_dir     /autodl-fs/models/grpo_llama_culture \
-    --n_samples      10 \
-    --max_rounds     30 \
-    --eval_every     5 \
-    --prompt_batch   4 \
-    --lr             5e-7
+# SFT 训练（Llama）
+python Cul/sft/train_sft.py \
+    --model_name  llama \
+    --data_file   /autodl-fs/data/splits/grpo_train.jsonl \
+    --val_file    /autodl-fs/data/splits/prm_val.jsonl \
+    --output_dir  /autodl-fs/models/sft_llama \
+    --epochs      3 \
+    --batch_size  8 \
+    --lr          1e-5
 
-# 使用 Qwen2.5-7B 作为 student 模型
-deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
-    --model_name     qwen \
-    --grpo_data      /autodl-fs/data/splits/grpo_train.jsonl \
-    --val_data       /autodl-fs/data/splits/prm_val.jsonl \
-    --prm_path       /autodl-fs/models/prm_qwen3_0.6b/best \
-    --output_dir     /autodl-fs/models/grpo_qwen_culture \
-    --n_samples      10 \
-    --max_rounds     30 \
-    --eval_every     5
+# SFT 训练（Qwen）
+python Cul/sft/train_sft.py \
+    --model_name  qwen \
+    --data_file   /autodl-fs/data/splits/grpo_train.jsonl \
+    --val_file    /autodl-fs/data/splits/prm_val.jsonl \
+    --output_dir  /autodl-fs/models/sft_qwen \
+    --epochs      3 \
+    --batch_size  8 \
+    --lr          1e-5
 ```
 
-`--model_name` 支持 `llama`（Llama-3.1-8B-Instruct）或 `qwen`（Qwen2.5-7B-Instruct）或完整路径。
+### 8.7 GRPO 运行命令
+
+```bash
+# RL-only（从 base 直接 GRPO）
+deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
+    --model_name  llama \
+    --grpo_data   /autodl-fs/data/splits/grpo_train.jsonl \
+    --val_data    /autodl-fs/data/splits/prm_val.jsonl \
+    --prm_path    /autodl-fs/models/prm_qwen3_0.6b/best \
+    --output_dir  /autodl-fs/models/grpo_llama_rlo \
+    --n_samples   10 --max_rounds 30 --eval_every 5 --lr 5e-7
+
+# SFT + RL（从 SFT checkpoint 继续 GRPO）
+deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
+    --model_name     llama \
+    --pretrain_path  /autodl-fs/models/sft_llama/best \
+    --grpo_data      /autodl-fs/data/splits/grpo_train.jsonl \
+    --val_data       /autodl-fs/data/splits/prm_val.jsonl \
+    --prm_path       /autodl-fs/models/prm_qwen3_0.6b/best \
+    --output_dir     /autodl-fs/models/grpo_llama_sft \
+    --n_samples      10 --max_rounds 30 --eval_every 5 --lr 5e-7
+```
+
+`--pretrain_path` 缺省时从 base model 开始（RL-only），指定时从该 checkpoint 开始（SFT+RL）。`--model_name` 支持 `llama` / `qwen` / 完整路径。
 
 ---
 
@@ -679,15 +748,24 @@ Culture Sensitivity Score = 不同文化下答案分布的 KL 散度均值
 
 ### 9.4 消融实验
 
+**核心蒸馏方案对比（第一组）：**
+
+| 实验组 | 训练方式 | 说明 |
+|--------|---------|------|
+| Base | 无训练 | 基础模型直接推理 |
+| SFT-only | SFT | MAS 正确路径 + Judge 路径监督微调 |
+| RL-only | GRPO from base | 从 base 直接强化学习，不经 SFT |
+| SFT + RL | SFT → GRPO | SFT 初始化后再 GRPO，预期最强 |
+| MAS Oracle | 无训练 | 多智能体系统直接推理的上界 |
+
+**消融设计对比（第二组，验证各模块贡献）：**
+
 | 实验组 | 说明 |
 |--------|------|
-| Base | 基础模型，无文化 conditioning |
-| + Culture Prompt | 加 culture token，无训练 |
-| + SFT only（agent paths） | 只用 agent 正确路径做 SFT，不含 Judge 轨迹 |
-| + SFT only（Judge path） | 只用 Judge 轨迹做 SFT，验证创新点2的独立价值 |
-| + GRPO (R_ans only) | 只用答案正确性做 reward |
-| + GRPO (R_ans + R_cultural) | 加入文化一致性过程奖励，验证 R_cultural 增量价值 |
-| + GRPO (full, w/ Judge reward) | 完整方案，含 Judge 路径额外权重 γ |
-| Homogeneous MAS | 同质 agent（去掉文化 system prompt）蒸馏，验证异质设计的价值 |
-| MAS Oracle | 多智能体系统直接推理的上界 |
+| + Culture Prompt | 加 culture token，无训练，验证 prompt 效果 |
+| + SFT（agent only） | 只用 agent 正确路径，不含 Judge 轨迹 |
+| + SFT（Judge only） | 只用 Judge 轨迹，验证创新点2独立价值 |
+| + GRPO (R_ans only) | 去掉 R_cultural，验证 PRM 的增量价值 |
+| + GRPO (R_ans + R_cultural) | 完整 reward，验证 R_cultural 的增量价值 |
+| Homogeneous MAS | 同质 agent（去掉文化 system prompt），验证异质设计的价值 |
 

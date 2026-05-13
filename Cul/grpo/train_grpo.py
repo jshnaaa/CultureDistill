@@ -298,11 +298,15 @@ def train(args):
     is_main = local_rank == 0
 
     model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
+    # SFT+RL: load from SFT checkpoint; RL-only: load from base model
+    load_path = args.pretrain_path if args.pretrain_path else model_path
     if is_main:
-        print(f"Policy model: {model_path}")
+        print(f"Base model:   {model_path}")
+        print(f"Load weights: {load_path} "
+              f"({'SFT checkpoint' if args.pretrain_path else 'base model'})")
         print(f"PRM path:     {args.prm_path}")
 
-    # ---- Tokenizer ----
+    # ---- Tokenizer (always from base model for consistency) ----
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -310,7 +314,7 @@ def train(args):
 
     # ---- Policy (to be trained) ----
     policy = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+        load_path, torch_dtype=torch.bfloat16, trust_remote_code=True
     )
 
     # ---- Reference model (frozen, CPU-offloaded) ----
@@ -497,6 +501,9 @@ def main():
     parser.add_argument("--train_batch_size", type=int,   default=8)
     parser.add_argument("--micro_batch",      type=int,   default=2)
     parser.add_argument("--lr",               type=float, default=5e-7)
+    parser.add_argument("--pretrain_path",    type=str,   default=None,
+                        help="SFT checkpoint dir for SFT+RL. "
+                             "Leave empty for RL-only (starts from base model).")
     # DeepSpeed launcher injects --local_rank automatically
     parser.add_argument("--local_rank",       type=int,   default=0)
     args = parser.parse_args()
