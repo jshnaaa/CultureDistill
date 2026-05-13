@@ -556,32 +556,74 @@ Step 1: 数据准备
 
 Step 2: MAS 数据生成（异质 RECONCILE）
   5个文化 agent 独立生成推理路径（0轮辩论）+ Judge 裁决
-  → answer correctness 自动标注
   → 输出 jsonl（Solution 1-5: agent，Solution 6: Judge）
 
-Step 3: LLM Judge 打分（R_cultural 标签）
-  从 PRM 训练集抽取 300-500 条路径
-  → Qwen2.5-72B 打文化一致性分（0.1-0.9）
-  → 构造 pairwise 对
+Step 3: 数据集划分
+  split_dataset.py → prm_train.jsonl / prm_val.jsonl / grpo_train.jsonl
 
-Step 4: PRM 训练
-  输入：弱标签（来源A）+ 强标签（来源B），约 1800-2400 对
-  模型：Qwen3-0.6B + reward head
-  损失：Bradley-Terry ranking loss
-  时间：约 15-30 分钟
+Step 4: LLM-as-a-Judge 打分 + 构造 pairwise 对
+  label_data.py（Llama-3.1-8B 或 Qwen2.5-7B 打分）
+  → prm_train_pairs.jsonl / prm_val_pairs.jsonl
 
-Step 5: SFT 预训练（Judge 轨迹优先）
+Step 5: PRM 训练
+  train_prm.py（Qwen3-0.6B 全参微调，Bradley-Terry loss）
+  → /autodl-fs/models/prm_qwen3_0.6b/best/
+
+Step 6: SFT 预训练（Judge 轨迹优先）
   训练数据：Judge 轨迹（Solution 6）作为核心 SFT 数据
-  目标：让模型先学会跨文化综合推理的基本格式和能力上界
 
-Step 6: GRPO 训练
+Step 7: GRPO 训练
   Policy：Llama-3.1-8B 或 Qwen2.5-7B
-  Reward：R_ans（α=1.0）+ R_cultural（β=0.3）+ Judge 路径额外权重（γ）
+  Reward：R_total = 0.7 * R_ans + 0.3 * R_cultural（PRM 冻结）
   时间：约 5-15 小时
 
-Step 7: 评估
+Step 8: 评估
   base 模型 vs SFT 模型 vs GRPO 蒸馏模型 vs MAS Oracle
 ```
+
+### 8.1 PRM 代码结构
+
+```
+Cul/prm/
+├── split_dataset.py   # 按 5:2:3 划分 MAS 推理数据
+├── label_data.py      # LLM-as-a-Judge 打分 + 构造 pairwise 对
+└── train_prm.py       # Qwen3-0.6B 全参微调，Bradley-Terry loss
+```
+
+### 8.2 PRM 运行命令
+
+```bash
+# Step 1: 划分数据集
+python Cul/prm/split_dataset.py \
+    --input_file /autodl-fs/data/CulturalBench_mas_inference_20260510_192023.jsonl \
+    --output_dir /autodl-fs/data/splits \
+    --seed 42
+
+# Step 2a: 对 PRM 训练集打分并构造 pairwise 对（用 llama 打分）
+python Cul/prm/label_data.py \
+    --input_file  /autodl-fs/data/splits/prm_train.jsonl \
+    --output_file /autodl-fs/data/prm/prm_train_pairs.jsonl \
+    --model_name  llama \
+    --batch_size  32
+
+# Step 2b: 对 PRM 验证集打分并构造 pairwise 对
+python Cul/prm/label_data.py \
+    --input_file  /autodl-fs/data/splits/prm_val.jsonl \
+    --output_file /autodl-fs/data/prm/prm_val_pairs.jsonl \
+    --model_name  llama \
+    --batch_size  32
+
+# Step 3: 训练 PRM
+python Cul/prm/train_prm.py \
+    --train_file /autodl-fs/data/prm/prm_train_pairs.jsonl \
+    --val_file   /autodl-fs/data/prm/prm_val_pairs.jsonl \
+    --output_dir /autodl-fs/models/prm_qwen3_0.6b \
+    --epochs     5 \
+    --batch_size 16 \
+    --lr         1e-5
+```
+
+`--model_name` 支持 `llama`（Llama-3.1-8B-Instruct）或 `qwen`（Qwen2.5-7B-Instruct）或完整路径。
 
 ---
 
