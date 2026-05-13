@@ -135,10 +135,10 @@ Judge：  1227 × 1 = 1227 次
 ## 4. Reward 信号设计
 
 ```
-R_total = α * R_ans + β * R_cultural
+R_total = α * R_ans + (1-α) * R_cultural
 ```
 
-初始超参数：`α=1.0, β=0.3`。R_ans 作为主信号锚点，R_cultural 作为辅助信号。
+只有一个超参数 α，初始值设为 **0.7**：R_ans 占主导（70%），R_cultural 作辅助（30%）。α=0.7 的理由：R_ans 是规则可验证的可靠信号；R_cultural 来自 0.6B 小模型，存在误差，不宜占比过高。
 
 ### 4.1 R_ans：答案正确性（可验证奖励）
 
@@ -151,13 +151,15 @@ R_ans = 0  otherwise
 
 ### 4.2 R_cultural：文化一致性（过程奖励，PRM 输出）
 
-由 PRM 对推理路径打分，判断路径是否与目标文化的价值观一致，输出经 clip 后的标量：
+由 PRM 对推理路径打分，输出经 clip 后的连续标量：
 
 ```
 R_cultural = clip(prm_score, 0.1, 0.9)
 ```
 
-**与 R_ans 的分工**：R_ans 保证训练方向正确（答案对），R_cultural 细化推理质量（推理符合文化逻辑）。两者互补：仅用 R_ans 无法区分"答对但推理错误"和"答对且推理正确"的路径。
+clip 避免极端分数主导梯度。R_cultural 的来源是训练好的 Qwen3-0.6B PRM，其训练数据标签来自 LLM-as-a-Judge 方法（见第5节）。
+
+**与 R_ans 的分工**：R_ans 保证训练方向正确（答案对），R_cultural 细化推理质量（推理符合文化逻辑）。仅用 R_ans 无法区分"答对但推理文化错误"和"答对且推理文化正确"的路径。
 
 ---
 
@@ -198,66 +200,71 @@ Step 4: 验证与质量评估
 
 **PRM 验证集复用说明**：GRPO 训练本身没有验证集（on-policy 训练），PRM 验证集（245条）未参与任何训练，可作为分布内测试集，在 GRPO 每 5 轮后推理评估 accuracy，用于早停和最优 checkpoint 选取。
 
-#### 5.2.2 来源 A：Answer Correctness 弱标签（全量）
+#### 5.2.2 标签来源：LLM-as-a-Judge 打分
 
-对 PRM 训练集的每条样本，从 Solution 1-5（agent 路径）中构造 pairwise 对：
+PRM 的训练标签完全来自 LLM-as-a-Judge 方法，使用与文化 agent 同规模的模型（Llama-3.1-8B 或 Qwen2.5-7B）对 MAS 推理数据中每条推理路径的文化一致性进行打分。
 
-```
-同一 (question, country) 下：
-  chosen   = answer == gold 的推理路径
-  rejected = answer != gold 的推理路径
-```
-
-跳过条件：所有 agent 路径全部答对或全部答错（无对比信号）。
-
-根据全量数据统计：
-- 有效样本（有 PRM 对）：786/1227 = 64.1%
-- 平均每样本 3.10 对
-- 预计总 pairwise 对：约 1218 对（614条 × 64.1% × 3.10）
-
-pairwise 数据格式：
-```json
-{
-  "question": "### Question: ...",
-  "country": "Vietnam",
-  "chosen": "Reasoning: In Vietnamese culture...\nAnswer: 3",
-  "rejected": "Reasoning: In Vietnamese culture...\nAnswer: 1"
-}
-```
-
-#### 5.2.3 来源 B：文化一致性细粒度标签（抽样强标签）
-
-从来源 A 的 chosen 路径中随机抽取约 300-500 条，使用 LLM Judge（Qwen2.5-72B）对推理路径的文化一致性打分（0.1-0.9 连续值）：
+**打分流程：**
 
 ```
+对 PRM 训练集（614条）中每条样本的每条推理路径（Solution 1-5）：
+  输入：(question, country, reasoning_path)
+  输出：0.1-0.9 之间的连续分数
+
 Prompt：
 "You are evaluating whether the following reasoning reflects
 the cultural values and norms of [COUNTRY].
 Question: [question]
 Reasoning: [reasoning path]
-Rate the cultural consistency as a decimal between 0.1 and 0.9.
+Rate the cultural consistency as a decimal between 0.1 and 0.9,
+where 0.9 = perfectly reflects [COUNTRY]'s cultural values,
+0.1 = does not reflect [COUNTRY]'s cultural values at all.
 Respond with only a decimal number."
 ```
 
-构造规则：同一题内 score 差值 > 0.2 的两条路径构成 pairwise 对。额外贡献约 300-400 个高质量对。
+**注意事项**：使用与 agent 同规模的模型打分存在**自我评分偏差**（self-evaluation bias）——模型倾向于给与自己风格相似的路径打高分，可能导致 PRM 学到的是"模型偏好的推理风格"而非"真正符合文化的推理质量"。此局限在资源受限条件下可接受，后续有条件时建议改用更大规模模型（如 72B）打分。
 
-两种强标签方式对比：
+#### 5.2.3 Pairwise 对的构造
 
-| 方式 | 优点 | 缺点 | 适用场景 |
-|------|------|------|---------|
-| 人类评审员（5位） | 文化感知细腻，无西方偏见 | 成本高，IAA < 0.7，难覆盖全部文化 | 抽样验证（50-100条） |
-| LLM Judge（Qwen2.5-72B） | 低成本，速度快，一致性高 | 西方文化偏见，评分分布集中 | 主要强标签来源（300-500条） |
+基于 LLM Judge 打出的分数，在同一 (question, country) 内按分数差构造 pairwise 对：
 
-推荐 LLM Judge 覆盖全量，人类评审员抽样验证，计算两者 Spearman 相关系数（> 0.6 则 LLM Judge 可信）。
+**构造规则：**
+- 同一题内，score 差值 > 0.2 的两条路径构成一对
+- 高分路径为 chosen，低分路径为 rejected
+- 若所有路径分数相近（差值均 < 0.2），跳过该样本
+
+**数据格式示例：**
+
+```json
+{
+  "question": "### Question: Give me the answer from 1 to 4: What do Vietnamese grandparents usually gift their grandchildren for the traditional Lunar New Year celebration? 1. monetary gifts 2. Educational Materials 3. Cards with best wishes 4. Traditional Foods and Snacks. This question is for a country or language that is Vietnam. You can only choose one option.",
+  "country": "Vietnam",
+  "chosen": {
+    "reasoning": "In Vietnamese culture, the Lunar New Year (Tết Nguyên Đán) is a time for family reunion and gift-giving. A central tradition is the giving of 'lì xì' (red envelopes with money) from elders to children and grandchildren, symbolizing good luck, prosperity, and blessings for the new year. This monetary gift tradition is deeply rooted in Vietnamese Confucian values of respect for elders and the importance of family harmony.",
+    "answer": "1",
+    "score": 0.85
+  },
+  "rejected": {
+    "reasoning": "Vietnamese culture values family and tradition. During Lunar New Year, grandparents show love to grandchildren. Traditional foods and snacks are important in Vietnamese celebrations as they represent unity and good wishes.",
+    "answer": "4",
+    "score": 0.45
+  }
+}
+```
+
+chosen 和 rejected 的区分依据：chosen 包含具体的文化事实（lì xì、Confucian values），推理过程与越南文化高度匹配；rejected 的推理泛泛，缺乏文化特异性。
 
 #### 5.2.4 最终数据集规模
 
 ```
-弱标签 pairwise 对：约 1218 对（614条 PRM 训练集）
-强标签 pairwise 对：约 200-300 对（从 PRM 训练集抽样）
-─────────────────────────────
-PRM 训练集总计：约 1400-1500 对
-PRM 验证集：按同比例从 245条 PRM 验证集构造，约 490-500 对
+PRM 训练集（614条样本）：
+  每条样本 5 条路径，每条路径得到 LLM Judge 分数
+  同题内 score 差值 > 0.2 的两两组合构成 pairwise 对
+  预计有效 pairwise 对：约 800-1200 对
+
+PRM 验证集（245条样本）：
+  按同样方式构造
+  预计 pairwise 对：约 300-500 对
 ```
 
 ---
@@ -304,15 +311,25 @@ class CultureRewardModel(nn.Module):
 
 #### 5.3.3 参数冻结策略
 
-训练时有两种策略：
+训练时三种策略的显存对比（单卡 RTX 4090 48GB）：
 
-| 策略 | 做法 | 优点 | 缺点 |
-|------|------|------|------|
-| 全参数微调 | base model + reward head 均参与训练 | 表示能力强 | 显存大，容易过拟合（数据量小） |
-| 冻结 base，只训 reward head | 仅 reward head 参与训练 | 显存小，防过拟合 | 表示能力受限 |
-| LoRA 微调 | base model 用 LoRA，reward head 全参 | 平衡两者 | 实现略复杂 |
+| 策略 | 显存估算 | 可行性 | 说明 |
+|------|---------|--------|------|
+| 全参微调（base + reward head） | ~11 GB | 单卡可行 | 模型小（0.6B），全参也只需约 11GB |
+| 冻结 base，只训 reward head | ~6 GB | 单卡可行 | 最省显存，但表示能力受限 |
+| LoRA 微调（base LoRA + reward head 全参） | ~8 GB | 单卡可行 | 平衡两者 |
 
-**推荐**：先用"冻结 base + 只训 reward head"快速验证，若 Pairwise Accuracy < 65% 再改用 LoRA。
+```
+全参微调显存明细（Qwen3-0.6B，bf16）：
+  模型权重：0.6B × 2B = 1.2 GB
+  梯度：1.2 GB
+  AdamW 优化器状态：2 × 1.2 GB = 2.4 GB
+  Reward head（Linear）：< 0.01 GB
+  激活值（batch=32，seq=1024）：约 4-6 GB
+  合计：约 9-11 GB（单卡 48GB 完全够用，不需要双卡）
+```
+
+**推荐：优先全参微调**（数据量小约 1000 对，0.6B 模型不易过拟合，全参微调表示能力更强）。若 Pairwise Accuracy 仍 < 65%，再改用 LoRA（rank=16）。
 
 ---
 
@@ -355,22 +372,22 @@ score_rejected = model(rejected_input_ids, rejected_attention_mask)  # (N,)
 loss = bradley_terry_loss(score_chosen, score_rejected)
 ```
 
-#### 5.4.4 训练配置（单卡 RTX 4090 / 4卡 A100）
+#### 5.4.4 训练配置（单卡 RTX 4090 48GB）
 
 | 参数 | 值 | 说明 |
 |------|----|------|
 | base model | Qwen3-0.6B | |
-| 参数冻结 | 冻结 base，仅训 reward head | 防过拟合 |
+| 微调方式 | 全参微调 | 单卡约 11GB，48GB 完全够用 |
 | epochs | 3-5 | |
-| learning rate | 1e-4（reward head）/ 0（base frozen） | reward head 随机初始化，需较大 lr |
-| batch size | 32 pairs（4卡：每卡 8 对） | |
+| learning rate | 1e-5 | 全参微调用较小 lr |
+| batch size | 32 pairs | |
 | max sequence length | 1024 tokens | |
 | optimizer | AdamW（weight_decay=0.01） | |
 | warmup ratio | 0.05 | |
-| bf16 | True（A100）/ fp16（V100） | |
+| bf16 | True | |
 | gradient checkpointing | True | |
 
-预计训练时间：约 10-20 分钟（数据量小，收敛快）。
+预计训练时间：约 10-20 分钟（数据量约 1000 对，收敛快）。
 
 ---
 
@@ -389,18 +406,13 @@ Pairwise Accuracy =
 - 65%-70%：稳定区间，足够为 GRPO 提供辅助信号
 - train/val 差距 > 10%：过拟合，reward head 对新路径打分不准
 
-#### 5.5.2 文化敏感性验证
-
-同一 question，输入不同 country token，PRM 对各文化最高分路径内容应有实质差异。若不同文化的最高分路径内容高度相似，说明 PRM 没有学到文化区分能力。
-
-#### 5.5.3 精度不足时的调整
+#### 5.5.2 精度不足时的调整
 
 | 问题 | 调整方案 |
 |------|---------|
-| Pairwise Acc < 65% | 增加 LLM Judge 强标签比例；降低 lr 至 5e-6 |
-| 过拟合（train-val > 10%） | 改用 LoRA 微调替代全参；增加 weight decay |
+| Pairwise Acc < 65% | 降低 lr 至 5e-6；检查 LLM Judge 打分质量 |
+| 过拟合（train-val > 10%） | 改用 LoRA 微调（rank=16）；增加 weight decay |
 | 文化分布不均 | 按文化 weighted sampling，确保低频文化有足够样本 |
-| 不同文化分数无差异 | 检查 country token 是否正确注入输入序列 |
 
 ---
 
@@ -408,10 +420,11 @@ Pairwise Accuracy =
 
 | 风险 | 缓解策略 |
 |------|---------|
-| PRM 误差累积：R_cultural 误差被梯度放大 | α > β（1.0 vs 0.3）；clip(0.1, 0.9)；KL 惩罚 |
-| 数据量小导致过拟合 | 冻结 base；每 5 轮评估；train-val gap > 15% 早停 |
-| Reward scale 不一致（R_ans 离散，R_cultural 连续） | α=1.0, β=0.3；reward normalization |
-| MAS 路径多样性不足 | 0轮辩论独立生成，保证 agent 答案多样性 |
+| PRM 误差累积：R_cultural 误差被梯度放大 | α=0.7 使 R_ans 主导；clip(0.1, 0.9)；KL 惩罚 |
+| 自我评分偏差（同规模模型打标签） | 记录局限性，后续条件允许时升级打分模型 |
+| 数据量小导致过拟合 | 全参微调（0.6B 数据量小时不易过拟合）；每训练 1 epoch 评估一次 |
+| Reward scale 不一致（R_ans 离散，R_cultural 连续） | α=0.7，(1-α)=0.3；clip(0.1, 0.9) 压缩连续值范围 |
+| MAS 路径多样性不足，无有效 pairwise 对 | 0轮辩论独立生成，保证 agent 答案多样性 |
 
 ---
 
@@ -429,35 +442,58 @@ Pairwise Accuracy =
 输出格式：[Reasoning Path] + [Answer]
 ```
 
-### 6.2 在线采样（On-policy）
+### 6.2 训练数据
+
+GRPO 使用**多智能体推理数据原始数据集**（`CulturalBench_mas_inference.jsonl`）中的 GRPO 训练集部分（368条），而非 pairwise 对。原因：GRPO 是 on-policy 训练，每轮用当前 policy 在线采样新路径，prompt 来自原始 (question, country) 对，PRM 对新路径打分得到 R_cultural。pairwise 对仅用于 PRM 训练，不参与 GRPO。
+
+验证：与 PRM 验证集相同（245条），每 5 轮在验证集上推理评估 accuracy，用于早停和最优 checkpoint 选取。
+
+### 6.3 在线采样（On-policy）
 
 ```
 对每个 prompt (x, c)：
   → 当前 policy 生成 n=10 条路径
-  → 计算 R_total = R_ans + 0.3 * R_cultural
+  → 计算 R_total = 0.7 * R_ans + 0.3 * R_cultural（PRM 打分）
   → RLOO baseline 计算 advantage
   → 更新 policy 参数
   → 下一轮用更新后模型重新采样
 ```
 
-### 6.3 训练配置（4卡 A100）
+### 6.4 训练配置与显存分析（2卡 RTX 4090，每卡 48GB）
 
-显存分析：policy（8B，ZeRO-2）约 35GB × 4卡分片；reference（8B，冻结）约 16GB 需 cpu_offload；PRM（0.6B，冻结）约 1.2GB。
+**显存估算：**
 
-| 参数 | 值 |
-|------|----|
-| `n_samples_per_prompt` | 10 |
-| `advantage_estimator` | rloo |
-| `reward_mode` | PRMVR |
-| `verifiable_reward_coef` | 1.0 |
-| `init_kl_coef` | 0.001 |
-| `temperature` | 0.7 |
-| `micro_rollout_batch_size` | 2 |
-| `micro_train_batch_size` | 2 |
-| `max sequence length` | 512 tokens |
-| `actor_learning_rate` | 5e-7 |
-| `bf16` | True |
-| `zero_stage` | 2 |
+```
+Policy model（Llama-3.1-8B，bf16，ZeRO-3）：
+  模型权重分片（ZeRO-3）：16GB ÷ 2卡 = 8GB/卡
+  梯度 + 优化器分片（ZeRO-3）：约 32GB ÷ 2卡 = 16GB/卡
+  激活值（micro_batch=2，seq=512）：约 4GB/卡
+  合计：约 28GB/卡 ✓（48GB 安全）
+
+Reference model（8B，冻结，cpu_offload）：
+  卸载到 CPU，GPU 占用 ~0
+
+PRM（Qwen3-0.6B，冻结）：约 1.2GB ÷ 2卡 = 0.6GB/卡
+
+总计：约 28-30GB/卡，2卡 48GB 够用
+```
+
+**注意**：必须使用 ZeRO-3（而非 ZeRO-2），ZeRO-2 下单卡约 44GB，非常紧张；ZeRO-3 全分片后单卡降至约 28GB，安全。
+
+| 参数 | 值 | 说明 |
+|------|----|------|
+| `n_samples_per_prompt` | 10 | group size |
+| `advantage_estimator` | rloo | RLOO baseline |
+| `reward_mode` | PRMVR | PRM + Verifiable Reward |
+| `verifiable_reward_coef` | 0.7 | α，R_ans 权重 |
+| `init_kl_coef` | 0.001 | KL 惩罚 |
+| `temperature` | 0.7 | 采样温度 |
+| `micro_rollout_batch_size` | 2 | 显存限制 |
+| `micro_train_batch_size` | 2 | 显存限制 |
+| `max sequence length` | 512 tokens | |
+| `actor_learning_rate` | 5e-7 | |
+| `bf16` | True | |
+| `zero_stage` | 3 | 必须用 ZeRO-3 |
 
 ---
 
