@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModel, get_cosine_schedule_with_warmup
+from transformers import AutoTokenizer, AutoModelForCausalLM, get_cosine_schedule_with_warmup
 
 
 PRM_BASE = "/root/autodl-tmp/base/Qwen3-0.6B-Base"
@@ -37,10 +37,15 @@ MAX_SEQ_LEN = 1024
 class CultureRewardModel(nn.Module):
     def __init__(self, model_path: str):
         super().__init__()
-        self.model = AutoModel.from_pretrained(
+        # Use AutoModelForCausalLM instead of AutoModel to bypass the
+        # CONFIG_MAPPING check that fails for new architectures (e.g. qwen3)
+        # on older transformers versions. trust_remote_code loads the model
+        # class from the checkpoint's modeling_*.py directly.
+        self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
+            output_hidden_states=True,
         )
         hidden_size = self.model.config.hidden_size
         self.reward_head = nn.Linear(hidden_size, 1)
@@ -51,9 +56,11 @@ class CultureRewardModel(nn.Module):
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            output_hidden_states=True,
         )
-        # Last token hidden state as sequence representation
-        last_hidden = outputs.last_hidden_state[:, -1, :]
+        # AutoModelForCausalLM returns hidden_states tuple; take last layer
+        # last_hidden_state is not available on CausalLM outputs
+        last_hidden = outputs.hidden_states[-1][:, -1, :]   # (B, hidden)
         score = self.reward_head(last_hidden.float()).squeeze(-1)
         return torch.sigmoid(score)     # (batch,) ∈ (0, 1)
 
@@ -126,15 +133,24 @@ def evaluate(model, loader, device) -> float:
 # ---------------------------------------------------------------------------
 
 def train(args):
+    # Multi-GPU: use all available GPUs via DataParallel (simple 2-card setup)
+    n_gpus = torch.cuda.device_count()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    print(f"Device: {device} | GPUs available: {n_gpus}")
 
     tokenizer = AutoTokenizer.from_pretrained(PRM_BASE, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = CultureRewardModel(PRM_BASE).to(device)
-    print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
+
+    # Wrap with DataParallel when multiple GPUs are available
+    if n_gpus > 1:
+        model = torch.nn.DataParallel(model)
+        print(f"Using DataParallel on {n_gpus} GPUs")
+
+    base_model = model.module if n_gpus > 1 else model
+    print(f"Model params: {sum(p.numel() for p in base_model.parameters()) / 1e6:.1f}M")
 
     train_ds = PairwiseDataset(args.train_file, tokenizer)
     val_ds   = PairwiseDataset(args.val_file,   tokenizer)
@@ -186,9 +202,10 @@ def train(args):
             best_acc = val_acc
             ckpt_dir = Path(args.output_dir) / "best"
             ckpt_dir.mkdir(exist_ok=True)
-            model.model.save_pretrained(ckpt_dir)
+            # Access underlying model through .module when using DataParallel
+            base_model.model.save_pretrained(ckpt_dir)
             tokenizer.save_pretrained(ckpt_dir)
-            torch.save(model.reward_head.state_dict(),
+            torch.save(base_model.reward_head.state_dict(),
                        ckpt_dir / "reward_head.pt")
             print(f"  ✓ Saved best checkpoint (val_acc={best_acc:.4f})")
 
