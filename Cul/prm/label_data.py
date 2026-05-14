@@ -71,11 +71,23 @@ def extract_reasoning(text: str) -> str:
 
 
 def parse_score(text: str) -> float | None:
-    """Parse a float in [0.1, 0.9] from model output."""
-    m = re.search(r"\b(0\.\d+|1\.0|0|1)\b", text.strip())
+    """
+    Parse a score from model output. Handles:
+      - Pure decimal: "0.8", "0.75"
+      - With label:   "Score: 0.8", "I rate this 0.7"
+      - Integer 1-9:  "8" → mapped to 0.8 (assuming 1-10 scale)
+    """
+    text = text.strip()
+    # First try: explicit decimal 0.x or 1.0
+    m = re.search(r"\b(0\.\d+|1\.0)\b", text)
     if m:
         v = float(m.group(1))
-        return max(0.1, min(0.9, v))
+        return round(max(0.1, min(0.9, v)), 2)
+    # Second try: integer 1-9 (model may output "8" for an 0-10 scale)
+    m = re.search(r"\b([1-9])\b", text)
+    if m:
+        v = int(m.group(1)) / 10.0
+        return round(max(0.1, min(0.9, v)), 2)
     return None
 
 
@@ -129,10 +141,12 @@ def main():
         trust_remote_code=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path)
+    # Stop tokens: cover both Llama-3 and Qwen-2.5 formats.
+    # Do NOT include "\n" — Qwen may emit a leading newline before the number.
     sampling_params = SamplingParams(
         temperature=0.0,    # greedy for consistent scoring
-        max_tokens=16,
-        stop=["<|eot_id|>", "<|end_of_text|>", "</s>", "\n"],
+        max_tokens=32,      # allow enough tokens for the model to output a number
+        stop=["<|eot_id|>", "<|end_of_text|>", "</s>", "<|im_end|>"],
     )
 
     # ------------------------------------------------------------------
@@ -167,14 +181,25 @@ def main():
     # Phase 2: batch scoring
     # ------------------------------------------------------------------
     scores_flat = []
+    parse_failures = 0
     for start in range(0, len(all_prompts), args.batch_size):
         batch = all_prompts[start:start + args.batch_size]
         outputs = llm.generate(batch, sampling_params)
-        for out in outputs:
+        for i, out in enumerate(outputs):
             raw = out.outputs[0].text.strip()
-            scores_flat.append(parse_score(raw))
+            score = parse_score(raw)
+            scores_flat.append(score)
+            # Debug: print first 5 raw outputs so user can verify format
+            global_idx = start + i
+            if global_idx < 5:
+                print(f"  [debug] path {global_idx}: raw_output={repr(raw)} → score={score}")
+            if score is None:
+                parse_failures += 1
         if (start // args.batch_size) % 10 == 0:
             print(f"  Scored {min(start + args.batch_size, len(all_prompts))}/{len(all_prompts)}")
+
+    print(f"  Parse failures: {parse_failures}/{len(all_prompts)} "
+          f"({parse_failures/max(len(all_prompts),1)*100:.1f}%)")
 
     # ------------------------------------------------------------------
     # Phase 3: group by sample, build pairwise pairs
