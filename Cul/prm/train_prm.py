@@ -16,6 +16,30 @@ Usage:
         --lr 1e-5
 """
 
+# ---------------------------------------------------------------------------
+# Qwen3 requires transformers >= 4.51.0. Auto-upgrade if the installed
+# version is too old, so the script works out-of-the-box on fresh servers.
+# ---------------------------------------------------------------------------
+import importlib.metadata as _meta
+import os, subprocess, sys
+
+_MIN_TRANSFORMERS = "4.51.0"
+
+def _version_tuple(v: str):
+    return tuple(int(x) for x in v.split(".")[:3])
+
+_cur_ver = _meta.version("transformers")
+if _version_tuple(_cur_ver) < _version_tuple(_MIN_TRANSFORMERS):
+    print(f"[auto-fix] transformers {_cur_ver} < {_MIN_TRANSFORMERS}, "
+          f"upgrading to support Qwen3 architecture ...")
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", "--quiet",
+        f"transformers>={_MIN_TRANSFORMERS}",
+    ])
+    print("[auto-fix] transformers upgraded — restarting script ...")
+    # Re-exec this script so the new transformers is fully loaded
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
 import json
 import argparse
 from pathlib import Path
