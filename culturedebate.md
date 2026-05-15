@@ -676,54 +676,100 @@ python Cul/prm/train_prm.py \
     --lr         1e-5
 ```
 
-### 8.6 SFT 运行命令
+### 8.6 Student 模型训练：三种模式运行命令
+
+以下命令基于 NormAD 数据集（2633 条，Qwen2.5-7B-Instruct），数据已划分完成：
+
+```
+数据路径：
+  grpo_train : /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl  (791 条)
+  prm_val    : /autodl-fs/data/qwen/normad_splits/prm_val.jsonl     (526 条)
+  PRM ckpt   : /autodl-tmp/models/normad_prm_qwen3_0.6b_v2/best    (73.2% pairwise acc)
+```
+
+#### 模式 1：SFT-Only
+
+从 base 模型出发，在 MAS 推理正确路径上做监督微调。训练数据来自 `grpo_train.jsonl` 中 answer == gold 的路径（含 Agent 和 Judge 路径）。
 
 ```bash
-# SFT 训练（Llama）
-python Cul/sft/train_sft.py \
-    --model_name  llama \
-    --data_file   /autodl-fs/data/splits/grpo_train.jsonl \
-    --val_file    /autodl-fs/data/splits/prm_val.jsonl \
-    --output_dir  /autodl-fs/models/sft_llama \
-    --epochs      3 \
-    --batch_size  8 \
-    --lr          1e-5
-
-# SFT 训练（Qwen）
 python Cul/sft/train_sft.py \
     --model_name  qwen \
-    --data_file   /autodl-fs/data/splits/grpo_train.jsonl \
-    --val_file    /autodl-fs/data/splits/prm_val.jsonl \
-    --output_dir  /autodl-fs/models/sft_qwen \
+    --data_file   /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
+    --val_file    /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
+    --output_dir  /autodl-tmp/models/normad_sft_qwen_7b \
     --epochs      3 \
-    --batch_size  8 \
-    --lr          1e-5
+    --batch_size  4 \
+    --lr          2e-5
 ```
 
-### 8.7 GRPO 运行命令
+输出：`/autodl-tmp/models/normad_sft_qwen_7b/best`
+
+#### 模式 2：RL-Only（GRPO）
+
+从 base 模型直接做 GRPO 强化学习，不经过 SFT。使用 `R_total = 0.7*R_ans + 0.3*R_cultural`，PRM v2 对在线采样路径打文化一致性分。
 
 ```bash
-# RL-only（从 base 直接 GRPO）
 deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
-    --model_name  llama \
-    --grpo_data   /autodl-fs/data/splits/grpo_train.jsonl \
-    --val_data    /autodl-fs/data/splits/prm_val.jsonl \
-    --prm_path    /autodl-fs/models/prm_qwen3_0.6b/best \
-    --output_dir  /autodl-fs/models/grpo_llama_rlo \
-    --n_samples   10 --max_rounds 30 --eval_every 5 --lr 5e-7
-
-# SFT + RL（从 SFT checkpoint 继续 GRPO）
-deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
-    --model_name     llama \
-    --pretrain_path  /autodl-fs/models/sft_llama/best \
-    --grpo_data      /autodl-fs/data/splits/grpo_train.jsonl \
-    --val_data       /autodl-fs/data/splits/prm_val.jsonl \
-    --prm_path       /autodl-fs/models/prm_qwen3_0.6b/best \
-    --output_dir     /autodl-fs/models/grpo_llama_sft \
-    --n_samples      10 --max_rounds 30 --eval_every 5 --lr 5e-7
+    --model_name     qwen \
+    --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
+    --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
+    --prm_path       /autodl-tmp/models/normad_prm_qwen3_0.6b_v2/best \
+    --output_dir     /autodl-tmp/models/normad_grpo_qwen_7b \
+    --n_samples      10 \
+    --max_rounds     30 \
+    --eval_every     5 \
+    --lr             5e-6
 ```
 
-`--pretrain_path` 缺省时从 base model 开始（RL-only），指定时从该 checkpoint 开始（SFT+RL）。`--model_name` 支持 `llama` / `qwen` / 完整路径。
+输出：`/autodl-tmp/models/normad_grpo_qwen_7b/best`
+
+#### 模式 3：SFT + RL（先 SFT 再 GRPO）
+
+两步流程。Step 1 先做 SFT 让模型学会输出格式和正确推理风格，Step 2 在 SFT checkpoint 基础上用 GRPO 进一步优化推理质量。
+
+```bash
+# Step 1: SFT（同模式 1）
+python Cul/sft/train_sft.py \
+    --model_name  qwen \
+    --data_file   /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
+    --val_file    /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
+    --output_dir  /autodl-tmp/models/normad_sft_qwen_7b \
+    --epochs      3 \
+    --batch_size  4 \
+    --lr          2e-5
+
+# Step 2: GRPO（从 SFT best checkpoint 出发，学习率调低）
+deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
+    --model_name     qwen \
+    --pretrain_path  /autodl-tmp/models/normad_sft_qwen_7b/best \
+    --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
+    --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
+    --prm_path       /autodl-tmp/models/normad_prm_qwen3_0.6b_v2/best \
+    --output_dir     /autodl-tmp/models/normad_sft_grpo_qwen_7b \
+    --n_samples      10 \
+    --max_rounds     20 \
+    --eval_every     5 \
+    --lr             1e-6
+```
+
+输出：`/autodl-tmp/models/normad_sft_grpo_qwen_7b/best`
+
+#### 三种模式关键超参数对比
+
+| 参数 | SFT-Only | RL-Only | SFT+RL (RL阶段) |
+|------|----------|---------|-----------------|
+| 起始模型 | Qwen2.5-7B-Instruct | Qwen2.5-7B-Instruct | SFT best ckpt |
+| 学习率 | 2e-5 | 5e-6 | 1e-6 |
+| 训练轮次 | 3 epochs | 30 rounds | 20 rounds |
+| KL penalty | — | 0.05 | 0.05 |
+| PRM | — | v2 (73.2%) | v2 (73.2%) |
+| 早停条件 | val_acc 2 epoch 不提升 | val_acc 15 rounds 不提升 | val_acc 15 rounds 不提升 |
+
+**说明：**
+- `--pretrain_path` 缺省时从 base model 开始（RL-only），指定时从该 checkpoint 开始（SFT+RL）
+- `--model_name` 支持 `llama` / `qwen` / 完整路径
+- SFT+RL 的 RL 阶段学习率调低至 1e-6，训练轮次减至 20，避免在已较好的 SFT 基础上过度优化
+- 若 2 卡 49GB 出现 OOM，将 `--batch_size` 降为 2 或 `--micro_batch` 降为 1，同时增大 gradient accumulation
 
 ---
 

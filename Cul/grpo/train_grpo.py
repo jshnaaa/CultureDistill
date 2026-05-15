@@ -3,26 +3,34 @@ GRPO fine-tuning for cultural alignment distillation.
 
 R_total = 0.7 * R_ans + 0.3 * R_cultural
   R_ans     : verifiable reward (answer == gold → 1, else 0)
-  R_cultural: PRM score (Qwen3-0.6B + reward head), clipped to [0.1, 0.9]
+  R_cultural: PRM score (Qwen3-0.6B + LoRA + mean-pool reward head), clipped to [0.1, 0.9]
 
-Training data: grpo_train.jsonl  (368 prompts, online sampling)
-Validation:    prm_val.jsonl     (245 samples, every 5 rounds)
+Training data: grpo_train.jsonl  (prompts, online sampling)
+Validation:    prm_val.jsonl     (samples, every eval_every rounds)
 
 Usage:
-    # Single-node, 2-GPU (ZeRO-3 required)
+    # RL-only (from base model)
     deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
-        --model_name     llama \
-        --grpo_data      /autodl-fs/data/splits/grpo_train.jsonl \
-        --val_data       /autodl-fs/data/splits/prm_val.jsonl \
-        --prm_path       /autodl-fs/models/prm_qwen3_0.6b/best \
-        --output_dir     /autodl-fs/models/grpo_llama_culture \
+        --model_name     qwen \
+        --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
+        --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
+        --prm_path       /autodl-tmp/models/normad_prm_qwen3_0.6b_v2/best \
+        --output_dir     /autodl-tmp/models/grpo_qwen_culture \
         --n_samples      10 \
         --max_rounds     30 \
         --eval_every     5
 
-    # Switch to Qwen base
+    # SFT+RL (from SFT checkpoint)
     deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
-        --model_name qwen  ...
+        --model_name     qwen \
+        --pretrain_path  /autodl-tmp/models/sft_qwen/best \
+        --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
+        --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
+        --prm_path       /autodl-tmp/models/normad_prm_qwen3_0.6b_v2/best \
+        --output_dir     /autodl-tmp/models/grpo_sft_qwen_culture \
+        --n_samples      10 \
+        --max_rounds     30 \
+        --eval_every     5
 """
 
 import re
@@ -30,15 +38,13 @@ import os
 import sys
 import json
 import argparse
-from copy import deepcopy
 from pathlib import Path
-from collections import defaultdict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import deepspeed
 
 
@@ -59,25 +65,67 @@ KL_COEF = 0.001
 
 
 # ---------------------------------------------------------------------------
-# PRM (frozen, for R_cultural scoring)
+# PRM (frozen, for R_cultural scoring) — matches train_prm.py v2 architecture
 # ---------------------------------------------------------------------------
 
 class CultureRewardModel(nn.Module):
-    def __init__(self, base_path: str, head_path: str):
+    """
+    Must match the architecture used during PRM training (v2):
+      - AutoModelForCausalLM (not AutoModel)
+      - LoRA adapter loaded on top
+      - Mean-pooling over non-padding tokens (not last-token)
+      - Input format: [country]\nquestion\nreasoning\n[ANSWER: X]
+    """
+    def __init__(self, prm_checkpoint_dir: str, base_path: str = PRM_BASE):
         super().__init__()
-        self.model = AutoModel.from_pretrained(
-            base_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+        # Load base model
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
+            output_hidden_states=True,
         )
-        hidden_size = self.model.config.hidden_size
+
+        # Load LoRA adapter if present
+        adapter_path = Path(prm_checkpoint_dir) / "adapter_model.safetensors"
+        adapter_path_bin = Path(prm_checkpoint_dir) / "adapter_model.bin"
+        if adapter_path.exists() or adapter_path_bin.exists():
+            from peft import PeftModel
+            self.model = PeftModel.from_pretrained(base_model, prm_checkpoint_dir)
+            print(f"  [PRM] Loaded LoRA adapter from {prm_checkpoint_dir}")
+        else:
+            # Fallback: full model checkpoint (no LoRA)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                prm_checkpoint_dir, torch_dtype=torch.bfloat16,
+                trust_remote_code=True, output_hidden_states=True,
+            )
+            print(f"  [PRM] Loaded full model from {prm_checkpoint_dir}")
+
+        # Load reward head
+        hidden_size = base_model.config.hidden_size
         self.reward_head = nn.Linear(hidden_size, 1)
+        head_path = Path(prm_checkpoint_dir) / "reward_head.pt"
         state = torch.load(head_path, map_location="cpu")
         self.reward_head.load_state_dict(state)
+        print(f"  [PRM] Loaded reward head from {head_path}")
+
+    def _pool(self, hidden_states: torch.Tensor,
+              attention_mask: torch.Tensor) -> torch.Tensor:
+        """Mean-pool over non-padding tokens (matches train_prm.py v2)."""
+        mask = attention_mask.unsqueeze(-1).float()
+        summed = (hidden_states * mask).sum(dim=1)
+        lengths = mask.sum(dim=1).clamp(min=1)
+        return summed / lengths
 
     @torch.no_grad()
-    def score(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        last_h = outputs.last_hidden_state[:, -1, :].float()
-        s = torch.sigmoid(self.reward_head(last_h).squeeze(-1))
+    def score(self, input_ids: torch.Tensor,
+              attention_mask: torch.Tensor) -> torch.Tensor:
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+        )
+        last_hidden = outputs.hidden_states[-1]
+        pooled = self._pool(last_hidden, attention_mask)
+        s = torch.sigmoid(self.reward_head(pooled.float()).squeeze(-1))
         return s.clamp(0.1, 0.9)
 
 
@@ -143,20 +191,31 @@ def compute_r_ans(predicted: str | None, gold: str) -> float:
     return 1.0 if predicted == gold else 0.0
 
 
+def build_prm_input(country: str, query: str, reasoning: str,
+                    answer: str | None) -> str:
+    """
+    Build PRM input text matching the format used during PRM training:
+    [country]\nquestion\nreasoning\n[ANSWER: X]
+    """
+    text = f"[{country}]\n{query}\n{reasoning}"
+    if answer:
+        text += f"\n[ANSWER: {answer}]"
+    return text
+
+
 def rloo_advantages(rewards: torch.Tensor) -> torch.Tensor:
     """
     rewards: (n_prompts, n_samples)
     RLOO baseline: subtract mean of other samples in the same group.
-    Returns advantages of the same shape.
     """
     n = rewards.size(1)
-    group_sum = rewards.sum(dim=1, keepdim=True)          # (n_prompts, 1)
-    baseline  = (group_sum - rewards) / max(n - 1, 1)     # leave-one-out mean
+    group_sum = rewards.sum(dim=1, keepdim=True)
+    baseline  = (group_sum - rewards) / max(n - 1, 1)
     return rewards - baseline
 
 
 # ---------------------------------------------------------------------------
-# Policy generation (vLLM-free: use HF generate for simplicity with DeepSpeed)
+# Policy generation
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
@@ -166,7 +225,7 @@ def generate_responses(
 ) -> list[list[str]]:
     """
     For each prompt generate n_samples responses.
-    Returns list of length len(prompts), each element is list of n_samples strings.
+    Returns list of length len(prompts), each is list of n_samples strings.
     """
     all_responses = []
     for prompt in prompts:
@@ -182,7 +241,6 @@ def generate_responses(
             num_return_sequences=n_samples,
             pad_token_id=tokenizer.pad_token_id,
         )
-        # Decode only the generated part
         prompt_len = enc["input_ids"].shape[1]
         responses = [
             tokenizer.decode(o[prompt_len:], skip_special_tokens=True)
@@ -211,12 +269,12 @@ def compute_logprobs(
     )
     prompt_len = prompt_enc["input_ids"].shape[1]
 
-    with torch.no_grad() if model.training else torch.enable_grad():
+    with torch.no_grad() if not model.training else torch.enable_grad():
         logits = model(**enc).logits  # (1, seq, vocab)
 
-    log_probs = F.log_softmax(logits[0], dim=-1)        # (seq, vocab)
-    target_ids = enc["input_ids"][0, prompt_len:]       # response token ids
-    response_logprobs = log_probs[prompt_len - 1: -1]   # shifted
+    log_probs = F.log_softmax(logits[0], dim=-1)
+    target_ids = enc["input_ids"][0, prompt_len:]
+    response_logprobs = log_probs[prompt_len - 1: -1]
 
     if response_logprobs.shape[0] == 0 or target_ids.shape[0] == 0:
         return torch.tensor(0.0, device=device)
@@ -227,7 +285,7 @@ def compute_logprobs(
 
 
 # ---------------------------------------------------------------------------
-# Validation: accuracy on val set
+# Validation
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
@@ -276,7 +334,7 @@ def get_ds_config(batch_size: int, micro_batch: int, lr: float) -> dict:
         "zero_optimization": {
             "stage": 3,
             "offload_optimizer": {"device": "cpu"},
-            "offload_param": {"device": "none"},   # keep params on GPU
+            "offload_param": {"device": "none"},
             "overlap_comm": True,
             "contiguous_gradients": True,
             "reduce_bucket_size": 5e7,
@@ -298,7 +356,6 @@ def train(args):
     is_main = local_rank == 0
 
     model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
-    # SFT+RL: load from SFT checkpoint; RL-only: load from base model
     load_path = args.pretrain_path if args.pretrain_path else model_path
     if is_main:
         print(f"Base model:   {model_path}")
@@ -306,7 +363,7 @@ def train(args):
               f"({'SFT checkpoint' if args.pretrain_path else 'base model'})")
         print(f"PRM path:     {args.prm_path}")
 
-    # ---- Tokenizer (always from base model for consistency) ----
+    # ---- Tokenizer ----
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -324,16 +381,17 @@ def train(args):
     for p in ref_model.parameters():
         p.requires_grad_(False)
 
-    # ---- PRM (frozen, on GPU) ----
+    # ---- PRM (frozen, on GPU) — v2 architecture with LoRA + mean-pool ----
     prm = CultureRewardModel(
+        prm_checkpoint_dir=args.prm_path,
         base_path=PRM_BASE,
-        head_path=str(Path(args.prm_path) / "reward_head.pt"),
     ).to(device)
     prm_tokenizer = AutoTokenizer.from_pretrained(PRM_BASE, trust_remote_code=True)
     if prm_tokenizer.pad_token is None:
         prm_tokenizer.pad_token = prm_tokenizer.eos_token
     for p in prm.parameters():
         p.requires_grad_(False)
+    prm.eval()
 
     # ---- DeepSpeed init ----
     ds_config = get_ds_config(
@@ -395,11 +453,14 @@ def train(args):
                     pred = extract_answer(resp)
                     r_ans = compute_r_ans(pred, str(gold).strip())
 
-                    # R_cultural via PRM
-                    prm_text = f"[{country}]\n{query}\n{resp}"
+                    # R_cultural via PRM (v2 format with [ANSWER: X])
+                    prm_text = build_prm_input(
+                        country, query, resp, pred
+                    )
                     prm_enc = prm_tokenizer(
                         prm_text, return_tensors="pt",
-                        max_length=MAX_PROMPT_LEN + MAX_GEN_LEN, truncation=True
+                        max_length=2048, truncation=True,
+                        padding="max_length",
                     ).to(device)
                     r_cultural = prm.score(
                         prm_enc["input_ids"], prm_enc["attention_mask"]
@@ -408,7 +469,7 @@ def train(args):
                     rewards[pi, si] = ALPHA * r_ans + (1 - ALPHA) * r_cultural
 
             # 4. RLOO advantages
-            advantages = rloo_advantages(rewards)   # (n_prompts, n_samples)
+            advantages = rloo_advantages(rewards)
 
             # 5. Policy gradient loss with KL penalty
             total_loss = torch.tensor(0.0, device=device, requires_grad=False)
@@ -423,7 +484,7 @@ def train(args):
                         policy_engine.module, tokenizer, prompt, resp, device
                     )
 
-                    # Reference log-prob (CPU model → compute without grad)
+                    # Reference log-prob
                     ref_model_device = next(ref_model.parameters()).device
                     lp_ref = compute_logprobs(
                         ref_model, tokenizer, prompt, resp, ref_model_device
@@ -452,7 +513,7 @@ def train(args):
             print(f"Round {rnd}/{args.max_rounds} | "
                   f"loss={avg_loss:.4f} | avg_reward={avg_reward:.4f}")
 
-        # 6. Validation every eval_every rounds
+        # 6. Validation
         if rnd % args.eval_every == 0 and is_main:
             val_acc = validate(policy_engine.module, tokenizer, val_ds, device)
             print(f"  [Eval] Round {rnd} | val_accuracy={val_acc:.4f}")
@@ -485,11 +546,11 @@ def main():
     parser.add_argument("--model_name",       type=str,   required=True,
                         help="'llama', 'qwen', or full path")
     parser.add_argument("--grpo_data",        type=str,   required=True,
-                        help="grpo_train.jsonl (368 prompts)")
+                        help="grpo_train.jsonl (prompts for online sampling)")
     parser.add_argument("--val_data",         type=str,   required=True,
-                        help="prm_val.jsonl (245 samples)")
+                        help="prm_val.jsonl (validation samples)")
     parser.add_argument("--prm_path",         type=str,   required=True,
-                        help="PRM checkpoint dir (contains reward_head.pt)")
+                        help="PRM v2 checkpoint dir (LoRA adapter + reward_head.pt)")
     parser.add_argument("--output_dir",       type=str,   required=True)
     parser.add_argument("--n_samples",        type=int,   default=10,
                         help="Responses per prompt per round")
@@ -502,7 +563,7 @@ def main():
     parser.add_argument("--micro_batch",      type=int,   default=2)
     parser.add_argument("--lr",               type=float, default=5e-7)
     parser.add_argument("--pretrain_path",    type=str,   default=None,
-                        help="SFT checkpoint dir for SFT+RL. "
+                        help="SFT checkpoint dir for SFT+RL mode. "
                              "Leave empty for RL-only (starts from base model).")
     # DeepSpeed launcher injects --local_rank automatically
     parser.add_argument("--local_rank",       type=int,   default=0)
