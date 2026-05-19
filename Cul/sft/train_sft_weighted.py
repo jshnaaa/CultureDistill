@@ -1,0 +1,680 @@
+"""
+CAMA-D Stage 1: Token-level Weighted SFT (主场权威加权 SFT)
+
+Key innovations over traditional SFT:
+  - Guardian tokens: loss weight = alpha (amplified learning signal)
+  - Auditor non-final round tokens: loss mask = 0 (ignore adversarial content)
+  - Auditor final round tokens: loss weight = 1.0 (learn cognitive transition)
+
+Training data: HFA-C²N multi-agent dialogue data with [GUARDIAN]/[AUDITOR] role tags.
+
+Input format:  [{country}]\\n{question}
+Output format: [GUARDIAN] Reasoning: ... Answer: X\\n[AUDITOR-1] Reasoning: ... Answer: X\\n...
+
+Usage:
+    python Cul/sft/train_sft_weighted.py \\
+        --model_name  qwen \\
+        --data_file   /path/to/hfa_c2n_inference.jsonl \\
+        --val_file    /path/to/prm_val.jsonl \\
+        --output_dir  /path/to/models/camad_sft_qwen \\
+        --alpha       2.0 \\
+        --epochs      3 \\
+        --batch_size  4 \\
+        --lr          2e-5
+"""
+
+import re
+import json
+import argparse
+from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    get_cosine_schedule_with_warmup,
+)
+
+
+MODEL_ALIASES = {
+    "llama": "/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
+    "qwen":  "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
+}
+
+MAX_SEQ_LEN = 2048
+IGNORE_INDEX = -100
+
+
+# ---------------------------------------------------------------------------
+# Role span extraction from HFA-C²N output
+# ---------------------------------------------------------------------------
+
+def extract_role_spans(text: str) -> list[dict]:
+    """
+    Parse HFA-C²N structured output to identify role boundaries.
+
+    Expected format in response:
+      [GUARDIAN] Reasoning: ... Answer: X
+      [AUDITOR-1] Reasoning: ... Answer: X
+      [AUDITOR-2] Reasoning: ... Answer: X
+      ...
+
+    Returns list of dicts with keys:
+      - role: "GUARDIAN" or "AUDITOR"
+      - auditor_idx: int (0 for Guardian)
+      - start_char: int (start position in text)
+      - end_char: int (end position in text)
+      - text: str (the content of this role's output)
+    """
+    # Pattern matches [GUARDIAN], [AUDITOR-1], [AUDITOR-2], etc.
+    pattern = r'\[(GUARDIAN|AUDITOR-?\d*)\]'
+    matches = list(re.finditer(pattern, text))
+
+    if not matches:
+        return []
+
+    spans = []
+    for i, match in enumerate(matches):
+        role_tag = match.group(1)
+        start = match.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        content = text[start:end].strip()
+
+        if role_tag == "GUARDIAN":
+            role = "GUARDIAN"
+            auditor_idx = 0
+        else:
+            role = "AUDITOR"
+            # Extract auditor index from "AUDITOR-1", "AUDITOR-2", etc.
+            idx_match = re.search(r'\d+', role_tag)
+            auditor_idx = int(idx_match.group()) if idx_match else 1
+
+        spans.append({
+            "role": role,
+            "auditor_idx": auditor_idx,
+            "start_char": start,
+            "end_char": end,
+            "text": content,
+        })
+
+    return spans
+
+
+def identify_final_round_auditors(spans: list[dict], negotiation_rounds: int = 1) -> list[dict]:
+    """
+    Determine which Auditor spans are "final round" (should be learned).
+
+    In HFA-C²N with negotiation_rounds=1:
+      - Round 0: Guardian initial response
+      - Round 0: Auditors initial responses (non-final → mask)
+      - Round 1: Guardian + Auditors after seeing each other (final round)
+
+    For negotiation_rounds=1 (standard HFA-C²N):
+      - If an Auditor appears only once → it's a single-round setup, treat as final
+      - If an Auditor appears multiple times → only the last appearance is final
+
+    Returns spans with added 'is_final' flag.
+    """
+    # Count appearances per auditor
+    auditor_appearances = {}
+    for i, span in enumerate(spans):
+        if span["role"] == "AUDITOR":
+            key = span["auditor_idx"]
+            if key not in auditor_appearances:
+                auditor_appearances[key] = []
+            auditor_appearances[key].append(i)
+
+    # Mark final round
+    for span in spans:
+        if span["role"] == "GUARDIAN":
+            span["is_final"] = True  # Guardian always contributes
+        else:
+            key = span["auditor_idx"]
+            appearances = auditor_appearances.get(key, [])
+            # Last appearance of this auditor is considered "final round"
+            span_idx = spans.index(span)
+            span["is_final"] = (span_idx == appearances[-1])
+
+    return spans
+
+
+# ---------------------------------------------------------------------------
+# Token-level weight construction
+# ---------------------------------------------------------------------------
+
+def build_token_weights(
+    input_ids: torch.Tensor,
+    tokenizer,
+    response_text: str,
+    prompt_len: int,
+    alpha: float = 2.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Construct token-level loss_mask and loss_weight.
+
+    Args:
+        input_ids: (seq_len,) full tokenized sequence
+        tokenizer: tokenizer instance
+        response_text: the assistant response text (contains role spans)
+        prompt_len: number of tokens in the prompt (to skip)
+        alpha: weight multiplier for Guardian tokens
+
+    Returns:
+        loss_mask: (seq_len,) 1.0 for tokens to learn, 0.0 for masked
+        loss_weight: (seq_len,) weight per token
+    """
+    seq_len = input_ids.shape[0]
+    loss_mask = torch.zeros(seq_len, dtype=torch.float32)
+    loss_weight = torch.ones(seq_len, dtype=torch.float32)
+
+    # Only supervise response tokens (after prompt)
+    loss_mask[prompt_len:] = 1.0
+
+    # Parse role spans
+    spans = extract_role_spans(response_text)
+    if not spans:
+        # No role markers found — treat entire response as Guardian (safe fallback)
+        loss_weight[prompt_len:] = alpha
+        return loss_mask, loss_weight
+
+    spans = identify_final_round_auditors(spans)
+
+    # Tokenize response to find token positions for each role span
+    # We map character positions in response_text to token positions
+    response_tokens = tokenizer.encode(response_text, add_special_tokens=False)
+
+    # Build char-to-token mapping for the response
+    char_to_token = _build_char_to_token_map(response_text, tokenizer)
+
+    for span in spans:
+        # Map char positions to token positions (relative to response start)
+        start_tok_rel = char_to_token.get(span["start_char"], 0)
+        end_tok_rel = char_to_token.get(span["end_char"] - 1, len(response_tokens) - 1) + 1
+
+        # Convert to absolute positions (add prompt_len offset)
+        start_tok = prompt_len + start_tok_rel
+        end_tok = min(prompt_len + end_tok_rel, seq_len)
+
+        if span["role"] == "GUARDIAN":
+            # Guardian: amplified weight
+            loss_weight[start_tok:end_tok] = alpha
+        elif span["role"] == "AUDITOR":
+            if not span["is_final"]:
+                # Non-final Auditor: mask (don't learn adversarial content)
+                loss_mask[start_tok:end_tok] = 0.0
+            else:
+                # Final round Auditor: normal weight
+                loss_weight[start_tok:end_tok] = 1.0
+
+    return loss_mask, loss_weight
+
+
+def _build_char_to_token_map(text: str, tokenizer) -> dict:
+    """
+    Build a mapping from character position to token index.
+    This is an approximation using tokenizer offset mapping.
+    """
+    encoding = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    offsets = encoding.get("offset_mapping", [])
+
+    char_map = {}
+    for tok_idx, (start, end) in enumerate(offsets):
+        for c in range(start, end):
+            char_map[c] = tok_idx
+
+    return char_map
+
+
+# ---------------------------------------------------------------------------
+# Data loading from HFA-C²N inference output
+# ---------------------------------------------------------------------------
+
+def parse_hfa_c2n_response(response: str) -> list[dict]:
+    """
+    Parse HFA-C²N response into structured agent outputs.
+
+    HFA-C²N output format (from hfa_c2n_mas.py):
+      ===== Solution 1 =====
+      [GUARDIAN] Reasoning: ... Answer: X
+      ===== Solution 2 =====
+      [AUDITOR-1] Reasoning: ... Answer: X
+      ...
+      ===== Solution 6 =====
+      [JUDGE] ...
+
+    For CAMA-D SFT, we reconstruct the multi-agent dialogue from solutions.
+    """
+    # Split by solution markers
+    parts = re.split(r"===== Solution \d+ =====", response)
+    parts = [p.strip() for p in parts if p.strip()]
+    return parts
+
+
+def build_sft_dialogue(response: str, gold: str) -> Optional[str]:
+    """
+    From HFA-C²N inference output, reconstruct the multi-agent dialogue
+    suitable for token-weighted SFT.
+
+    Only include samples where the Judge/Guardian answer matches gold.
+
+    Returns the dialogue string with [GUARDIAN] and [AUDITOR-X] markers,
+    or None if the sample should be skipped.
+    """
+    parts = parse_hfa_c2n_response(response)
+    if not parts:
+        return None
+
+    # Check if Guardian's answer matches gold
+    guardian_part = None
+    auditor_parts = []
+    judge_part = None
+
+    for part in parts:
+        if "[GUARDIAN]" in part:
+            guardian_part = part
+        elif "[AUDITOR" in part:
+            auditor_parts.append(part)
+        elif "[JUDGE]" in part:
+            judge_part = part
+
+    if not guardian_part:
+        return None
+
+    # Extract Guardian's answer
+    guardian_answer = _extract_answer_from_part(guardian_part)
+    if guardian_answer != gold:
+        return None  # Skip incorrect samples
+
+    # Reconstruct dialogue
+    dialogue_parts = [guardian_part]
+    for ap in auditor_parts:
+        dialogue_parts.append(ap)
+
+    return "\n".join(dialogue_parts)
+
+
+def _extract_answer_from_part(text: str) -> Optional[str]:
+    """Extract answer number from a role's output."""
+    m = re.search(r"Answer\s*:\s*([1-4])", text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return None
+
+
+def build_camad_sft_samples(jsonl_path: str) -> list[dict]:
+    """
+    Build SFT training samples from HFA-C²N inference data.
+
+    Each sample contains:
+      - query: the cultural question
+      - country: target country
+      - dialogue: full multi-agent dialogue with role markers
+      - gt: ground truth answer
+    """
+    samples = []
+    skipped = 0
+
+    for line in open(jsonl_path, encoding="utf-8"):
+        obj = json.loads(line)
+        query = obj["query"]
+        country = obj.get("country", "")
+        gold = str(obj["gt"]).strip()
+        response = obj.get("response", "")
+
+        dialogue = build_sft_dialogue(response, gold)
+        if dialogue is None:
+            skipped += 1
+            continue
+
+        samples.append({
+            "query": query,
+            "country": country,
+            "dialogue": dialogue,
+            "gt": gold,
+        })
+
+    print(f"CAMA-D SFT samples: {len(samples)} valid, {skipped} skipped")
+    return samples
+
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+
+class WeightedSFTDataset(Dataset):
+    def __init__(self, samples: list[dict], tokenizer, alpha: float = 2.0,
+                 max_len: int = MAX_SEQ_LEN):
+        self.tokenizer = tokenizer
+        self.alpha = alpha
+        self.max_len = max_len
+        self.records = []
+
+        for s in samples:
+            input_text = f"[{s['country']}]\n{s['query']}"
+            target_text = s["dialogue"]
+
+            messages = [
+                {"role": "user", "content": input_text},
+                {"role": "assistant", "content": target_text},
+            ]
+            full_text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False
+            )
+            prompt_only = tokenizer.apply_chat_template(
+                [{"role": "user", "content": input_text}],
+                tokenize=False, add_generation_prompt=True,
+            )
+            self.records.append((full_text, prompt_only, target_text))
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, idx):
+        full_text, prompt_text, response_text = self.records[idx]
+        tok = self.tokenizer
+
+        full_enc = tok(
+            full_text, max_length=self.max_len,
+            truncation=True, return_tensors="pt",
+            return_offsets_mapping=False,
+        )
+        prompt_enc = tok(
+            prompt_text, max_length=self.max_len,
+            truncation=True, return_tensors="pt",
+        )
+
+        input_ids = full_enc["input_ids"].squeeze(0)
+        attention_mask = full_enc["attention_mask"].squeeze(0)
+        prompt_len = prompt_enc["input_ids"].shape[1]
+
+        # Build token-level weights
+        loss_mask, loss_weight = build_token_weights(
+            input_ids, tok, response_text, prompt_len, self.alpha
+        )
+
+        # Standard labels (shift handled by model internally)
+        labels = input_ids.clone()
+        labels[:prompt_len] = IGNORE_INDEX
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "loss_mask": loss_mask,
+            "loss_weight": loss_weight,
+        }
+
+
+def collate_fn(batch: list[dict]) -> dict:
+    """Pad sequences to max length in batch."""
+    max_len = max(b["input_ids"].shape[0] for b in batch)
+    pad_id = 0
+
+    input_ids_list, mask_list, label_list = [], [], []
+    loss_mask_list, loss_weight_list = [], []
+
+    for b in batch:
+        n = b["input_ids"].shape[0]
+        pad = max_len - n
+
+        input_ids_list.append(
+            torch.cat([b["input_ids"], torch.full((pad,), pad_id, dtype=torch.long)])
+        )
+        mask_list.append(
+            torch.cat([b["attention_mask"], torch.zeros(pad, dtype=torch.long)])
+        )
+        label_list.append(
+            torch.cat([b["labels"], torch.full((pad,), IGNORE_INDEX, dtype=torch.long)])
+        )
+        loss_mask_list.append(
+            torch.cat([b["loss_mask"], torch.zeros(pad, dtype=torch.float32)])
+        )
+        loss_weight_list.append(
+            torch.cat([b["loss_weight"], torch.ones(pad, dtype=torch.float32)])
+        )
+
+    return {
+        "input_ids": torch.stack(input_ids_list),
+        "attention_mask": torch.stack(mask_list),
+        "labels": torch.stack(label_list),
+        "loss_mask": torch.stack(loss_mask_list),
+        "loss_weight": torch.stack(loss_weight_list),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Weighted loss computation
+# ---------------------------------------------------------------------------
+
+def compute_weighted_loss(logits: torch.Tensor, labels: torch.Tensor,
+                          loss_mask: torch.Tensor, loss_weight: torch.Tensor) -> torch.Tensor:
+    """
+    Compute token-level weighted cross-entropy loss.
+
+    Args:
+        logits: (batch, seq_len, vocab_size)
+        labels: (batch, seq_len) with IGNORE_INDEX for prompt tokens
+        loss_mask: (batch, seq_len) 1.0 for tokens to learn, 0.0 for masked
+        loss_weight: (batch, seq_len) weight per token
+    """
+    # Shift logits and labels for next-token prediction
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+    shift_mask = loss_mask[:, 1:].contiguous()
+    shift_weight = loss_weight[:, 1:].contiguous()
+
+    # Compute per-token cross-entropy
+    vocab_size = shift_logits.shape[-1]
+    flat_logits = shift_logits.view(-1, vocab_size)
+    flat_labels = shift_labels.view(-1)
+
+    ce_loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
+    ce_loss = ce_loss.view(shift_labels.shape)  # (batch, seq_len-1)
+
+    # Apply mask and weight
+    # Replace IGNORE_INDEX positions with 0 loss (they get -100 from labels)
+    valid_mask = (shift_labels != IGNORE_INDEX).float()
+    combined_mask = valid_mask * shift_mask
+
+    weighted_loss = ce_loss * combined_mask * shift_weight
+    total_loss = weighted_loss.sum() / combined_mask.sum().clamp(min=1.0)
+
+    return total_loss
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def validate(model, tokenizer, val_jsonl: str, device, max_samples: int = 200) -> float:
+    """Compute accuracy on validation set."""
+    model.eval()
+    correct, total = 0, 0
+
+    for line in open(val_jsonl, encoding="utf-8"):
+        if total >= max_samples:
+            break
+        obj = json.loads(line)
+        query = obj["query"]
+        country = obj.get("country", "")
+        gold = str(obj["gt"]).strip()
+
+        input_text = f"[{country}]\n{query}"
+        messages = [{"role": "user", "content": input_text}]
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        enc = tokenizer(
+            prompt, return_tensors="pt",
+            max_length=MAX_SEQ_LEN, truncation=True
+        ).to(device)
+
+        outs = model.generate(
+            **enc,
+            max_new_tokens=512,
+            do_sample=False,
+            temperature=None,
+            top_p=None,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        prompt_len = enc["input_ids"].shape[1]
+        response = tokenizer.decode(outs[0][prompt_len:], skip_special_tokens=True)
+
+        pred = None
+        m = re.search(r"Answer\s*:\s*([1-4])", response, re.IGNORECASE)
+        if m:
+            pred = m.group(1)
+        else:
+            digits = re.findall(r"\b([1-4])\b", response)
+            if digits:
+                pred = digits[-1]
+
+        if pred == gold:
+            correct += 1
+        total += 1
+
+    model.train()
+    return correct / total if total > 0 else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+
+def train(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    print(f"Alpha (Guardian weight): {args.alpha}")
+
+    model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
+    print(f"Base model: {model_path}")
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+    ).to(device)
+    print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e9:.2f}B")
+
+    # Build SFT samples from HFA-C²N data
+    raw_samples = build_camad_sft_samples(args.data_file)
+    if len(raw_samples) == 0:
+        raise ValueError("No valid SFT samples found. Check data_file format.")
+
+    train_ds = WeightedSFTDataset(raw_samples, tokenizer, alpha=args.alpha)
+    loader = DataLoader(
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=2,
+    )
+    print(f"Training batches per epoch: {len(loader)}")
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.lr, weight_decay=0.01
+    )
+    total_steps = len(loader) * args.epochs
+    warmup_steps = max(1, int(total_steps * 0.05))
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer, warmup_steps, total_steps
+    )
+
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    best_val_acc = 0.0
+    no_improve = 0
+
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        total_loss = 0.0
+        guardian_loss_sum = 0.0
+        auditor_loss_sum = 0.0
+
+        for step, batch in enumerate(loader, 1):
+            input_ids = batch["input_ids"].to(device)
+            attn_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            loss_mask = batch["loss_mask"].to(device)
+            loss_weight = batch["loss_weight"].to(device)
+
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attn_mask,
+            )
+            logits = outputs.logits
+
+            # Compute weighted loss
+            loss = compute_weighted_loss(logits, labels, loss_mask, loss_weight)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            if step % 20 == 0:
+                print(f"  Epoch {epoch} step {step}/{len(loader)} "
+                      f"loss={loss.item():.4f}")
+
+        avg_loss = total_loss / len(loader)
+        val_acc = validate(model, tokenizer, args.val_file, device)
+        print(f"Epoch {epoch}/{args.epochs} | "
+              f"avg_loss={avg_loss:.4f} | val_accuracy={val_acc:.4f}")
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            no_improve = 0
+            ckpt = Path(args.output_dir) / "best"
+            model.save_pretrained(str(ckpt))
+            tokenizer.save_pretrained(str(ckpt))
+            print(f"  ✓ Saved best checkpoint (val_acc={best_val_acc:.4f}) → {ckpt}")
+        else:
+            no_improve += 1
+            print(f"  No improvement ({no_improve}/2)")
+            if no_improve >= 2:
+                print("Early stopping.")
+                break
+
+    print(f"\nTraining complete. Best val_accuracy: {best_val_acc:.4f}")
+    print(f"Best checkpoint: {args.output_dir}/best")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="CAMA-D Stage 1: Token-level Weighted SFT"
+    )
+    parser.add_argument("--model_name", type=str, required=True,
+                        help="'llama', 'qwen', or full model path")
+    parser.add_argument("--data_file", type=str, required=True,
+                        help="HFA-C²N inference JSONL (with role markers)")
+    parser.add_argument("--val_file", type=str, required=True,
+                        help="Validation JSONL for accuracy evaluation")
+    parser.add_argument("--output_dir", type=str, required=True,
+                        help="Directory to save model checkpoints")
+    parser.add_argument("--alpha", type=float, default=2.0,
+                        help="Guardian token loss weight multiplier (default: 2.0)")
+    parser.add_argument("--epochs", type=int, default=3,
+                        help="Number of training epochs (default: 3)")
+    parser.add_argument("--batch_size", type=int, default=4,
+                        help="Batch size (default: 4)")
+    parser.add_argument("--lr", type=float, default=2e-5,
+                        help="Learning rate (default: 2e-5)")
+    args = parser.parse_args()
+    train(args)
+
+
+if __name__ == "__main__":
+    main()

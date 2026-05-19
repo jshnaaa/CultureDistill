@@ -1145,21 +1145,246 @@ Phase 5: 评估
 
 ## 9. 代码结构
 
+### 9.1 目录树
+
 ```
 Cul/
+├── run_camad_pipeline.py           # ★ 完整 Pipeline 入口脚本（一键运行全流程）
+├── generate_hfa_c2n_data.py        # Phase 0: HFA-C²N 多智能体数据生成
+├── hfa_c2n_mas.py                  # HFA-C²N 多智能体系统核心实现
+├── configs/
+│   └── hfa_c2n_config.yaml         # HFA-C²N Agent 提示词配置
 ├── sft/
-│   ├── train_sft_weighted.py      # Stage 1: Token 级加权 SFT
-│   └── build_token_weights.py     # 构造 loss_mask 和 loss_weight
+│   ├── train_sft_weighted.py       # ★ Stage 1: Token 级加权 SFT（CAMA-D 新）
+│   └── train_sft.py                # 旧管线: 传统 SFT（baseline 对比用）
 ├── step_label/
-│   ├── split_steps.py             # 启发式规则切分推理步骤
-│   ├── label_steps.py             # 审计器开卷式打标（batch LLM 调用）
-│   └── validate_labels.py         # 标注一致性校验
+│   ├── split_steps.py              # ★ Stage 2a: 启发式规则切分推理步骤
+│   ├── label_steps.py              # ★ Stage 2b: 审计器开卷式打标（vLLM batch）
+│   └── validate_labels.py          # ★ Stage 2c: 标注一致性校验与分布报告
 ├── prm/
-│   ├── train_prm_mse.py           # 类别加权 MSE 训练 PRM
-│   └── eval_prm.py                # PRM 验证（三分类准确率、Spearman）
-└── grpo/
-    └── train_grpo_v3.py           # GRPO with Mean(R_process) reward
+│   ├── train_prm_mse.py            # ★ Stage 3-PRM: 类别加权 MSE 训练
+│   ├── eval_prm.py                 # ★ PRM 验证（三分类准确率、Spearman）
+│   ├── train_prm.py                # 旧管线: Bradley-Terry PRM（baseline）
+│   ├── label_data.py               # 旧管线: 构建 pairwise 偏好对
+│   └── split_dataset.py            # 数据集切分（PRM train/val/GRPO train）
+├── grpo/
+│   ├── train_grpo_v3.py            # ★ Stage 3-GRPO: Mean(R_process) reward
+│   └── train_grpo.py               # 旧管线: 旧 GRPO（baseline 对比用）
+└── data/                           # 数据存放目录
+    ├── splits/                     # 数据集切分结果
+    └── prm/                        # PRM 训练数据
 ```
+
+标注 ★ 的文件为 CAMA-D 新管线代码，无标注的为旧管线保留的 baseline。
+
+### 9.2 各文件功能说明
+
+**Pipeline 入口**
+
+| 文件 | 功能 |
+|------|------|
+| `run_camad_pipeline.py` | 一键运行 CAMA-D 全流程，支持 `full`、`sft_only`、`rl_only`、`sft_rl` 四种模式，自动串联 Phase 0-4 |
+
+**Phase 0: 数据生成**
+
+| 文件 | 功能 |
+|------|------|
+| `generate_hfa_c2n_data.py` | 调用 HFA-C²N 多智能体系统生成带角色标签的结构化推理数据 |
+| `hfa_c2n_mas.py` | HFA-C²N 核心逻辑：Guardian/Auditor/Judge 三类智能体的 prompt 构建、vLLM batch 推理、多轮协商 |
+| `configs/hfa_c2n_config.yaml` | 5 个 Guardian prompt（按文化区域）+ 5 个 Auditor prompt + Judge prompt，已集成 Neutral 优化策略 |
+
+**Stage 1: Token 级加权 SFT**
+
+| 文件 | 功能 |
+|------|------|
+| `sft/train_sft_weighted.py` | 从 HFA-C²N 数据中提取角色标签，构造 Token 级 loss_mask（Auditor 非最终轮掩码）和 loss_weight（Guardian×α 放大），训练 student model |
+
+**Stage 2: 开卷式步骤标注**
+
+| 文件 | 功能 |
+|------|------|
+| `step_label/split_steps.py` | 启发式规则切分：按段落边界主切分 → 超长段落按转折词二次切分 → 打上 `[Step N]` 前缀 |
+| `step_label/label_steps.py` | 开卷式审计器标注：将 Ground Truth 作为先验输入，对每个 Step 独立打标 {0.9, 0.5, 0.1}，使用 vLLM batch 推理 |
+| `step_label/validate_labels.py` | 标注质量校验：计算标签分布、10% 重复标注一致率（目标 >85%）、分布健康度检查 |
+
+**Stage 3-PRM: Culture-Aware PRM**
+
+| 文件 | 功能 |
+|------|------|
+| `prm/train_prm_mse.py` | 以 Stage 1 SFT model 为基座 + LoRA + Linear score_head + Sigmoid，用类别加权 MSE 在步骤标签上训练。加权：0.9→W=2.5, 0.1→W=2.0, 0.5→W=1.0 |
+| `prm/eval_prm.py` | PRM 综合评估：三分类准确率（目标>70%）、确权步召回率（>75%）、混淆步召回率（>65%）、Spearman（>0.6）|
+
+**Stage 3-GRPO: 强化学习**
+
+| 文件 | 功能 |
+|------|------|
+| `grpo/train_grpo_v3.py` | GRPO 在线采样 → 启发式切步 → PRM 逐步打分 → Mean(R_process) → R_total = 0.6×R_outcome + 0.4×Mean(R_process) → RLOO Advantage → 策略梯度更新。DeepSpeed ZeRO-3 |
+
+### 9.3 运行命令
+
+#### 一键运行（推荐：SFT+RL 全流程）
+
+```bash
+python Cul/run_camad_pipeline.py \
+    --mode sft_rl \
+    --model_name qwen \
+    --hfa_c2n_data /path/to/hfa_c2n_inference.jsonl \
+    --val_file /path/to/prm_val.jsonl \
+    --output_root /path/to/camad_outputs \
+    --num_gpus 2
+```
+
+参数说明：
+
+| 参数 | 含义 |
+|------|------|
+| `--mode` | 训练模式：`full`（含数据生成）、`sft_only`、`rl_only`、`sft_rl`（推荐）|
+| `--model_name` | Student 模型：`qwen`（Qwen2.5-7B）或 `llama`（Llama-3.1-8B）|
+| `--hfa_c2n_data` | 预生成的 HFA-C²N 推理数据 JSONL |
+| `--val_file` | 验证集 JSONL（用于 SFT/GRPO 的 accuracy 评估）|
+| `--output_root` | 输出根目录，自动创建 `data/` 和 `models/` 子目录 |
+| `--num_gpus` | GPU 数量（GRPO 阶段使用 DeepSpeed ZeRO-3）|
+
+#### 分步运行
+
+**Phase 0: HFA-C²N 数据生成**
+```bash
+python Cul/generate_hfa_c2n_data.py \
+    --input_file Cul/data/CulturalBench_mas.json \
+    --output_file /path/to/hfa_c2n_inference.jsonl \
+    --model_name qwen \
+    --use_vllm --tensor_parallel_size 2 \
+    --negotiation_rounds 1 --include_judge true
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--input_file` | 原始数据集 JSON（CulturalBench/NormAD 格式）|
+| `--model_name` | 推理模型（Agent 共用同一模型）|
+| `--negotiation_rounds` | 协商轮数（0=独立推理，1=标准协商）|
+| `--include_judge` | 是否包含 Judge 裁决环节 |
+
+**Phase 1: Stage 1 Token 级加权 SFT**
+```bash
+python Cul/sft/train_sft_weighted.py \
+    --model_name qwen \
+    --data_file /path/to/hfa_c2n_inference.jsonl \
+    --val_file /path/to/prm_val.jsonl \
+    --output_dir /path/to/models/camad_sft_qwen \
+    --alpha 2.0 \
+    --epochs 3 \
+    --batch_size 4 \
+    --lr 2e-5
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--alpha` | Guardian Token 的 loss 权重放大系数（默认 2.0）|
+| `--data_file` | HFA-C²N 推理数据（含 [GUARDIAN]/[AUDITOR] 角色标签）|
+
+**Phase 2a: 启发式步骤切分**
+```bash
+python Cul/step_label/split_steps.py \
+    --input_file /path/to/hfa_c2n_inference.jsonl \
+    --output_file /path/to/steps_split.jsonl \
+    --max_sentences_per_step 3 \
+    --sources guardian
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--max_sentences_per_step` | 每步最大句数，超过则触发二次切分（默认 3）|
+| `--sources` | 使用哪些 Agent 的推理路径（默认仅 guardian）|
+
+**Phase 2b: 开卷式审计器打标**
+```bash
+python Cul/step_label/label_steps.py \
+    --input_file /path/to/steps_split.jsonl \
+    --output_file /path/to/step_labels.jsonl \
+    --model_name qwen \
+    --batch_size 64 \
+    --tensor_parallel_size 1 \
+    --validate_consistency
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--model_name` | 审计器模型（与 MAS 同规模即可，7B/8B）|
+| `--batch_size` | vLLM 批次大小 |
+| `--validate_consistency` | 是否进行 10% 重复标注一致性校验 |
+
+**Phase 2c: 标注验证报告**
+```bash
+python Cul/step_label/validate_labels.py \
+    --input_file /path/to/step_labels.jsonl \
+    --report
+```
+
+**Phase 3: Culture-Aware PRM 训练**
+```bash
+python Cul/prm/train_prm_mse.py \
+    --sft_model_path /path/to/models/camad_sft_qwen/best \
+    --train_file /path/to/step_labels_train.jsonl \
+    --val_file /path/to/step_labels_val.jsonl \
+    --output_dir /path/to/models/camad_prm \
+    --epochs 5 \
+    --batch_size 8 \
+    --lr_head 5e-5 \
+    --lr_lora 1e-4 \
+    --lora_r 16
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--sft_model_path` | Stage 1 SFT 模型路径（作为 PRM 基座）|
+| `--lr_head` | score_head 学习率（默认 5e-5）|
+| `--lr_lora` | LoRA 参数学习率（默认 1e-4）|
+| `--lora_r` | LoRA rank（默认 16）|
+
+**Phase 3: PRM 评估**
+```bash
+python Cul/prm/eval_prm.py \
+    --prm_path /path/to/models/camad_prm/best \
+    --sft_path /path/to/models/camad_sft_qwen/best \
+    --val_file /path/to/step_labels_val.jsonl
+```
+
+**Phase 4: GRPO 强化学习（SFT+RL 模式）**
+```bash
+deepspeed --num_gpus 2 Cul/grpo/train_grpo_v3.py \
+    --model_name qwen \
+    --pretrain_path /path/to/models/camad_sft_qwen/best \
+    --grpo_data /path/to/grpo_train.jsonl \
+    --val_data /path/to/prm_val.jsonl \
+    --prm_path /path/to/models/camad_prm/best \
+    --prm_backbone /path/to/models/camad_sft_qwen/best \
+    --output_dir /path/to/models/camad_grpo_sft_rl \
+    --alpha 0.6 \
+    --n_samples 10 \
+    --max_rounds 20 \
+    --eval_every 5 \
+    --lr 1e-7
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--pretrain_path` | SFT 模型路径（RL-only 模式不传此参数）|
+| `--prm_path` | PRM checkpoint（含 LoRA adapter + score_head.pt）|
+| `--prm_backbone` | PRM 基座模型路径（即 SFT 模型）|
+| `--alpha` | R_total 中 R_outcome 的权重（默认 0.6）|
+| `--n_samples` | 每 prompt 每轮采样数 G（默认 10）|
+| `--max_rounds` | 最大训练轮数（SFT+RL 建议 20，RL-only 建议 30）|
+| `--lr` | 学习率（SFT+RL 用 1e-7，RL-only 用 5e-7）|
+
+### 9.4 计算资源需求
+
+| 阶段 | GPU 需求 | 预估时间 | 说明 |
+|------|---------|---------|------|
+| Phase 0 数据生成 | 2 GPU | ~2h (2633 samples) | vLLM tensor parallel |
+| Phase 1 SFT | 1 GPU | ~1h (3 epochs) | 全参微调 7B/8B |
+| Phase 2 标注 | 1 GPU | ~30min | vLLM batch inference |
+| Phase 3 PRM | 1 GPU | ~30min (5 epochs) | LoRA + score_head |
+| Phase 4 GRPO | 2 GPU | ~4h (20-30 rounds) | DeepSpeed ZeRO-3 |
 
 ---
 
