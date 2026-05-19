@@ -27,7 +27,8 @@ class ReconcileMAS:
     """
 
     def __init__(self, model_name, tensor_parallel_size=1, config_path=None,
-                 temperature=0.7, max_tokens=1024, num_debate_rounds=None):
+                 temperature=0.7, max_tokens=1024, num_debate_rounds=None,
+                 include_judge=True):
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "configs", "reconcile_config.yaml")
         cfg = load_config(config_path)
@@ -37,6 +38,7 @@ class ReconcileMAS:
         # Command-line argument overrides config value
         self.num_debate_rounds = num_debate_rounds if num_debate_rounds is not None else cfg["num_debate_rounds"]
         self.judge_system_prompt = cfg["judge"]["system_prompt"].strip()
+        self.include_judge = include_judge
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.model_name = model_name
@@ -212,25 +214,28 @@ class ReconcileMAS:
                 agent_responses[i] = out.outputs[0].text.strip()
 
         # Judge: read all final responses and select best answer
-        all_responses = [
-            (self.culture_roles[i]["name"], agent_responses[i])
-            for i in range(self.num_agents)
-        ]
-        judge_prompt = self._build_judge_prompt(question, all_responses)
-        judge_output = self.llm.generate([judge_prompt], self.judge_sampling_params)
-        judge_response = judge_output[0].outputs[0].text.strip()
-        judge_answer = self._extract_answer(judge_response)
+        judge_response = ""
+        if self.include_judge:
+            all_responses = [
+                (self.culture_roles[i]["name"], agent_responses[i])
+                for i in range(self.num_agents)
+            ]
+            judge_prompt = self._build_judge_prompt(question, all_responses)
+            judge_output = self.llm.generate([judge_prompt], self.judge_sampling_params)
+            judge_response = judge_output[0].outputs[0].text.strip()
+            judge_answer = self._extract_answer(judge_response)
 
-        # Fallback to majority vote if judge fails to produce valid answer
-        if judge_answer is None:
-            final_answers = [self._extract_answer(r) for r in agent_responses]
-            judge_answer = self._majority_vote(final_answers, target_culture)
+            # Fallback to majority vote if judge fails to produce valid answer
+            if judge_answer is None:
+                final_answers = [self._extract_answer(r) for r in agent_responses]
+                judge_answer = self._majority_vote(final_answers, target_culture)
 
-        # Format: Solution 1-4 = agent final responses, Solution 5 = judge
+        # Format: Solution 1-N = agent final responses, Solution N+1 = judge (if included)
         formatted = ""
         for i, resp in enumerate(agent_responses):
             formatted += f"===== Solution {i + 1} =====\n{resp}\n"
-        formatted += f"===== Solution {self.num_agents + 1} =====\n{judge_response}\n"
+        if self.include_judge:
+            formatted += f"===== Solution {self.num_agents + 1} =====\n{judge_response}\n"
 
         return {"response": formatted}
 
@@ -276,35 +281,41 @@ class ReconcileMAS:
                 new_responses[si][ai] = out.outputs[0].text.strip()
             agent_responses = new_responses
 
-        # Judge: batch all judge prompts
-        judge_prompts = []
-        for si in range(n):
-            all_responses = [
-                (self.culture_roles[ai]["name"], agent_responses[si][ai])
-                for ai in range(self.num_agents)
-            ]
-            judge_prompts.append(self._build_judge_prompt(questions[si], all_responses))
+        # Judge: batch all judge prompts (if include_judge)
+        judge_responses = [""] * n
+        if self.include_judge:
+            judge_prompts = []
+            for si in range(n):
+                all_responses = [
+                    (self.culture_roles[ai]["name"], agent_responses[si][ai])
+                    for ai in range(self.num_agents)
+                ]
+                judge_prompts.append(self._build_judge_prompt(questions[si], all_responses))
 
-        judge_outputs = self.llm.generate(judge_prompts, self.judge_sampling_params)
+            judge_outputs = self.llm.generate(judge_prompts, self.judge_sampling_params)
+
+            for si in range(n):
+                judge_response = judge_outputs[si].outputs[0].text.strip()
+                judge_answer = self._extract_answer(judge_response)
+
+                if judge_answer is None:
+                    final_answers = [
+                        self._extract_answer(agent_responses[si][ai])
+                        for ai in range(self.num_agents)
+                    ]
+                    fallback = self._majority_vote(final_answers, countries[si])
+                    judge_response += f"\n[Fallback majority vote]: {fallback}"
+
+                judge_responses[si] = judge_response
 
         # Build results
         results = []
         for si in range(n):
-            judge_response = judge_outputs[si].outputs[0].text.strip()
-            judge_answer = self._extract_answer(judge_response)
-
-            if judge_answer is None:
-                final_answers = [
-                    self._extract_answer(agent_responses[si][ai])
-                    for ai in range(self.num_agents)
-                ]
-                fallback = self._majority_vote(final_answers, countries[si])
-                judge_response += f"\n[Fallback majority vote]: {fallback}"
-
             formatted = ""
             for ai in range(self.num_agents):
                 formatted += f"===== Solution {ai + 1} =====\n{agent_responses[si][ai]}\n"
-            formatted += f"===== Solution {self.num_agents + 1} =====\n{judge_response}\n"
+            if self.include_judge:
+                formatted += f"===== Solution {self.num_agents + 1} =====\n{judge_responses[si]}\n"
 
             results.append({"response": formatted})
 

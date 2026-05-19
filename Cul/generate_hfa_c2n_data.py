@@ -1,23 +1,33 @@
 """
-Generate cultural alignment reasoning data using the RECONCILE MAS framework.
+Generate cultural alignment reasoning data using the HFA-C²N framework.
+
+HFA-C²N (Home-Field Authority-Activated Cross-Cultural Negotiation):
+  - Extends RECONCILE with dynamic authority activation based on target country
+  - Host-Culture Guardian generates authoritative cultural claims
+  - Cross-Cultural Auditors provide contrastive perspectives
+  - Judge weights Guardian's claims with veto mechanism
 
 Output format mirrors AgentArk LLM Debate so that the existing
 label.py / split_solutions pipeline can be reused directly.
 
 Usage:
-    # Run on 5 samples (quick test)
-    python Cul/generate_culture_data.py \
-        --input_file Cul/data/CulturalBench_mas.json \
-        --output_file Cul/data/CulturalBench_mas_inference.jsonl \
-        --model_name <path/to/model> \
-        --use_vllm --tensor_parallel_size 1 --max_samples 5
+    # Quick test (5 samples, with negotiation)
+    python Cul/generate_hfa_c2n_data.py \\
+        --input_file Cul/data/CulturalBench_mas.json \\
+        --output_file /autodl-fs/data/hfa_c2n_inference.jsonl \\
+        --model_name llama \\
+        --use_vllm --tensor_parallel_size 2 \\
+        --max_samples 5 --negotiation_rounds 1 \\
+        --include_judge true
 
-    # Full dataset (max_samples 0 = all)
-    python Cul/generate_culture_data.py \
-        --input_file Cul/data/CulturalBench_mas.json \
-        --output_file Cul/data/CulturalBench_mas_inference.jsonl \
-        --model_name <path/to/model> \
-        --use_vllm --tensor_parallel_size 1 --max_samples 0
+    # Full dataset
+    python Cul/generate_hfa_c2n_data.py \\
+        --input_file Cul/data/CulturalBench_mas.json \\
+        --output_file /autodl-fs/data/hfa_c2n_inference.jsonl \\
+        --model_name llama \\
+        --use_vllm --tensor_parallel_size 2 \\
+        --max_samples 0 --negotiation_rounds 1 \\
+        --include_judge true
 """
 
 import os
@@ -48,10 +58,7 @@ def load_dataset(path):
 
 def convert_sample(item):
     """
-    Convert CulturalBench / CultureLLM format to internal query/gt/country format.
-
-    CulturalBench fields: instruction, input (empty), output
-    CultureLLM fields:    instruction, output, Country
+    Convert CulturalBench / NormAD / CultureLLM format to internal format.
 
     Returns: {"query": str, "gt": str, "country": str}
     """
@@ -74,16 +81,16 @@ def convert_sample(item):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate cultural reasoning data via RECONCILE MAS"
+        description="Generate cultural reasoning data via HFA-C²N MAS"
     )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to CulturalBench JSON dataset")
+                        help="Path to dataset JSON file")
     parser.add_argument("--output_file", type=str, default=None,
                         help="Output JSONL path (default: auto-generated beside input)")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama / qwen) or full local path")
     parser.add_argument("--config_path", type=str, default=None,
-                        help="Path to reconcile_config.yaml")
+                        help="Path to hfa_c2n_config.yaml")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_tokens", type=int, default=1024)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
@@ -93,13 +100,15 @@ def main():
                         help="Samples per vLLM batch")
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Number of samples to process. 0 = all samples.")
-    parser.add_argument("--num_debate_rounds", type=int, default=None,
-                        help="Number of debate rounds. Overrides config value if specified.")
+    parser.add_argument("--negotiation_rounds", type=int, default=1,
+                        help="Rounds of structured negotiation. "
+                             "0 = independent (Guardian+Auditors don't see each other). "
+                             "1 = standard (Auditors see Guardian's response). "
+                             "Default: 1.")
     parser.add_argument("--include_judge", type=str, default="true",
                         choices=["true", "false"],
-                        help="Whether to include Judge reasoning in output. "
-                             "'true' = Solution N+1 includes Judge (default). "
-                             "'false' = only Agent solutions, no Judge.")
+                        help="Whether to include Judge reasoning. Default: true.")
+
     args = parser.parse_args()
     args.include_judge = args.include_judge.lower() == "true"
 
@@ -120,7 +129,7 @@ def main():
     if args.output_file is None:
         stem = Path(args.input_file).stem
         args.output_file = str(
-            Path(args.input_file).parent / f"{stem}_reconcile_infer_{timestamp}.jsonl"
+            Path(args.input_file).parent / f"{stem}_hfa_c2n_{timestamp}.jsonl"
         )
     else:
         p = Path(args.output_file)
@@ -135,10 +144,9 @@ def main():
     dataset = [convert_sample(item) for item in raw_data]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
 
-    # max_samples=0 means all; otherwise take first N
     if args.max_samples > 0:
         dataset = dataset[: args.max_samples]
-        print(f"Using first {args.max_samples} samples (max_samples={args.max_samples})")
+        print(f"Using first {args.max_samples} samples")
 
     # ------------------------------------------------------------------
     # Resume: skip already-processed samples
@@ -153,18 +161,20 @@ def main():
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
-    from Cul.reconcile_mas import ReconcileMAS
+    from Cul.hfa_c2n_mas import HFA_C2N_MAS
 
-    mas = ReconcileMAS(
+    mas = HFA_C2N_MAS(
         model_name=args.model_name,
         tensor_parallel_size=args.tensor_parallel_size,
         config_path=args.config_path,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        num_debate_rounds=args.num_debate_rounds,
         include_judge=args.include_judge,
+        negotiation_rounds=args.negotiation_rounds,
     )
-    print(f"Include Judge: {args.include_judge}")
+    print(f"HFA-C²N initialized:")
+    print(f"  Include Judge: {args.include_judge}")
+    print(f"  Negotiation rounds: {args.negotiation_rounds}")
 
     lock = threading.Lock()
 
@@ -173,11 +183,13 @@ def main():
             batch = dataset[start: start + args.batch_size]
             results = mas.inference_batch(batch)
             for sample, result in zip(batch, results):
-                write_to_jsonl(lock, args.output_file, {**sample, **result})
+                output = {**sample, **result}
+                write_to_jsonl(lock, args.output_file, output)
     else:
         for sample in tqdm(dataset, desc="Samples"):
             result = mas.inference(sample)
-            write_to_jsonl(lock, args.output_file, {**sample, **result})
+            output = {**sample, **result}
+            write_to_jsonl(lock, args.output_file, output)
 
     print(f"\nDone. Results saved to: {args.output_file}")
 

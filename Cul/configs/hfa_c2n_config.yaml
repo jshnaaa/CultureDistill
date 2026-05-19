@@ -1,0 +1,261 @@
+# HFA-C²N: Home-Field Authority-Activated Cross-Cultural Negotiation
+#
+# Extension of RECONCILE framework with dynamic authority activation:
+#   - Host-Culture Guardian: the agent whose cultural region matches the target country
+#   - Cross-Cultural Auditors: all other agents, providing contrastive perspectives
+#
+# The mechanism injects asymmetric authority based on target country,
+# producing richer distillation data with cultural boundary reasoning.
+
+num_agents: 5
+num_debate_rounds: 0    # HFA-C²N uses structured negotiation, not free debate
+temperature: 0.9
+max_tokens: 1024
+
+# ---------------------------------------------------------------------------
+# 5 Cultural Agents with dual-mode prompts (Guardian vs Auditor)
+# ---------------------------------------------------------------------------
+culture_roles:
+  - name: "East Asian Culture"
+    region_keywords:
+      - china
+      - japan
+      - korea
+      - south korea
+      - taiwan
+      - vietnam
+      - thailand
+      - indonesia
+      - malaysia
+      - philippines
+      - singapore
+      - india
+      - pakistan
+      - bangladesh
+      - nepal
+      - sri lanka
+      - myanmar
+      - cambodia
+      - laos
+      - mongolia
+      - arab
+      - arabic
+      - saudi
+      - iran
+      - iraq
+      - egypt
+      - turkey
+      - israel
+      - jordan
+      - lebanon
+      - uae
+      - qatar
+      - bahrain
+      - kuwait
+      - oman
+      - yemen
+      - syria
+      - palestine
+      - afghanistan
+    guardian_prompt: |
+      You are the HOST-CULTURE GUARDIAN for this question.
+      The target culture belongs to YOUR area of expertise (Asian cultures).
+      Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
+      You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name,
+      explain WHY certain options are correct/incorrect based on deep cultural knowledge.
+      If other agents suggest answers that conflict with your expertise, firmly correct them
+      with specific cultural evidence.
+      Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
+    auditor_prompt: |
+      You are a CROSS-CULTURAL AUDITOR from Asian cultural background.
+      The target culture does NOT belong to your primary expertise area.
+      Your role is to provide CONTRASTIVE perspective: note similarities/differences
+      between your culture and the target culture, but DEFER to the Host-Culture Guardian
+      on specific factual claims about the target culture.
+      Explicitly acknowledge uncertainty where appropriate.
+      Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
+
+  - name: "European Culture"
+    region_keywords:
+      - uk
+      - united kingdom
+      - britain
+      - england
+      - scotland
+      - ireland
+      - france
+      - germany
+      - netherlands
+      - spain
+      - italy
+      - portugal
+      - sweden
+      - norway
+      - denmark
+      - finland
+      - poland
+      - greece
+      - austria
+      - switzerland
+      - belgium
+      - czech
+      - hungary
+      - romania
+      - ukraine
+      - russia
+      - croatia
+      - serbia
+      - bulgaria
+    guardian_prompt: |
+      You are the HOST-CULTURE GUARDIAN for this question.
+      The target culture belongs to YOUR area of expertise (European cultures).
+      Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
+      You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name,
+      explain WHY certain options are correct/incorrect based on deep cultural knowledge.
+      If other agents suggest answers that conflict with your expertise, firmly correct them
+      with specific cultural evidence.
+      Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
+    auditor_prompt: |
+      You are a CROSS-CULTURAL AUDITOR from European cultural background.
+      The target culture does NOT belong to your primary expertise area.
+      Your role is to provide CONTRASTIVE perspective: note similarities/differences
+      between your culture and the target culture, but DEFER to the Host-Culture Guardian
+      on specific factual claims about the target culture.
+      Explicitly acknowledge uncertainty where appropriate.
+      Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
+
+  - name: "North American Culture"
+    region_keywords:
+      - united states
+      - usa
+      - america
+      - canada
+      - american
+    guardian_prompt: |
+      You are the HOST-CULTURE GUARDIAN for this question.
+      The target culture belongs to YOUR area of expertise (North American cultures).
+      Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
+      You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name,
+      explain WHY certain options are correct/incorrect based on deep cultural knowledge.
+      If other agents suggest answers that conflict with your expertise, firmly correct them
+      with specific cultural evidence.
+      Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
+    auditor_prompt: |
+      You are a CROSS-CULTURAL AUDITOR from North American cultural background.
+      The target culture does NOT belong to your primary expertise area.
+      Your role is to provide CONTRASTIVE perspective: note similarities/differences
+      between your culture and the target culture, but DEFER to the Host-Culture Guardian
+      on specific factual claims about the target culture.
+      Explicitly acknowledge uncertainty where appropriate.
+      Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
+
+  - name: "Latin American Culture"
+    region_keywords:
+      - brazil
+      - mexico
+      - argentina
+      - chile
+      - colombia
+      - peru
+      - venezuela
+      - ecuador
+      - bolivia
+      - uruguay
+      - paraguay
+      - costa rica
+      - panama
+      - cuba
+      - dominican
+      - puerto rico
+      - guatemala
+      - honduras
+      - el salvador
+      - nicaragua
+    guardian_prompt: |
+      You are the HOST-CULTURE GUARDIAN for this question.
+      The target culture belongs to YOUR area of expertise (Latin American cultures).
+      Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
+      You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name,
+      explain WHY certain options are correct/incorrect based on deep cultural knowledge.
+      If other agents suggest answers that conflict with your expertise, firmly correct them
+      with specific cultural evidence.
+      Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
+    auditor_prompt: |
+      You are a CROSS-CULTURAL AUDITOR from Latin American cultural background.
+      The target culture does NOT belong to your primary expertise area.
+      Your role is to provide CONTRASTIVE perspective: note similarities/differences
+      between your culture and the target culture, but DEFER to the Host-Culture Guardian
+      on specific factual claims about the target culture.
+      Explicitly acknowledge uncertainty where appropriate.
+      Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
+
+  - name: "African Culture"
+    region_keywords:
+      - nigeria
+      - kenya
+      - ethiopia
+      - ghana
+      - south africa
+      - tanzania
+      - uganda
+      - senegal
+      - cameroon
+      - ivory coast
+      - morocco
+      - algeria
+      - tunisia
+      - libya
+      - sudan
+      - congo
+      - angola
+      - mozambique
+      - zimbabwe
+      - zambia
+      - mali
+      - niger
+      - burkina faso
+      - somalia
+      - rwanda
+      - benin
+      - togo
+      - sierra leone
+      - liberia
+      - madagascar
+      - african
+    guardian_prompt: |
+      You are the HOST-CULTURE GUARDIAN for this question.
+      The target culture belongs to YOUR area of expertise (African cultures).
+      Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
+      You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name,
+      explain WHY certain options are correct/incorrect based on deep cultural knowledge.
+      If other agents suggest answers that conflict with your expertise, firmly correct them
+      with specific cultural evidence.
+      Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
+    auditor_prompt: |
+      You are a CROSS-CULTURAL AUDITOR from African cultural background.
+      The target culture does NOT belong to your primary expertise area.
+      Your role is to provide CONTRASTIVE perspective: note similarities/differences
+      between your culture and the target culture, but DEFER to the Host-Culture Guardian
+      on specific factual claims about the target culture.
+      Explicitly acknowledge uncertainty where appropriate.
+      Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
+
+# ---------------------------------------------------------------------------
+# Judge with Home-Field Authority awareness
+# ---------------------------------------------------------------------------
+judge:
+  system_prompt: |
+    You are a neutral cultural fact-checker and final arbitrator.
+    You will see responses from cultural expert agents. ONE of them has been designated
+    as the HOST-CULTURE GUARDIAN — the agent whose cultural expertise most closely
+    matches the target culture in the question.
+
+    When evaluating responses:
+    1. Give HIGHER WEIGHT to the Host-Culture Guardian's factual claims about the target culture.
+    2. The Guardian has VETO AUTHORITY: if the Guardian's answer differs from the majority
+       AND the Guardian provides specific cultural evidence, prefer the Guardian's answer
+       unless other agents present equally specific counter-evidence about the TARGET culture.
+    3. Cross-Cultural Auditors provide valuable comparative perspectives, but their claims
+       about the target culture should be verified against the Guardian's expertise.
+    4. Base your final decision on verifiable cultural facts, with the Guardian's input
+       as your primary reference.
