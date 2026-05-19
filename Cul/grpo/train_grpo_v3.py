@@ -1,5 +1,5 @@
 """
-CAMA-D Stage 3-GRPO: GRPO with Mean(R_process) Reward
+CAMA-D Stage 3-GRPO: GRPO with Mean(R_process) Reward — LoRA 版本（无 DeepSpeed）
 
 Key innovations over old GRPO (train_grpo.py):
   - R_total = alpha * R_outcome + (1-alpha) * Mean(R_process)
@@ -8,32 +8,39 @@ Key innovations over old GRPO (train_grpo.py):
   - Heuristic step splitting before PRM scoring (same rules as Stage 2)
   - alpha=0.6 (outcome-dominant, process as soft constraint)
 
-Usage:
-    # RL-only (from base model)
-    deepspeed --num_gpus 2 Cul/grpo/train_grpo_v3.py \\
-        --model_name     qwen \\
-        --grpo_data      /path/to/grpo_train.jsonl \\
-        --val_data       /path/to/prm_val.jsonl \\
-        --prm_path       /path/to/camad_prm/best \\
-        --prm_backbone   /path/to/camad_sft_qwen/best \\
-        --output_dir     /path/to/models/camad_grpo_qwen \\
-        --alpha          0.6 \\
-        --n_samples      10 \\
-        --max_rounds     30 \\
-        --eval_every     5
+Architecture (LoRA, no DeepSpeed):
+  - Policy: base model + SFT-LoRA merged + new GRPO-LoRA (trainable)
+  - Reference: same base model with adapter disabled (zero extra memory)
+  - PRM: loaded on cuda:1 for parallel scoring
+  - Gradient checkpointing enabled for memory efficiency
 
-    # SFT+RL (from Stage 1 SFT checkpoint — recommended)
-    deepspeed --num_gpus 2 Cul/grpo/train_grpo_v3.py \\
+Hardware requirement: 2×vGPU-48GB (policy on cuda:0, PRM on cuda:1)
+
+Usage:
+    # SFT+RL (from Stage 1 SFT LoRA — recommended)
+    python Cul/grpo/train_grpo_v3.py \\
         --model_name     qwen \\
-        --pretrain_path  /path/to/camad_sft_qwen/best \\
+        --sft_adapter    /path/to/camad_sft_qwen/best \\
         --grpo_data      /path/to/grpo_train.jsonl \\
         --val_data       /path/to/prm_val.jsonl \\
         --prm_path       /path/to/camad_prm/best \\
-        --prm_backbone   /path/to/camad_sft_qwen/best \\
         --output_dir     /path/to/models/camad_grpo_sft_qwen \\
         --alpha          0.6 \\
         --n_samples      10 \\
         --max_rounds     20 \\
+        --eval_every     5
+
+    # RL-only (from base model, no SFT adapter)
+    python Cul/grpo/train_grpo_v3.py \\
+        --model_name     qwen \\
+        --grpo_data      /path/to/grpo_train.jsonl \\
+        --val_data       /path/to/prm_val.jsonl \\
+        --prm_path       /path/to/camad_prm/best \\
+        --prm_backbone   /path/to/base_model \\
+        --output_dir     /path/to/models/camad_grpo_qwen \\
+        --alpha          0.6 \\
+        --n_samples      10 \\
+        --max_rounds     30 \\
         --eval_every     5
 """
 
@@ -48,7 +55,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import deepspeed
+from peft import LoraConfig, get_peft_model, PeftModel, TaskType
 
 # Import step splitting utility
 import sys
@@ -67,7 +74,7 @@ MODEL_ALIASES = {
 
 MAX_GEN_LEN = 512
 MAX_PROMPT_LEN = 512
-KL_COEF = 0.05       # KL penalty coefficient (higher than old version)
+KL_COEF = 0.05       # KL penalty coefficient
 DEFAULT_ALPHA = 0.6   # R_outcome weight
 
 
@@ -79,36 +86,43 @@ class CulturePRM_v3(nn.Module):
     """
     Process Reward Model for GRPO scoring.
 
-    Loads the trained PRM (SFT backbone + LoRA + score_head) and scores
+    Loads the trained PRM (backbone + LoRA + score_head) and scores
     each step in a reasoning path. Returns Mean(scores) as R_process.
 
     Architecture matches train_prm_mse.py:
-      - SFT backbone with LoRA adapter
+      - Backbone: base model + SFT-LoRA merged (same as PRM training time)
+      - PRM LoRA adapter on top
       - score_head: Linear(hidden, 1) + Sigmoid → (0, 1)
       - Scoring at [Step N] terminator positions
     """
 
-    def __init__(self, prm_checkpoint_dir: str, sft_backbone_path: str):
+    def __init__(self, prm_checkpoint_dir: str, backbone_path: str,
+                 sft_adapter_path: str = None):
         super().__init__()
-        from peft import PeftModel
 
-        # Load SFT backbone
+        # Load base model
         base_model = AutoModelForCausalLM.from_pretrained(
-            sft_backbone_path,
+            backbone_path,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
             output_hidden_states=True,
         )
 
-        # Load LoRA adapter
+        # Merge SFT LoRA into base (to match PRM training backbone)
+        if sft_adapter_path:
+            print(f"  [PRM-v3] Merging SFT adapter into PRM backbone: {sft_adapter_path}")
+            base_model = PeftModel.from_pretrained(base_model, sft_adapter_path)
+            base_model = base_model.merge_and_unload()
+
+        # Load PRM LoRA adapter
         adapter_path = Path(prm_checkpoint_dir) / "adapter_model.safetensors"
         adapter_path_bin = Path(prm_checkpoint_dir) / "adapter_model.bin"
         if adapter_path.exists() or adapter_path_bin.exists():
             self.model = PeftModel.from_pretrained(base_model, prm_checkpoint_dir)
-            print(f"  [PRM-v3] Loaded LoRA adapter from {prm_checkpoint_dir}")
+            print(f"  [PRM-v3] Loaded PRM LoRA adapter from {prm_checkpoint_dir}")
         else:
             self.model = base_model
-            print(f"  [PRM-v3] No adapter found, using backbone directly")
+            print(f"  [PRM-v3] No PRM adapter found, using backbone directly")
 
         # Load score_head
         hidden_size = base_model.config.hidden_size
@@ -135,16 +149,10 @@ class CulturePRM_v3(nn.Module):
         Score a full reasoning path and return Mean(R_process).
 
         Steps:
-          1. Split reasoning into [Step N] segments using heuristic rules
-          2. Tokenize the full text with step markers
-          3. Find step terminator positions
-          4. Score each step via backbone + score_head + Sigmoid
-          5. Return mean of all step scores
-
-        Args:
-            input_text: Full formatted text "[country]\\nquestion\\n[Step 1]...\\n[Step 2]..."
-            tokenizer: Tokenizer for the PRM backbone
-            device: torch device
+          1. Tokenize the full text with step markers
+          2. Find step terminator positions
+          3. Score each step via backbone + score_head + Sigmoid
+          4. Return mean of all step scores
 
         Returns:
             Mean step score ∈ [0.1, 0.9] (clamped)
@@ -400,68 +408,27 @@ def validate(model, tokenizer, val_path: str, device, max_samples: int = 200) ->
 
 
 # ---------------------------------------------------------------------------
-# DeepSpeed config
-# ---------------------------------------------------------------------------
-
-def get_ds_config(batch_size: int, micro_batch: int, lr: float) -> dict:
-    return {
-        "train_batch_size": batch_size,
-        "train_micro_batch_size_per_gpu": micro_batch,
-        "gradient_accumulation_steps": max(
-            1, batch_size // micro_batch // int(os.environ.get("WORLD_SIZE", 1))
-        ),
-        "optimizer": {
-            "type": "AdamW",
-            "params": {"lr": lr, "weight_decay": 0.0, "betas": [0.9, 0.95]}
-        },
-        "scheduler": {
-            "type": "WarmupDecayLR",
-            "params": {
-                "warmup_min_lr": 0, "warmup_max_lr": lr,
-                "warmup_num_steps": 10, "total_num_steps": 10000
-            }
-        },
-        "bf16": {"enabled": True},
-        "gradient_clipping": 1.0,
-        "zero_optimization": {
-            "stage": 3,
-            "offload_optimizer": {"device": "cpu"},
-            "offload_param": {"device": "none"},
-            "overlap_comm": True,
-            "contiguous_gradients": True,
-            "reduce_bucket_size": 5e7,
-            "stage3_prefetch_bucket_size": 5e7,
-            "stage3_param_persistence_threshold": 1e5,
-        },
-        "steps_per_print": 10,
-        "wall_clock_breakdown": False,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Main training loop
+# Main training loop (LoRA, no DeepSpeed)
 # ---------------------------------------------------------------------------
 
 def train(args):
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    device = torch.device(f"cuda:{local_rank}")
-    is_main = local_rank == 0
+    policy_device = torch.device("cuda:0")
+    prm_device = torch.device("cuda:1" if torch.cuda.device_count() > 1 else "cuda:0")
 
     model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
-    load_path = args.pretrain_path if args.pretrain_path else model_path
 
-    if is_main:
-        print(f"=" * 60)
-        print(f"CAMA-D GRPO v3: Mean(R_process) Reward")
-        print(f"=" * 60)
-        print(f"Base model:   {model_path}")
-        print(f"Load weights: {load_path} "
-              f"({'SFT checkpoint' if args.pretrain_path else 'base model'})")
-        print(f"PRM path:     {args.prm_path}")
-        print(f"PRM backbone: {args.prm_backbone}")
-        print(f"Alpha:        {args.alpha} "
-              f"(R_total = {args.alpha}*R_outcome + {1-args.alpha:.1f}*Mean(R_process))")
-        print(f"KL coef:      {KL_COEF}")
+    print(f"=" * 60)
+    print(f"CAMA-D GRPO v3: LoRA Policy + disable_adapter Reference")
+    print(f"=" * 60)
+    print(f"Base model:    {model_path}")
+    print(f"SFT adapter:   {args.sft_adapter or 'None (RL-only mode)'}")
+    print(f"PRM path:      {args.prm_path}")
+    print(f"Policy device: {policy_device}")
+    print(f"PRM device:    {prm_device}")
+    print(f"Alpha:         {args.alpha} "
+          f"(R_total = {args.alpha}*R_outcome + {1-args.alpha:.1f}*Mean(R_process))")
+    print(f"KL coef:       {KL_COEF}")
+    print(f"LoRA rank:     {args.lora_r}")
 
     # ---- Tokenizer ----
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -469,25 +436,50 @@ def train(args):
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    # ---- Policy (to be trained) ----
-    policy = AutoModelForCausalLM.from_pretrained(
-        load_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+    # ---- Build Policy model ----
+    # Step 1: Load base model
+    base_model = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
     )
 
-    # ---- Reference model (frozen, CPU-offloaded) ----
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
-    ).cpu()
-    for p in ref_model.parameters():
-        p.requires_grad_(False)
+    # Step 2: If SFT adapter exists, merge it into base (creates the SFT checkpoint in memory)
+    if args.sft_adapter:
+        print(f"  Merging SFT LoRA adapter: {args.sft_adapter}")
+        base_model = PeftModel.from_pretrained(base_model, args.sft_adapter)
+        base_model = base_model.merge_and_unload()
+        print(f"  SFT adapter merged into base model (in memory)")
 
-    # ---- PRM v3 (frozen, on GPU) ----
+    # Step 3: Apply new GRPO LoRA on top of merged model
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
+        bias="none",
+    )
+    policy = get_peft_model(base_model, lora_config).to(policy_device)
+    policy.print_trainable_parameters()
+
+    # Enable gradient checkpointing
+    policy.enable_input_require_grads()
+    policy.gradient_checkpointing_enable()
+
+    # ---- Reference model: disable_adapter on the same model (zero extra memory) ----
+    # When we call policy.disable_adapter_layers(), it acts as the reference.
+    # No need to load a separate model!
+
+    # ---- PRM v3 (frozen, on second GPU) ----
+    # PRM backbone: base model + SFT-LoRA merged (matching PRM training conditions)
+    prm_backbone = args.prm_backbone if args.prm_backbone else model_path
     prm = CulturePRM_v3(
         prm_checkpoint_dir=args.prm_path,
-        sft_backbone_path=args.prm_backbone,
-    ).to(device)
+        backbone_path=prm_backbone,
+        sft_adapter_path=args.sft_adapter,  # Merge SFT LoRA to match PRM training
+    ).to(prm_device)
     prm_tokenizer = AutoTokenizer.from_pretrained(
-        args.prm_backbone, trust_remote_code=True
+        prm_backbone, trust_remote_code=True
     )
     if prm_tokenizer.pad_token is None:
         prm_tokenizer.pad_token = prm_tokenizer.eos_token
@@ -495,14 +487,10 @@ def train(args):
         p.requires_grad_(False)
     prm.eval()
 
-    # ---- DeepSpeed init ----
-    ds_config = get_ds_config(
-        batch_size=args.train_batch_size,
-        micro_batch=args.micro_batch,
-        lr=args.lr,
-    )
-    policy_engine, optimizer, _, _ = deepspeed.initialize(
-        model=policy, config=ds_config
+    # ---- Optimizer (only GRPO LoRA params) ----
+    trainable_params = [p for p in policy.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(
+        trainable_params, lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95)
     )
 
     # ---- Dataset ----
@@ -513,9 +501,8 @@ def train(args):
     best_val_acc = 0.0
     no_improve = 0
 
-    if is_main:
-        print(f"GRPO prompts: {len(grpo_ds)} | "
-              f"Rounds: {args.max_rounds} | n_samples: {args.n_samples}")
+    print(f"GRPO prompts: {len(grpo_ds)} | "
+          f"Rounds: {args.max_rounds} | n_samples: {args.n_samples}")
 
     # ---- Training rounds ----
     for rnd in range(1, args.max_rounds + 1):
@@ -536,19 +523,19 @@ def train(args):
             prompts = [build_prompt(q, c, tokenizer)
                        for q, c in zip(queries, countries)]
 
-            # 2. Generate n_samples responses per prompt
-            policy_engine.module.eval()
+            # 2. Generate n_samples responses per prompt (policy in eval mode)
+            policy.eval()
             all_responses = generate_responses(
-                policy_engine.module, tokenizer, prompts,
+                policy, tokenizer, prompts,
                 n_samples=args.n_samples,
                 max_new_tokens=MAX_GEN_LEN,
                 temperature=args.temperature,
-                device=device,
+                device=policy_device,
             )
-            policy_engine.module.train()
+            policy.train()
 
             # 3. Compute rewards
-            rewards = torch.zeros(n_prompts, args.n_samples, device=device)
+            rewards = torch.zeros(n_prompts, args.n_samples, device=policy_device)
 
             for pi, (responses, gold, query, country) in enumerate(
                 zip(all_responses, golds, queries, countries)
@@ -558,10 +545,10 @@ def train(args):
                     pred = extract_answer(resp)
                     r_outcome = compute_r_outcome(pred, str(gold).strip())
 
-                    # R_process: Mean(PRM step scores)
+                    # R_process: Mean(PRM step scores) — scored on prm_device
                     prm_input = build_prm_input(country, query, resp)
                     r_process = prm.score_reasoning(
-                        prm_input, prm_tokenizer, device
+                        prm_input, prm_tokenizer, prm_device
                     )
 
                     # R_total = alpha * R_outcome + (1-alpha) * Mean(R_process)
@@ -578,23 +565,23 @@ def train(args):
             advantages = rloo_advantages(rewards)
 
             # 5. Policy gradient with KL penalty
-            total_loss = torch.tensor(0.0, device=device, requires_grad=False)
+            total_loss = torch.tensor(0.0, device=policy_device, requires_grad=False)
             loss_count = 0
 
             for pi, (prompt, responses) in enumerate(zip(prompts, all_responses)):
                 for si, resp in enumerate(responses):
                     adv = advantages[pi, si].item()
 
-                    # Policy log-prob
+                    # Policy log-prob (with GRPO LoRA active)
                     lp_policy = compute_logprobs(
-                        policy_engine.module, tokenizer, prompt, resp, device
+                        policy, tokenizer, prompt, resp, policy_device
                     )
 
-                    # Reference log-prob (on CPU)
-                    ref_device = next(ref_model.parameters()).device
-                    lp_ref = compute_logprobs(
-                        ref_model, tokenizer, prompt, resp, ref_device
-                    ).to(device)
+                    # Reference log-prob (disable GRPO LoRA adapter)
+                    with policy.disable_adapter():
+                        lp_ref = compute_logprobs(
+                            policy, tokenizer, prompt, resp, policy_device
+                        )
 
                     # KL penalty
                     kl = (lp_policy - lp_ref).clamp(min=-10, max=10)
@@ -608,8 +595,10 @@ def train(args):
 
             if loss_count > 0:
                 total_loss = total_loss / loss_count
-                policy_engine.backward(total_loss)
-                policy_engine.step()
+                optimizer.zero_grad()
+                total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+                optimizer.step()
                 round_loss += total_loss.item()
                 round_steps += 1
 
@@ -619,17 +608,16 @@ def train(args):
         avg_r_process = round_r_process / max(round_n, 1)
         avg_r_total = round_r_total / max(round_n, 1)
 
-        if is_main:
-            print(f"Round {rnd}/{args.max_rounds} | "
-                  f"loss={avg_loss:.4f} | "
-                  f"R_outcome={avg_r_outcome:.3f} | "
-                  f"R_process={avg_r_process:.3f} | "
-                  f"R_total={avg_r_total:.3f}")
+        print(f"Round {rnd}/{args.max_rounds} | "
+              f"loss={avg_loss:.4f} | "
+              f"R_outcome={avg_r_outcome:.3f} | "
+              f"R_process={avg_r_process:.3f} | "
+              f"R_total={avg_r_total:.3f}")
 
         # 6. Validation
-        if rnd % args.eval_every == 0 and is_main:
+        if rnd % args.eval_every == 0:
             val_acc = validate(
-                policy_engine.module, tokenizer, args.val_data, device
+                policy, tokenizer, args.val_data, policy_device
             )
             print(f"  [Eval] Round {rnd} | val_accuracy={val_acc:.4f}")
 
@@ -637,9 +625,10 @@ def train(args):
                 best_val_acc = val_acc
                 no_improve = 0
                 ckpt = Path(args.output_dir) / "best"
-                policy_engine.module.save_pretrained(str(ckpt))
+                # Save only GRPO LoRA adapter
+                policy.save_pretrained(str(ckpt))
                 tokenizer.save_pretrained(str(ckpt))
-                print(f"  ✓ Saved best (val_acc={best_val_acc:.4f}) → {ckpt}")
+                print(f"  ✓ Saved best GRPO LoRA (val_acc={best_val_acc:.4f}) → {ckpt}")
             else:
                 no_improve += 1
                 print(f"  No improvement ({no_improve}/3)")
@@ -647,9 +636,8 @@ def train(args):
                     print("Early stopping: val_accuracy not improving.")
                     break
 
-    if is_main:
-        print(f"\nTraining complete. Best val_accuracy: {best_val_acc:.4f}")
-        print(f"Best checkpoint: {args.output_dir}/best")
+    print(f"\nTraining complete. Best val_accuracy: {best_val_acc:.4f}")
+    print(f"Best GRPO LoRA adapter: {args.output_dir}/best")
 
 
 # ---------------------------------------------------------------------------
@@ -658,20 +646,23 @@ def train(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CAMA-D Stage 3-GRPO: GRPO with Mean(R_process)"
+        description="CAMA-D Stage 3-GRPO: GRPO with Mean(R_process) — LoRA"
     )
     parser.add_argument("--model_name", type=str, required=True,
                         help="'llama', 'qwen', or full model path")
+    parser.add_argument("--sft_adapter", type=str, default=None,
+                        help="Stage 1 SFT LoRA adapter path (for SFT+RL mode). "
+                             "Leave empty for RL-only mode.")
     parser.add_argument("--grpo_data", type=str, required=True,
                         help="GRPO training JSONL (prompts for online sampling)")
     parser.add_argument("--val_data", type=str, required=True,
                         help="Validation JSONL for accuracy evaluation")
     parser.add_argument("--prm_path", type=str, required=True,
                         help="CAMA-D PRM checkpoint dir (LoRA + score_head.pt)")
-    parser.add_argument("--prm_backbone", type=str, required=True,
-                        help="PRM backbone model path (Stage 1 SFT model)")
+    parser.add_argument("--prm_backbone", type=str, default=None,
+                        help="PRM backbone model path. If not set, uses base model.")
     parser.add_argument("--output_dir", type=str, required=True,
-                        help="Output directory for model checkpoints")
+                        help="Output directory for GRPO LoRA adapter")
     parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA,
                         help="R_outcome weight in R_total (default: 0.6)")
     parser.add_argument("--n_samples", type=int, default=10,
@@ -684,18 +675,13 @@ def main():
                         help="Evaluate every N rounds (default: 5)")
     parser.add_argument("--prompt_batch", type=int, default=4,
                         help="Prompts per optimizer step (default: 4)")
-    parser.add_argument("--train_batch_size", type=int, default=8,
-                        help="DeepSpeed train batch size (default: 8)")
-    parser.add_argument("--micro_batch", type=int, default=2,
-                        help="Micro batch per GPU (default: 2)")
-    parser.add_argument("--lr", type=float, default=5e-7,
-                        help="Learning rate (default: 5e-7 for RL-only, "
-                             "use 1e-7 for SFT+RL)")
-    parser.add_argument("--pretrain_path", type=str, default=None,
-                        help="SFT checkpoint for SFT+RL mode. "
-                             "Leave empty for RL-only.")
-    # DeepSpeed injects --local_rank
-    parser.add_argument("--local_rank", type=int, default=0)
+    parser.add_argument("--lr", type=float, default=5e-5,
+                        help="Learning rate for GRPO LoRA (default: 5e-5, "
+                             "use 2e-5 for SFT+RL)")
+    parser.add_argument("--lora_r", type=int, default=16,
+                        help="GRPO LoRA rank (default: 16)")
+    parser.add_argument("--lora_alpha", type=int, default=32,
+                        help="GRPO LoRA alpha (default: 32)")
     args = parser.parse_args()
 
     args.model_name = MODEL_ALIASES.get(args.model_name, args.model_name)

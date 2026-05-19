@@ -1,10 +1,11 @@
 """
-CAMA-D Stage 1: Token-level Weighted SFT (主场权威加权 SFT)
+CAMA-D Stage 1: Token-level Weighted SFT (主场权威加权 SFT) — LoRA 版本
 
 Key innovations over traditional SFT:
   - Guardian tokens: loss weight = alpha (amplified learning signal)
   - Auditor non-final round tokens: loss mask = 0 (ignore adversarial content)
   - Auditor final round tokens: loss weight = 1.0 (learn cognitive transition)
+  - LoRA fine-tuning: only adapter parameters saved (~300MB vs ~14GB)
 
 Training data: HFA-C²N multi-agent dialogue data with [GUARDIAN]/[AUDITOR] role tags.
 
@@ -15,16 +16,19 @@ Usage:
     python Cul/sft/train_sft_weighted.py \\
         --model_name  qwen \\
         --data_file   /path/to/hfa_c2n_inference.jsonl \\
-        --val_file    /path/to/prm_val.jsonl \\
         --output_dir  /path/to/models/camad_sft_qwen \\
         --alpha       2.0 \\
         --epochs      3 \\
         --batch_size  4 \\
-        --lr          2e-5
+        --lr          2e-4 \\
+        --lora_r      32
+
+    Note: --val_file is optional. If omitted, 10%% of data_file is auto-split as validation.
 """
 
 import re
 import json
+import random
 import argparse
 from pathlib import Path
 from typing import Optional
@@ -38,6 +42,7 @@ from transformers import (
     AutoModelForCausalLM,
     get_cosine_schedule_with_warmup,
 )
+from peft import LoraConfig, get_peft_model, TaskType
 
 
 MODEL_ALIASES = {
@@ -543,13 +548,14 @@ def validate(model, tokenizer, val_jsonl: str, device, max_samples: int = 200) -
 
 
 # ---------------------------------------------------------------------------
-# Training
+# Training (LoRA)
 # ---------------------------------------------------------------------------
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     print(f"Alpha (Guardian weight): {args.alpha}")
+    print(f"LoRA rank: {args.lora_r}, LoRA alpha: {args.lora_alpha}")
 
     model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
     print(f"Base model: {model_path}")
@@ -559,17 +565,62 @@ def train(args):
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
-    model = AutoModelForCausalLM.from_pretrained(
+    # Load base model
+    base_model = AutoModelForCausalLM.from_pretrained(
         model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
     ).to(device)
-    print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e9:.2f}B")
+
+    # Apply LoRA
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
+        bias="none",
+    )
+    model = get_peft_model(base_model, lora_config)
+    model.print_trainable_parameters()
+
+    # Enable gradient checkpointing for memory efficiency
+    model.enable_input_require_grads()
+    model.gradient_checkpointing_enable()
 
     # Build SFT samples from HFA-C²N data
     raw_samples = build_camad_sft_samples(args.data_file)
     if len(raw_samples) == 0:
         raise ValueError("No valid SFT samples found. Check data_file format.")
 
-    train_ds = WeightedSFTDataset(raw_samples, tokenizer, alpha=args.alpha)
+    # Determine validation data: if --val_file not provided, auto-split 10%
+    if args.val_file:
+        train_samples = raw_samples
+        val_file_path = args.val_file
+        print(f"Using external validation file: {val_file_path}")
+    else:
+        random.seed(42)
+        indices = list(range(len(raw_samples)))
+        random.shuffle(indices)
+        split_idx = max(1, int(len(raw_samples) * 0.9))
+        train_indices = indices[:split_idx]
+        val_indices = indices[split_idx:]
+        train_samples = [raw_samples[i] for i in train_indices]
+        val_samples = [raw_samples[i] for i in val_indices]
+        # Write val split to a temp JSONL for the validate() function
+        val_file_path = str(Path(args.output_dir) / "_auto_val_split.jsonl")
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        with open(val_file_path, "w", encoding="utf-8") as f:
+            for s in val_samples:
+                # Reconstruct the original format for validate()
+                f.write(json.dumps({
+                    "query": s["query"],
+                    "country": s["country"],
+                    "gt": s["gt"],
+                }, ensure_ascii=False) + "\n")
+        print(f"Auto-split: {len(train_samples)} train / {len(val_samples)} val "
+              f"(10% holdout, seed=42)")
+
+    train_ds = WeightedSFTDataset(train_samples, tokenizer, alpha=args.alpha)
     loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
@@ -579,8 +630,10 @@ def train(args):
     )
     print(f"Training batches per epoch: {len(loader)}")
 
+    # Optimizer only for trainable (LoRA) parameters
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=0.01
+        trainable_params, lr=args.lr, weight_decay=0.01
     )
     total_steps = len(loader) * args.epochs
     warmup_steps = max(1, int(total_steps * 0.05))
@@ -595,8 +648,6 @@ def train(args):
     for epoch in range(1, args.epochs + 1):
         model.train()
         total_loss = 0.0
-        guardian_loss_sum = 0.0
-        auditor_loss_sum = 0.0
 
         for step, batch in enumerate(loader, 1):
             input_ids = batch["input_ids"].to(device)
@@ -616,7 +667,7 @@ def train(args):
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()
             scheduler.step()
 
@@ -626,7 +677,7 @@ def train(args):
                       f"loss={loss.item():.4f}")
 
         avg_loss = total_loss / len(loader)
-        val_acc = validate(model, tokenizer, args.val_file, device)
+        val_acc = validate(model, tokenizer, val_file_path, device)
         print(f"Epoch {epoch}/{args.epochs} | "
               f"avg_loss={avg_loss:.4f} | val_accuracy={val_acc:.4f}")
 
@@ -634,9 +685,10 @@ def train(args):
             best_val_acc = val_acc
             no_improve = 0
             ckpt = Path(args.output_dir) / "best"
+            # Save only LoRA adapter (not full model)
             model.save_pretrained(str(ckpt))
             tokenizer.save_pretrained(str(ckpt))
-            print(f"  ✓ Saved best checkpoint (val_acc={best_val_acc:.4f}) → {ckpt}")
+            print(f"  ✓ Saved best LoRA adapter (val_acc={best_val_acc:.4f}) → {ckpt}")
         else:
             no_improve += 1
             print(f"  No improvement ({no_improve}/2)")
@@ -645,7 +697,7 @@ def train(args):
                 break
 
     print(f"\nTraining complete. Best val_accuracy: {best_val_acc:.4f}")
-    print(f"Best checkpoint: {args.output_dir}/best")
+    print(f"Best LoRA adapter: {args.output_dir}/best")
 
 
 # ---------------------------------------------------------------------------
@@ -654,24 +706,29 @@ def train(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CAMA-D Stage 1: Token-level Weighted SFT"
+        description="CAMA-D Stage 1: Token-level Weighted SFT (LoRA)"
     )
     parser.add_argument("--model_name", type=str, required=True,
                         help="'llama', 'qwen', or full model path")
     parser.add_argument("--data_file", type=str, required=True,
                         help="HFA-C²N inference JSONL (with role markers)")
-    parser.add_argument("--val_file", type=str, required=True,
-                        help="Validation JSONL for accuracy evaluation")
+    parser.add_argument("--val_file", type=str, default=None,
+                        help="Validation JSONL for accuracy evaluation "
+                             "(optional: if omitted, auto-splits 10%% from data_file)")
     parser.add_argument("--output_dir", type=str, required=True,
-                        help="Directory to save model checkpoints")
+                        help="Directory to save LoRA adapter checkpoints")
     parser.add_argument("--alpha", type=float, default=2.0,
                         help="Guardian token loss weight multiplier (default: 2.0)")
     parser.add_argument("--epochs", type=int, default=3,
                         help="Number of training epochs (default: 3)")
     parser.add_argument("--batch_size", type=int, default=4,
                         help="Batch size (default: 4)")
-    parser.add_argument("--lr", type=float, default=2e-5,
-                        help="Learning rate (default: 2e-5)")
+    parser.add_argument("--lr", type=float, default=2e-4,
+                        help="Learning rate for LoRA (default: 2e-4)")
+    parser.add_argument("--lora_r", type=int, default=32,
+                        help="LoRA rank (default: 32)")
+    parser.add_argument("--lora_alpha", type=int, default=64,
+                        help="LoRA alpha (default: 64)")
     args = parser.parse_args()
     train(args)
 

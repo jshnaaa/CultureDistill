@@ -1197,7 +1197,7 @@ Cul/
 
 | 文件 | 功能 |
 |------|------|
-| `sft/train_sft_weighted.py` | 从 HFA-C²N 数据中提取角色标签，构造 Token 级 loss_mask（Auditor 非最终轮掩码）和 loss_weight（Guardian×α 放大），训练 student model |
+| `sft/train_sft_weighted.py` | 从 HFA-C²N 数据中提取角色标签，构造 Token 级 loss_mask（Auditor 非最终轮掩码）和 loss_weight（Guardian×α 放大），LoRA 微调 student model（rank=32，仅保存 adapter）|
 
 **Stage 2: 开卷式步骤标注**
 
@@ -1211,14 +1211,14 @@ Cul/
 
 | 文件 | 功能 |
 |------|------|
-| `prm/train_prm_mse.py` | 以 Stage 1 SFT model 为基座 + LoRA + Linear score_head + Sigmoid，用类别加权 MSE 在步骤标签上训练。加权：0.9→W=2.5, 0.1→W=2.0, 0.5→W=1.0 |
+| `prm/train_prm_mse.py` | 以 base model + SFT-LoRA 合并 为基座 + 新 PRM-LoRA + Linear score_head + Sigmoid，用类别加权 MSE 在步骤标签上训练。加权：0.9→W=2.5, 0.1→W=2.0, 0.5→W=1.0 |
 | `prm/eval_prm.py` | PRM 综合评估：三分类准确率（目标>70%）、确权步召回率（>75%）、混淆步召回率（>65%）、Spearman（>0.6）|
 
 **Stage 3-GRPO: 强化学习**
 
 | 文件 | 功能 |
 |------|------|
-| `grpo/train_grpo_v3.py` | GRPO 在线采样 → 启发式切步 → PRM 逐步打分 → Mean(R_process) → R_total = 0.6×R_outcome + 0.4×Mean(R_process) → RLOO Advantage → 策略梯度更新。DeepSpeed ZeRO-3 |
+| `grpo/train_grpo_v3.py` | GRPO 在线采样 → 启发式切步 → PRM 逐步打分 → Mean(R_process) → R_total = 0.6×R_outcome + 0.4×Mean(R_process) → RLOO Advantage → 策略梯度更新。LoRA Policy + `disable_adapter()` Reference，无 DeepSpeed |
 
 ### 9.3 运行命令
 
@@ -1229,9 +1229,7 @@ python Cul/run_camad_pipeline.py \
     --mode sft_rl \
     --model_name qwen \
     --hfa_c2n_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
-    --val_file /autodl-fs/data/qwen/splits/normad_prm_val.jsonl \
-    --output_root /autodl-fs/data/qwen/normad_sftrl_camad_outputs \
-    --num_gpus 2
+    --output_root /autodl-fs/data/model/qwen/normad_sftrl_camad_outputs
 ```
 
 ```bash
@@ -1239,9 +1237,7 @@ python Cul/run_camad_pipeline.py \
     --mode sft_only \
     --model_name qwen \
     --hfa_c2n_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
-    --val_file /autodl-fs/data/qwen/splits/normad_prm_val.jsonl \
-    --output_root /autodl-fs/data/qwen/normad_sft_camad_outputs \
-    --num_gpus 2
+    --output_root /autodl-fs/data/model/qwen/normad_sft_camad_outputs
 ```
 
 ```bash
@@ -1249,9 +1245,7 @@ python Cul/run_camad_pipeline.py \
     --mode rl_only \
     --model_name qwen \
     --hfa_c2n_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
-    --val_file /autodl-fs/data/qwen/splits/normad_prm_val.jsonl \
-    --output_root /autodl-fs/data/qwen/normad_rl_camad_outputs \
-    --num_gpus 2
+    --output_root /autodl-fs/data/model/qwen/normad_rl_camad_outputs
 ```
 
 参数说明：
@@ -1260,18 +1254,18 @@ python Cul/run_camad_pipeline.py \
 |------|------|
 | `--mode` | 训练模式：`full`（含数据生成）、`sft_only`、`rl_only`、`sft_rl`（推荐）|
 | `--model_name` | Student 模型：`qwen`（Qwen2.5-7B）或 `llama`（Llama-3.1-8B）|
-| `--hfa_c2n_data` | 预生成的 HFA-C²N 推理数据 JSONL |
-| `--val_file` | 验证集 JSONL（用于 SFT/GRPO 的 accuracy 评估）|
+| `--hfa_c2n_data` | HFA-C²N 推理数据 JSONL（自动按 90%/10% 划分为训练集和分布内验证集）|
+| `--val_file` | 可选，外部提供验证集。未指定时自动从 `--hfa_c2n_data` 中切分 10% 作为验证集 |
 | `--output_root` | 输出根目录，自动创建 `data/` 和 `models/` 子目录 |
-| `--num_gpus` | GPU 数量（GRPO 阶段使用 DeepSpeed ZeRO-3）|
+| `--num_gpus` | GPU 数量（仅用于 vLLM 推理阶段，训练阶段使用模型放置）|
 
 #### 分步运行
 
 **Phase 0: HFA-C²N 数据生成**
 ```bash
 python Cul/generate_hfa_c2n_data.py \
-    --input_file Cul/data/CulturalBench_mas.json \
-    --output_file /path/to/hfa_c2n_inference.jsonl \
+    --input_file /autodl-fs/data/normad_merge_gen.json \
+    --output_file /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
     --model_name qwen \
     --use_vllm --tensor_parallel_size 2 \
     --negotiation_rounds 1 --include_judge true
@@ -1284,29 +1278,31 @@ python Cul/generate_hfa_c2n_data.py \
 | `--negotiation_rounds` | 协商轮数（0=独立推理，1=标准协商）|
 | `--include_judge` | 是否包含 Judge 裁决环节 |
 
-**Phase 1: Stage 1 Token 级加权 SFT**
+**Phase 1: Stage 1 Token 级加权 SFT（LoRA）**
 ```bash
 python Cul/sft/train_sft_weighted.py \
     --model_name qwen \
-    --data_file /path/to/hfa_c2n_inference.jsonl \
-    --val_file /path/to/prm_val.jsonl \
-    --output_dir /path/to/models/camad_sft_qwen \
+    --data_file /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --output_dir /autodl-fs/data/model/qwen/normad_camad_sft \
     --alpha 2.0 \
     --epochs 3 \
     --batch_size 4 \
-    --lr 2e-5
+    --lr 2e-4 \
+    --lora_r 32
 ```
 
 | 参数 | 含义 |
 |------|------|
 | `--alpha` | Guardian Token 的 loss 权重放大系数（默认 2.0）|
 | `--data_file` | HFA-C²N 推理数据（含 [GUARDIAN]/[AUDITOR] 角色标签）|
+| `--lora_r` | LoRA rank（默认 32，保证文化知识充分学习）|
+| `--lr` | 学习率（LoRA 默认 2e-4，高于全参微调）|
 
 **Phase 2a: 启发式步骤切分**
 ```bash
 python Cul/step_label/split_steps.py \
-    --input_file /path/to/hfa_c2n_inference.jsonl \
-    --output_file /path/to/steps_split.jsonl \
+    --input_file /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --output_file /autodl-fs/data/qwen/normad_steps_split.jsonl \
     --max_sentences_per_step 3 \
     --sources guardian
 ```
@@ -1319,11 +1315,11 @@ python Cul/step_label/split_steps.py \
 **Phase 2b: 开卷式审计器打标**
 ```bash
 python Cul/step_label/label_steps.py \
-    --input_file /path/to/steps_split.jsonl \
-    --output_file /path/to/step_labels.jsonl \
+    --input_file /autodl-fs/data/qwen/normad_steps_split.jsonl \
+    --output_file /autodl-fs/data/qwen/normad_step_labels.jsonl \
     --model_name qwen \
     --batch_size 64 \
-    --tensor_parallel_size 1 \
+    --tensor_parallel_size 2 \
     --validate_consistency
 ```
 
@@ -1336,17 +1332,18 @@ python Cul/step_label/label_steps.py \
 **Phase 2c: 标注验证报告**
 ```bash
 python Cul/step_label/validate_labels.py \
-    --input_file /path/to/step_labels.jsonl \
+    --input_file /autodl-fs/data/qwen/normad_step_labels.jsonl \
     --report
 ```
 
-**Phase 3: Culture-Aware PRM 训练**
+**Phase 3: Culture-Aware PRM 训练（LoRA）**
 ```bash
 python Cul/prm/train_prm_mse.py \
-    --sft_model_path /path/to/models/camad_sft_qwen/best \
-    --train_file /path/to/step_labels_train.jsonl \
-    --val_file /path/to/step_labels_val.jsonl \
-    --output_dir /path/to/models/camad_prm \
+    --base_model_path /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+    --sft_adapter_path /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --train_file /autodl-fs/data/qwen/normad_step_labels_train.jsonl \
+    --val_file /autodl-fs/data/qwen/normad_step_labels_val.jsonl \
+    --output_dir /autodl-fs/data/model/qwen/normad_camad_prm \
     --epochs 5 \
     --batch_size 8 \
     --lr_head 5e-5 \
@@ -1356,55 +1353,77 @@ python Cul/prm/train_prm_mse.py \
 
 | 参数 | 含义 |
 |------|------|
-| `--sft_model_path` | Stage 1 SFT 模型路径（作为 PRM 基座）|
+| `--base_model_path` | 基座模型路径（Qwen2.5-7B 或 Llama-3.1-8B）|
+| `--sft_adapter_path` | Stage 1 SFT LoRA adapter 路径（会 merge 到 base 中作为 PRM 基座）|
 | `--lr_head` | score_head 学习率（默认 5e-5）|
-| `--lr_lora` | LoRA 参数学习率（默认 1e-4）|
-| `--lora_r` | LoRA rank（默认 16）|
+| `--lr_lora` | PRM LoRA 参数学习率（默认 1e-4）|
+| `--lora_r` | PRM LoRA rank（默认 16）|
 
 **Phase 3: PRM 评估**
 ```bash
 python Cul/prm/eval_prm.py \
-    --prm_path /path/to/models/camad_prm/best \
-    --sft_path /path/to/models/camad_sft_qwen/best \
-    --val_file /path/to/step_labels_val.jsonl
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --sft_path /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --val_file /autodl-fs/data/qwen/normad_step_labels_val.jsonl
 ```
 
-**Phase 4: GRPO 强化学习（SFT+RL 模式）**
+**Phase 4: GRPO 强化学习（SFT+RL 模式，LoRA，无 DeepSpeed）**
 ```bash
-deepspeed --num_gpus 2 Cul/grpo/train_grpo_v3.py \
+python Cul/grpo/train_grpo_v3.py \
     --model_name qwen \
-    --pretrain_path /path/to/models/camad_sft_qwen/best \
-    --grpo_data /path/to/grpo_train.jsonl \
-    --val_data /path/to/prm_val.jsonl \
-    --prm_path /path/to/models/camad_prm/best \
-    --prm_backbone /path/to/models/camad_sft_qwen/best \
-    --output_dir /path/to/models/camad_grpo_sft_rl \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --grpo_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --val_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --prm_backbone /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+    --output_dir /autodl-fs/data/model/qwen/normad_camad_grpo \
     --alpha 0.6 \
     --n_samples 10 \
     --max_rounds 20 \
     --eval_every 5 \
-    --lr 1e-7
+    --lr 2e-5 \
+    --lora_r 16
 ```
 
 | 参数 | 含义 |
 |------|------|
-| `--pretrain_path` | SFT 模型路径（RL-only 模式不传此参数）|
+| `--sft_adapter` | SFT LoRA adapter 路径（RL-only 模式不传此参数）|
 | `--prm_path` | PRM checkpoint（含 LoRA adapter + score_head.pt）|
-| `--prm_backbone` | PRM 基座模型路径（即 SFT 模型）|
+| `--prm_backbone` | PRM 基座模型路径（原始 base model）|
 | `--alpha` | R_total 中 R_outcome 的权重（默认 0.6）|
 | `--n_samples` | 每 prompt 每轮采样数 G（默认 10）|
 | `--max_rounds` | 最大训练轮数（SFT+RL 建议 20，RL-only 建议 30）|
-| `--lr` | 学习率（SFT+RL 用 1e-7，RL-only 用 5e-7）|
+| `--lr` | GRPO LoRA 学习率（SFT+RL 用 2e-5，RL-only 用 5e-5）|
+| `--lora_r` | GRPO LoRA rank（默认 16）|
 
 ### 9.4 计算资源需求
 
-| 阶段 | GPU 需求 | 预估时间 | 说明 |
-|------|---------|---------|------|
-| Phase 0 数据生成 | 2 GPU | ~2h (2633 samples) | vLLM tensor parallel |
-| Phase 1 SFT | 1 GPU | ~1h (3 epochs) | 全参微调 7B/8B |
-| Phase 2 标注 | 1 GPU | ~30min | vLLM batch inference |
-| Phase 3 PRM | 1 GPU | ~30min (5 epochs) | LoRA + score_head |
-| Phase 4 GRPO | 2 GPU | ~4h (20-30 rounds) | DeepSpeed ZeRO-3 |
+**硬件要求：2×vGPU-48GB（总计 96GB 显存）**
+
+所有训练阶段均使用 LoRA + 梯度检查点，无需 DeepSpeed。单卡 48GB 可容纳 7B/8B 模型的 LoRA 微调。
+
+| 阶段 | GPU 需求 | 显存估算 | 预估时间 | 说明 |
+|------|---------|---------|---------|------|
+| Phase 0 数据生成 | 2 GPU | ~30GB (vLLM) | ~2h (2633 samples) | vLLM tensor parallel |
+| Phase 1 SFT | 1 GPU | ~22GB | ~40min (3 epochs) | LoRA rank=32 + gradient ckpt |
+| Phase 2 标注 | 1-2 GPU | ~30GB (vLLM) | ~30min | vLLM batch inference |
+| Phase 3 PRM | 1 GPU | ~24GB | ~30min (5 epochs) | base+SFT合并 + PRM LoRA rank=16 |
+| Phase 4 GRPO | 2 GPU | cuda:0 ~28GB, cuda:1 ~16GB | ~4h (20 rounds) | Policy LoRA on cuda:0, PRM on cuda:1 |
+
+**存储估算（仅保存 LoRA adapter，不保存全量模型）：**
+
+| 产物 | 体积 | 说明 |
+|------|------|------|
+| SFT LoRA adapter | ~200MB | rank=32, 7 target modules |
+| PRM LoRA adapter + score_head.pt | ~80MB | rank=16, 4 target modules + Linear |
+| GRPO LoRA adapter | ~80MB | rank=16, 7 target modules |
+| **总计** | **~360MB** | 相比全参保存 ~28GB 减少 99% |
+
+**GRPO 显存分布明细：**
+
+- cuda:0（Policy）：base model bf16 ~14GB + LoRA ~80MB + optimizer states ~400MB + gradient ckpt ~8GB + generation KV cache ~5GB ≈ **~28GB**
+- cuda:1（PRM）：base model bf16 ~14GB + PRM LoRA ~40MB + score_head ~1MB ≈ **~16GB**
+- Reference model：与 Policy 共享同一模型，通过 `disable_adapter()` 实现，**零额外显存**
 
 ---
 

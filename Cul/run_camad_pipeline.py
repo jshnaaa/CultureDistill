@@ -15,8 +15,7 @@ Usage (full pipeline):
         --mode full \\
         --model_name qwen \\
         --hfa_c2n_data /path/to/hfa_c2n_inference.jsonl \\
-        --output_root /path/to/camad_outputs \\
-        --num_gpus 2
+        --output_root /path/to/camad_outputs
 
 Usage (individual stages):
     python Cul/run_camad_pipeline.py --mode sft_only --model_name qwen ...
@@ -46,11 +45,12 @@ MODEL_ALIASES = {
 
 # Default hyperparameters
 DEFAULTS = {
-    # Stage 1: Weighted SFT
+    # Stage 1: Weighted SFT (LoRA)
     "sft_alpha": 2.0,
     "sft_epochs": 3,
     "sft_batch_size": 4,
-    "sft_lr": 2e-5,
+    "sft_lr": 2e-4,
+    "sft_lora_r": 32,
     # Stage 2: Step labeling
     "max_sentences_per_step": 3,
     "label_batch_size": 64,
@@ -60,14 +60,15 @@ DEFAULTS = {
     "prm_lr_head": 5e-5,
     "prm_lr_lora": 1e-4,
     "prm_lora_r": 16,
-    # Stage 3-GRPO
+    # Stage 3-GRPO (LoRA)
     "grpo_alpha": 0.6,
     "grpo_n_samples": 10,
     "grpo_max_rounds": 30,
     "grpo_eval_every": 5,
-    "grpo_lr_rl_only": 5e-7,
-    "grpo_lr_sft_rl": 1e-7,
+    "grpo_lr_rl_only": 5e-5,
+    "grpo_lr_sft_rl": 2e-5,
     "grpo_temperature": 0.7,
+    "grpo_lora_r": 16,
 }
 
 
@@ -109,7 +110,7 @@ def run_phase0_data_generation(args, output_root: Path) -> str:
 
 
 def run_phase1_sft(args, hfa_data: str, val_file: str, output_root: Path) -> str:
-    """Phase 1: Stage 1 — Token-level Weighted SFT."""
+    """Phase 1: Stage 1 — Token-level Weighted SFT (LoRA)."""
     sft_output = str(output_root / "models" / "camad_sft")
     cmd = [
         sys.executable, "Cul/sft/train_sft_weighted.py",
@@ -121,8 +122,9 @@ def run_phase1_sft(args, hfa_data: str, val_file: str, output_root: Path) -> str
         "--epochs", str(DEFAULTS["sft_epochs"]),
         "--batch_size", str(DEFAULTS["sft_batch_size"]),
         "--lr", str(DEFAULTS["sft_lr"]),
+        "--lora_r", str(DEFAULTS["sft_lora_r"]),
     ]
-    rc = run_cmd(cmd, "Phase 1: Token-level Weighted SFT (Stage 1)")
+    rc = run_cmd(cmd, "Phase 1: Token-level Weighted SFT — LoRA (Stage 1)")
     if rc != 0:
         raise RuntimeError("Phase 1 (SFT) failed")
     return str(Path(sft_output) / "best")
@@ -169,24 +171,36 @@ def run_phase2_step_labeling(args, hfa_data: str, output_root: Path) -> tuple:
     run_cmd(cmd, "Phase 2c: Label Validation Report")
 
     # Split into train/val for PRM
-    train_file, val_file = split_label_data(label_output, data_dir)
+    train_file, val_file = split_jsonl_data(
+        label_output, data_dir,
+        "step_labels_train.jsonl", "step_labels_val.jsonl",
+        val_ratio=0.2,
+    )
     return train_file, val_file
 
 
-def split_label_data(label_file: str, data_dir: Path) -> tuple:
-    """Split labeled data into train (80%) and val (20%) for PRM training."""
+def split_jsonl_data(input_file: str, data_dir: Path,
+                     train_name: str, val_name: str,
+                     val_ratio: float = 0.2) -> tuple:
+    """
+    Split a JSONL file into train and val sets.
+
+    Used for:
+      - HFA-C²N data → SFT train / SFT+GRPO val
+      - Step label data → PRM train / PRM val
+    """
     import random
     random.seed(42)
 
-    samples = [json.loads(l) for l in open(label_file, encoding="utf-8")]
+    samples = [json.loads(l) for l in open(input_file, encoding="utf-8")]
     random.shuffle(samples)
 
-    n_val = max(1, int(len(samples) * 0.2))
+    n_val = max(1, int(len(samples) * val_ratio))
     val_samples = samples[:n_val]
     train_samples = samples[n_val:]
 
-    train_file = str(data_dir / "step_labels_train.jsonl")
-    val_file = str(data_dir / "step_labels_val.jsonl")
+    train_file = str(data_dir / train_name)
+    val_file = str(data_dir / val_name)
 
     with open(train_file, "w", encoding="utf-8") as f:
         for s in train_samples:
@@ -196,17 +210,26 @@ def split_label_data(label_file: str, data_dir: Path) -> tuple:
         for s in val_samples:
             f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
-    print(f"  PRM data split: train={len(train_samples)}, val={len(val_samples)}")
+    print(f"  Data split: train={len(train_samples)}, val={len(val_samples)} "
+          f"({val_ratio*100:.0f}% val)")
     return train_file, val_file
 
 
-def run_phase3_prm(args, sft_path: str, train_file: str,
+def run_phase3_prm(args, sft_adapter_path: str, train_file: str,
                    val_file: str, output_root: Path) -> str:
-    """Phase 3: Stage 3-PRM — Culture-Aware PRM Training."""
+    """
+    Phase 3: Stage 3-PRM — Culture-Aware PRM Training (LoRA).
+
+    Since SFT is LoRA, PRM needs:
+      --base_model_path: the original base model
+      --sft_adapter_path: SFT LoRA adapter to merge into backbone
+    """
     prm_output = str(output_root / "models" / "camad_prm")
+    base_model = MODEL_ALIASES.get(args.model_name, args.model_name)
     cmd = [
         sys.executable, "Cul/prm/train_prm_mse.py",
-        "--sft_model_path", sft_path,
+        "--base_model_path", base_model,
+        "--sft_adapter_path", sft_adapter_path,
         "--train_file", train_file,
         "--val_file", val_file,
         "--output_dir", prm_output,
@@ -216,29 +239,34 @@ def run_phase3_prm(args, sft_path: str, train_file: str,
         "--lr_lora", str(DEFAULTS["prm_lr_lora"]),
         "--lora_r", str(DEFAULTS["prm_lora_r"]),
     ]
-    rc = run_cmd(cmd, "Phase 3: Culture-Aware PRM Training (Stage 3-PRM)")
+    rc = run_cmd(cmd, "Phase 3: Culture-Aware PRM Training — LoRA (Stage 3-PRM)")
     if rc != 0:
         raise RuntimeError("Phase 3 (PRM) failed")
     return str(Path(prm_output) / "best")
 
 
-def run_phase4_grpo(args, sft_path: str, prm_path: str,
+def run_phase4_grpo(args, sft_adapter_path: str, prm_path: str,
                     grpo_data: str, val_data: str,
                     output_root: Path, mode: str) -> str:
-    """Phase 4: Stage 3-GRPO — GRPO with Mean(R_process)."""
+    """
+    Phase 4: Stage 3-GRPO — GRPO with Mean(R_process) (LoRA, no DeepSpeed).
+
+    Launches via plain Python (no deepspeed). Policy uses GRPO LoRA
+    on merged SFT model; reference via disable_adapter.
+    """
     grpo_output = str(output_root / "models" / f"camad_grpo_{mode}")
+    base_model = MODEL_ALIASES.get(args.model_name, args.model_name)
 
     lr = DEFAULTS["grpo_lr_sft_rl"] if mode == "sft_rl" else DEFAULTS["grpo_lr_rl_only"]
     max_rounds = 20 if mode == "sft_rl" else DEFAULTS["grpo_max_rounds"]
 
     cmd = [
-        "deepspeed", "--num_gpus", str(args.num_gpus),
-        "Cul/grpo/train_grpo_v3.py",
+        sys.executable, "Cul/grpo/train_grpo_v3.py",
         "--model_name", args.model_name,
         "--grpo_data", grpo_data,
         "--val_data", val_data,
         "--prm_path", prm_path,
-        "--prm_backbone", sft_path,
+        "--prm_backbone", base_model,
         "--output_dir", grpo_output,
         "--alpha", str(DEFAULTS["grpo_alpha"]),
         "--n_samples", str(DEFAULTS["grpo_n_samples"]),
@@ -246,12 +274,13 @@ def run_phase4_grpo(args, sft_path: str, prm_path: str,
         "--eval_every", str(DEFAULTS["grpo_eval_every"]),
         "--temperature", str(DEFAULTS["grpo_temperature"]),
         "--lr", str(lr),
+        "--lora_r", str(DEFAULTS["grpo_lora_r"]),
     ]
 
     if mode == "sft_rl":
-        cmd.extend(["--pretrain_path", sft_path])
+        cmd.extend(["--sft_adapter", sft_adapter_path])
 
-    rc = run_cmd(cmd, f"Phase 4: GRPO ({mode}) with Mean(R_process)")
+    rc = run_cmd(cmd, f"Phase 4: GRPO ({mode}) — LoRA with Mean(R_process)")
     if rc != 0:
         raise RuntimeError(f"Phase 4 (GRPO {mode}) failed")
     return str(Path(grpo_output) / "best")
@@ -282,7 +311,8 @@ def main():
     parser.add_argument("--output_root", type=str, required=True,
                         help="Root directory for all outputs")
     parser.add_argument("--num_gpus", type=int, default=2,
-                        help="Number of GPUs (default: 2)")
+                        help="Number of GPUs for vLLM inference (default: 2). "
+                             "Training uses model placement, not data parallelism.")
     args = parser.parse_args()
 
     # Resolve model name
@@ -310,7 +340,12 @@ def main():
             # Phase 0: Data generation
             hfa_data = run_phase0_data_generation(args, output_root)
             if not val_file:
-                val_file = hfa_data  # Use same data for now
+                # Auto-split: 90% train, 10% val (from HFA-C²N data)
+                hfa_data, val_file = split_jsonl_data(
+                    hfa_data, output_root / "data",
+                    "hfa_c2n_train.jsonl", "hfa_c2n_val.jsonl",
+                    val_ratio=0.1,
+                )
             if not grpo_data:
                 grpo_data = hfa_data
 
@@ -338,7 +373,12 @@ def main():
             if not hfa_data:
                 raise ValueError("--hfa_c2n_data required for sft_only mode")
             if not val_file:
-                raise ValueError("--val_file required")
+                # Auto-split: 90% train, 10% val
+                hfa_data, val_file = split_jsonl_data(
+                    hfa_data, output_root / "data",
+                    "hfa_c2n_train.jsonl", "hfa_c2n_val.jsonl",
+                    val_ratio=0.1,
+                )
 
             sft_path = run_phase1_sft(args, hfa_data, val_file, output_root)
             final_model = sft_path
@@ -348,7 +388,12 @@ def main():
             if not hfa_data:
                 raise ValueError("--hfa_c2n_data required for rl_only mode")
             if not val_file:
-                raise ValueError("--val_file required")
+                # Auto-split: 90% train, 10% val
+                hfa_data, val_file = split_jsonl_data(
+                    hfa_data, output_root / "data",
+                    "hfa_c2n_train.jsonl", "hfa_c2n_val.jsonl",
+                    val_ratio=0.1,
+                )
             if not grpo_data:
                 grpo_data = hfa_data
 
@@ -377,7 +422,12 @@ def main():
             if not hfa_data:
                 raise ValueError("--hfa_c2n_data required for sft_rl mode")
             if not val_file:
-                raise ValueError("--val_file required")
+                # Auto-split: 90% train, 10% val
+                hfa_data, val_file = split_jsonl_data(
+                    hfa_data, output_root / "data",
+                    "hfa_c2n_train.jsonl", "hfa_c2n_val.jsonl",
+                    val_ratio=0.1,
+                )
             if not grpo_data:
                 grpo_data = hfa_data
 

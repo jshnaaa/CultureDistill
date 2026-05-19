@@ -1,7 +1,7 @@
 """
 CAMA-D Stage 3-PRM: Culture-Aware PRM Training (类别加权 MSE)
 
-Architecture: SFT Model (Stage 1 output) + LoRA + Linear score_head + Sigmoid
+Architecture: Base Model + SFT-LoRA (merged) + PRM-LoRA + Linear score_head + Sigmoid
 Loss: Class-weighted MSE on step-level labels {0.1, 0.5, 0.9}
 Input: Full reasoning path with [Step N] markers
 Output: Per-step score ∈ (0, 1) via Sigmoid activation
@@ -9,12 +9,14 @@ Output: Per-step score ∈ (0, 1) via Sigmoid activation
 Key differences from old PRM (Bradley-Terry):
   - Uses absolute step-level labels instead of pairwise preferences
   - Class-weighted MSE to prevent "lazy neutral" collapse
-  - Based on SFT model (already has cultural representations)
+  - Backbone = base model + SFT LoRA merged (preserves cultural representations)
+  - A new PRM-specific LoRA is trained on top
   - Sigmoid output naturally aligns with [0, 1] label space
 
 Usage:
     python Cul/prm/train_prm_mse.py \\
-        --sft_model_path  /path/to/camad_sft_qwen/best \\
+        --base_model_path /path/to/Qwen2.5-7B-Instruct \\
+        --sft_adapter_path /path/to/camad_sft_qwen/best \\
         --train_file      /path/to/step_labels.jsonl \\
         --val_file        /path/to/step_labels_val.jsonl \\
         --output_dir      /path/to/models/camad_prm \\
@@ -37,14 +39,14 @@ from transformers import (
     AutoModelForCausalLM,
     get_cosine_schedule_with_warmup,
 )
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, PeftModel, TaskType
 
 
 MAX_SEQ_LEN = 2048
 
 
 # ---------------------------------------------------------------------------
-# Model: CulturePRM (SFT backbone + LoRA + score_head + Sigmoid)
+# Model: CulturePRM (Base + SFT-LoRA merged + PRM-LoRA + score_head + Sigmoid)
 # ---------------------------------------------------------------------------
 
 class CulturePRM(nn.Module):
@@ -52,8 +54,8 @@ class CulturePRM(nn.Module):
     Process Reward Model for culture-aware step scoring.
 
     Architecture:
-      - Backbone: Stage 1 SFT model (already has cultural representations)
-      - Adapter: LoRA (rank=16) to avoid destroying generation capability
+      - Backbone: Base model + SFT LoRA (merged) — has cultural representations
+      - Adapter: New PRM LoRA (rank=16) trained on step labels
       - Head: Linear(hidden_size, 1) + Sigmoid → score ∈ (0, 1)
 
     Scoring mechanism:
@@ -61,19 +63,27 @@ class CulturePRM(nn.Module):
       - Pass through score_head + Sigmoid to get step score
     """
 
-    def __init__(self, sft_model_path: str, lora_r: int = 16,
-                 lora_alpha: int = 32, lora_dropout: float = 0.05):
+    def __init__(self, base_model_path: str, sft_adapter_path: str = None,
+                 lora_r: int = 16, lora_alpha: int = 32,
+                 lora_dropout: float = 0.05):
         super().__init__()
 
-        # Load SFT backbone
+        # Load base model
         base_model = AutoModelForCausalLM.from_pretrained(
-            sft_model_path,
+            base_model_path,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
             output_hidden_states=True,
         )
 
-        # Apply LoRA
+        # Merge SFT LoRA into base (if provided)
+        if sft_adapter_path:
+            print(f"  [PRM] Merging SFT LoRA adapter: {sft_adapter_path}")
+            base_model = PeftModel.from_pretrained(base_model, sft_adapter_path)
+            base_model = base_model.merge_and_unload()
+            print(f"  [PRM] SFT adapter merged into backbone (in memory)")
+
+        # Apply new PRM-specific LoRA on the merged model
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_r,
@@ -84,6 +94,10 @@ class CulturePRM(nn.Module):
         )
         self.backbone = get_peft_model(base_model, lora_config)
         self.backbone.print_trainable_parameters()
+
+        # Enable gradient checkpointing
+        self.backbone.enable_input_require_grads()
+        self.backbone.gradient_checkpointing_enable()
 
         # Score head
         hidden_size = base_model.config.hidden_size
@@ -404,17 +418,19 @@ def evaluate(model: CulturePRM, loader: DataLoader, device) -> dict:
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    print(f"SFT model (PRM backbone): {args.sft_model_path}")
+    print(f"Base model: {args.base_model_path}")
+    print(f"SFT adapter: {args.sft_adapter_path or 'None (using base directly)'}")
 
     tokenizer = AutoTokenizer.from_pretrained(
-        args.sft_model_path, trust_remote_code=True
+        args.base_model_path, trust_remote_code=True
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Build model
+    # Build model: base + merged SFT LoRA + new PRM LoRA
     model = CulturePRM(
-        sft_model_path=args.sft_model_path,
+        base_model_path=args.base_model_path,
+        sft_adapter_path=args.sft_adapter_path,
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
     ).to(device)
@@ -520,8 +536,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="CAMA-D Stage 3-PRM: Culture-Aware PRM Training"
     )
-    parser.add_argument("--sft_model_path", type=str, required=True,
-                        help="Path to Stage 1 SFT model (PRM backbone)")
+    parser.add_argument("--base_model_path", type=str, required=True,
+                        help="Path to base model (e.g., Qwen2.5-7B-Instruct)")
+    parser.add_argument("--sft_adapter_path", type=str, default=None,
+                        help="Path to Stage 1 SFT LoRA adapter (merged into base)")
     parser.add_argument("--train_file", type=str, required=True,
                         help="Step-labeled JSONL from label_steps.py")
     parser.add_argument("--val_file", type=str, required=True,
