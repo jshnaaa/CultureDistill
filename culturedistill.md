@@ -1228,7 +1228,26 @@ Cul/
 python Cul/run_camad_pipeline.py \
     --mode sft_rl \
     --model_name qwen \
-    --hfa_c2n_data /path/to/hfa_c2n_inference.jsonl \
+    --hfa_c2n_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --val_file /path/to/prm_val.jsonl \
+    --output_root /path/to/camad_outputs \
+    --num_gpus 2
+```
+```bash
+python Cul/run_camad_pipeline.py \
+    --mode sft_only \
+    --model_name qwen \
+    --hfa_c2n_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --val_file /path/to/prm_val.jsonl \
+    --output_root /path/to/camad_outputs \
+    --num_gpus 2
+```
+
+```bash
+python Cul/run_camad_pipeline.py \
+    --mode rl_only \
+    --model_name qwen \
+    --hfa_c2n_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
     --val_file /path/to/prm_val.jsonl \
     --output_root /path/to/camad_outputs \
     --num_gpus 2
