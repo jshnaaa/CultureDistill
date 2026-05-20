@@ -24,7 +24,8 @@ Usage:
         --batch_size 8 \\
         --lr_head 5e-5 \\
         --lr_lora 1e-4 \\
-        --lora_r 16
+        --lora_r 16 \\
+        --eval_every_n_epochs 1
 """
 
 import json
@@ -420,6 +421,7 @@ def train(args):
     print(f"Device: {device}")
     print(f"Base model: {args.base_model_path}")
     print(f"SFT adapter: {args.sft_adapter_path or 'None (using base directly)'}")
+    print(f"Eval every {args.eval_every_n_epochs} epoch(s)")
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.base_model_path, trust_remote_code=True
@@ -507,22 +509,38 @@ def train(args):
                       f"loss={loss.item():.4f}")
 
         avg_loss = total_loss / max(len(train_loader), 1)
-        metrics = evaluate(model, val_loader, device)
-        print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f} | "
-              f"acc={metrics['acc']:.4f} | spearman={metrics['spearman']:.4f}")
-        print(f"  Recall: 0.9={metrics['recall_0.9']:.3f} "
-              f"0.5={metrics['recall_0.5']:.3f} "
-              f"0.1={metrics['recall_0.1']:.3f}")
+        print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
 
-        if metrics["acc"] > best_acc:
-            best_acc = metrics["acc"]
-            ckpt_dir = Path(args.output_dir) / "best"
-            ckpt_dir.mkdir(exist_ok=True)
-            # Save LoRA adapter + score_head
-            model.backbone.save_pretrained(ckpt_dir)
-            tokenizer.save_pretrained(ckpt_dir)
-            torch.save(model.score_head.state_dict(), ckpt_dir / "score_head.pt")
-            print(f"  ✓ Saved best (acc={best_acc:.4f}) → {ckpt_dir}")
+        # Evaluate every N epochs
+        if epoch % args.eval_every_n_epochs == 0:
+            metrics = evaluate(model, val_loader, device)
+            print(f"  [Eval] Epoch {epoch} | "
+                  f"acc={metrics['acc']:.4f} | spearman={metrics['spearman']:.4f}")
+            print(f"    Recall: 0.9={metrics['recall_0.9']:.3f} "
+                  f"0.5={metrics['recall_0.5']:.3f} "
+                  f"0.1={metrics['recall_0.1']:.3f}")
+
+            if metrics["acc"] > best_acc:
+                best_acc = metrics["acc"]
+                ckpt_dir = Path(args.output_dir) / "best"
+                ckpt_dir.mkdir(exist_ok=True)
+                # Save LoRA adapter + score_head
+                model.backbone.save_pretrained(ckpt_dir)
+                tokenizer.save_pretrained(ckpt_dir)
+                torch.save(model.score_head.state_dict(),
+                           ckpt_dir / "score_head.pt")
+                print(f"    ✓ Saved best (acc={best_acc:.4f}) → {ckpt_dir}")
+            else:
+                print(f"    No improvement (best={best_acc:.4f})")
+
+    # If no eval was done, save final model
+    if best_acc == 0.0:
+        ckpt_dir = Path(args.output_dir) / "best"
+        ckpt_dir.mkdir(exist_ok=True)
+        model.backbone.save_pretrained(ckpt_dir)
+        tokenizer.save_pretrained(ckpt_dir)
+        torch.save(model.score_head.state_dict(), ckpt_dir / "score_head.pt")
+        print(f"  Saved final model (no eval performed) → {ckpt_dir}")
 
     print(f"\nTraining complete. Best accuracy: {best_acc:.4f}")
     print(f"Best checkpoint: {args.output_dir}/best")
@@ -556,6 +574,8 @@ def main():
                         help="LoRA rank (default: 16)")
     parser.add_argument("--lora_alpha", type=int, default=32,
                         help="LoRA alpha (default: 32)")
+    parser.add_argument("--eval_every_n_epochs", type=int, default=1,
+                        help="Evaluate on val set every N epochs (default: 1)")
     args = parser.parse_args()
     train(args)
 

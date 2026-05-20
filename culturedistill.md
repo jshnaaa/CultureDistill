@@ -1150,6 +1150,8 @@ Phase 5: 评估
 ```
 Cul/
 ├── run_camad_pipeline.py           # ★ 完整 Pipeline 入口脚本（一键运行全流程）
+├── split_data.py                   # ★ 数据划分脚本（8:1:1 → pkl）
+├── evaluate.py                     # ★ 评估脚本（支持 sft/rl/sft_rl 三种模式）
 ├── generate_hfa_c2n_data.py        # Phase 0: HFA-C²N 多智能体数据生成
 ├── hfa_c2n_mas.py                  # HFA-C²N 多智能体系统核心实现
 ├── configs/
@@ -1179,11 +1181,13 @@ Cul/
 
 ### 9.2 各文件功能说明
 
-**Pipeline 入口**
+**Pipeline 入口与工具**
 
 | 文件 | 功能 |
 |------|------|
-| `run_camad_pipeline.py` | 一键运行 CAMA-D 全流程，支持 `full`、`sft_only`、`rl_only`、`sft_rl` 四种模式，自动串联 Phase 0-4 |
+| `run_camad_pipeline.py` | 一键运行 CAMA-D 全流程，支持 `full`、`sft_only`、`rl_only`、`sft_rl` 四种模式，自动串联 Phase 0-5 |
+| `split_data.py` | 将 HFA-C²N 推理数据按 8:1:1 划分训练集/验证集/测试集，输出 pkl 文件供所有训练和评估脚本使用 |
+| `evaluate.py` | 在 pkl 测试集上评估最佳模型，支持 `sft`/`rl`/`sft_rl` 三种模式，输出整体准确率和按国家分组准确率 |
 
 **Phase 0: 数据生成**
 
@@ -1222,6 +1226,21 @@ Cul/
 
 ### 9.3 运行命令
 
+#### 数据划分（首先执行，生成 pkl 文件）
+
+```bash
+python Cul/split_data.py \
+    --input /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --output /autodl-fs/data/qwen/normad_splits.pkl \
+    --seed 42
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--input` | HFA-C²N 推理数据 JSONL |
+| `--output` | 输出 pkl 文件路径（包含 train/val/test 三个 key）|
+| `--seed` | 随机种子（默认 42，确保可复现）|
+
 #### 一键运行（推荐：SFT+RL 全流程）
 
 ```bash
@@ -1254,8 +1273,8 @@ python Cul/run_camad_pipeline.py \
 |------|------|
 | `--mode` | 训练模式：`full`（含数据生成）、`sft_only`、`rl_only`、`sft_rl`（推荐）|
 | `--model_name` | Student 模型：`qwen`（Qwen2.5-7B）或 `llama`（Llama-3.1-8B）|
-| `--hfa_c2n_data` | HFA-C²N 推理数据 JSONL（自动按 90%/10% 划分为训练集和分布内验证集）|
-| `--val_file` | 可选，外部提供验证集。未指定时自动从 `--hfa_c2n_data` 中切分 10% 作为验证集 |
+| `--hfa_c2n_data` | HFA-C²N 推理数据 JSONL（pipeline 内部自动调用 split_data.py 生成 pkl）|
+| `--data_pkl` | 可选，直接提供已切分的 pkl 文件（跳过数据划分步骤）|
 | `--output_root` | 输出根目录，自动创建 `data/` 和 `models/` 子目录 |
 | `--num_gpus` | GPU 数量（仅用于 vLLM 推理阶段，训练阶段使用模型放置）|
 
@@ -1282,21 +1301,23 @@ python Cul/generate_hfa_c2n_data.py \
 ```bash
 python Cul/sft/train_sft_weighted.py \
     --model_name qwen \
-    --data_file /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
     --output_dir /autodl-fs/data/model/qwen/normad_camad_sft \
     --alpha 2.0 \
     --epochs 3 \
     --batch_size 4 \
     --lr 2e-4 \
-    --lora_r 32
+    --lora_r 32 \
+    --eval_every_n_epochs 1
 ```
 
 | 参数 | 含义 |
 |------|------|
+| `--data_pkl` | split_data.py 生成的 pkl 文件（包含 train/val/test 划分）|
 | `--alpha` | Guardian Token 的 loss 权重放大系数（默认 2.0）|
-| `--data_file` | HFA-C²N 推理数据（含 [GUARDIAN]/[AUDITOR] 角色标签）|
 | `--lora_r` | LoRA rank（默认 32，保证文化知识充分学习）|
 | `--lr` | 学习率（LoRA 默认 2e-4，高于全参微调）|
+| `--eval_every_n_epochs` | 每 N 个 epoch 在验证集上评估一次（默认 1）|
 
 **Phase 2a: 启发式步骤切分**
 ```bash
@@ -1348,7 +1369,8 @@ python Cul/prm/train_prm_mse.py \
     --batch_size 8 \
     --lr_head 5e-5 \
     --lr_lora 1e-4 \
-    --lora_r 16
+    --lora_r 16 \
+    --eval_every_n_epochs 1
 ```
 
 | 参数 | 含义 |
@@ -1358,6 +1380,7 @@ python Cul/prm/train_prm_mse.py \
 | `--lr_head` | score_head 学习率（默认 5e-5）|
 | `--lr_lora` | PRM LoRA 参数学习率（默认 1e-4）|
 | `--lora_r` | PRM LoRA rank（默认 16）|
+| `--eval_every_n_epochs` | 每 N 个 epoch 在验证集上评估一次（默认 1）|
 
 **Phase 3: PRM 评估**
 ```bash
@@ -1372,8 +1395,7 @@ python Cul/prm/eval_prm.py \
 python Cul/grpo/train_grpo_v3.py \
     --model_name qwen \
     --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --grpo_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
-    --val_data /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
     --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
     --prm_backbone /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
     --output_dir /autodl-fs/data/model/qwen/normad_camad_grpo \
@@ -1387,14 +1409,52 @@ python Cul/grpo/train_grpo_v3.py \
 
 | 参数 | 含义 |
 |------|------|
+| `--data_pkl` | split_data.py 生成的 pkl 文件（GRPO 使用 train 作为 prompt 来源，val 做验证）|
 | `--sft_adapter` | SFT LoRA adapter 路径（RL-only 模式不传此参数）|
 | `--prm_path` | PRM checkpoint（含 LoRA adapter + score_head.pt）|
 | `--prm_backbone` | PRM 基座模型路径（原始 base model）|
 | `--alpha` | R_total 中 R_outcome 的权重（默认 0.6）|
 | `--n_samples` | 每 prompt 每轮采样数 G（默认 10）|
 | `--max_rounds` | 最大训练轮数（SFT+RL 建议 20，RL-only 建议 30）|
+| `--eval_every` | 每 N 轮在验证集上评估一次（默认 5）|
 | `--lr` | GRPO LoRA 学习率（SFT+RL 用 2e-5，RL-only 用 5e-5）|
 | `--lora_r` | GRPO LoRA rank（默认 16）|
+
+**Phase 5: 测试集评估**
+```bash
+# 评估 SFT 模型
+python Cul/evaluate.py \
+    --mode sft \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --output_json /autodl-fs/data/model/qwen/eval_sft.json
+
+# 评估 RL-only 模型
+python Cul/evaluate.py \
+    --mode rl \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --grpo_adapter /autodl-fs/data/model/qwen/normad_camad_grpo/best \
+    --output_json /autodl-fs/data/model/qwen/eval_rl.json
+
+# 评估 SFT+RL 模型
+python Cul/evaluate.py \
+    --mode sft_rl \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --grpo_adapter /autodl-fs/data/model/qwen/normad_camad_grpo/best \
+    --output_json /autodl-fs/data/model/qwen/eval_sft_rl.json
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--mode` | 评估模式：`sft`、`rl`、`sft_rl` |
+| `--data_pkl` | pkl 文件路径（使用其中的 test 集）|
+| `--sft_adapter` | SFT LoRA adapter 路径（sft 和 sft_rl 模式需要）|
+| `--grpo_adapter` | GRPO LoRA adapter 路径（rl 和 sft_rl 模式需要）|
+| `--output_json` | 可选，保存详细结果（含每条样本的预测和按国家分组准确率）|
 
 ### 9.4 计算资源需求
 
