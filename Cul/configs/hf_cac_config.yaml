@@ -13,6 +13,34 @@ temperature: 0.9
 max_tokens: 1024
 
 # ---------------------------------------------------------------------------
+# Cultural Affinity Matrix (6x6)
+# Scores represent cultural proximity (0=distant, 1=self) based on:
+#   - Geographic proximity
+#   - Shared religious/philosophical traditions
+#   - Depth of historical cultural exchange
+# Row/column order: [Western, Latin American, Sub-Saharan African,
+#                    East-Asian, Islamic & Middle-Eastern, South & SE Asian]
+# Used by Judge for affinity-weighted arbitration when Guardian fails.
+# ---------------------------------------------------------------------------
+cultural_affinity_matrix:
+  - [1.0, 0.4, 0.1, 0.2, 0.2, 0.1]   # Western & Anglo-Saxon
+  - [0.4, 1.0, 0.3, 0.1, 0.2, 0.2]   # Latin American
+  - [0.1, 0.3, 1.0, 0.1, 0.5, 0.2]   # Sub-Saharan African
+  - [0.2, 0.1, 0.1, 1.0, 0.2, 0.5]   # East-Asian
+  - [0.2, 0.2, 0.5, 0.2, 1.0, 0.4]   # Islamic & Middle-Eastern
+  - [0.1, 0.2, 0.2, 0.5, 0.4, 1.0]   # South & Southeast Asian
+
+# Guardian failure detection keywords (if Guardian's reasoning contains these,
+# treat Guardian as "failed" and activate affinity-based arbitration)
+guardian_failure_indicators:
+  - "I'm not sure"
+  - "I don't have enough knowledge"
+  - "I cannot determine"
+  - "I lack sufficient"
+  - "uncertain about this"
+  - "not familiar with"
+
+# ---------------------------------------------------------------------------
 # 6 Heterogeneous Cultural Agents with dual-mode prompts (Guardian vs Auditor)
 # ---------------------------------------------------------------------------
 culture_roles:
@@ -386,3 +414,15 @@ judge:
          OR (d) the behavior simply has no cultural valence in the target context
        - When in doubt between a forced judgment and "neutral", prefer "3" —
          a calibrated "I'm not sure" is more valuable than a confident wrong answer.
+    7. GUARDIAN FAILURE PROTOCOL — Cultural Affinity Arbitration:
+       If the Host-Culture Guardian has FAILED to provide a valid answer (format collapse,
+       empty reasoning, or explicit uncertainty), do NOT fall back to simple majority voting.
+       Instead, activate cross-cultural affinity-weighted arbitration:
+       - You will be provided with CULTURAL AFFINITY SCORES indicating how culturally
+         proximate each Auditor's background is to the target culture.
+       - Give HIGHER WEIGHT to Auditors with higher affinity scores — their cultural
+         proximity to the target culture makes their reasoning more reliable.
+       - Even if numerically fewer agents support an answer, prefer the answer backed
+         by the highest-affinity Auditor(s) IF they provide specific cultural evidence.
+       - Evaluate each Auditor's reasoning chain for concrete cultural references
+         (practices, traditions, norms) that align with the target culture context.

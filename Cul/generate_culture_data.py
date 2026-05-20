@@ -7,17 +7,17 @@ label.py / split_solutions pipeline can be reused directly.
 Usage:
     # Run on 5 samples (quick test)
     python Cul/generate_culture_data.py \
-        --input_file Cul/data/CulturalBench_mas.json \
-        --output_file Cul/data/CulturalBench_mas_inference.jsonl \
-        --model_name <path/to/model> \
-        --use_vllm --tensor_parallel_size 1 --max_samples 5
+        --input_file /autodl-fs/data/normad_mas.json \
+        --output_file /autodl-fs/data/normad_mas_inference.jsonl \
+        --model_name qwen \
+        --use_vllm --tensor_parallel_size 2 --max_samples 5
 
     # Full dataset (max_samples 0 = all)
     python Cul/generate_culture_data.py \
-        --input_file Cul/data/CulturalBench_mas.json \
-        --output_file Cul/data/CulturalBench_mas_inference.jsonl \
-        --model_name <path/to/model> \
-        --use_vllm --tensor_parallel_size 1 --max_samples 0
+        --input_file /autodl-fs/data/normad_mas.json \
+        --output_file /autodl-fs/data/normad_mas_inference.jsonl \
+        --model_name qwen \
+        --use_vllm --tensor_parallel_size 2 --max_samples 0
 """
 
 import os
@@ -48,13 +48,24 @@ def load_dataset(path):
 
 def convert_sample(item):
     """
-    Convert CulturalBench / CultureLLM format to internal query/gt/country format.
+    Convert dataset sample to internal query/gt/country format.
 
-    CulturalBench fields: instruction, input (empty), output
-    CultureLLM fields:    instruction, output, Country
+    Supports two input formats:
+      - normad_mas.json (new): {instruction, input, output, country}
+        → input contains concatenated "Country: ...\nCultural Background: ...\nScenario: ..."
+        → output is "1"/"2"/"3"
+      - CulturalBench / legacy format: {instruction (with ### Answer:), output/label, Country}
 
     Returns: {"query": str, "gt": str, "country": str}
     """
+    # New format: normad_mas.json (has separate 'input' field with structured content)
+    if "input" in item and item["input"] and "country" in item:
+        query = item["input"].strip()
+        country = item["country"].strip()
+        gt = str(item.get("output", "")).strip()
+        return {"query": query, "gt": gt, "country": country}
+
+    # Legacy format: CulturalBench / old NormAD
     instruction = item["instruction"]
     query = instruction.split("### Answer:")[0].strip()
 

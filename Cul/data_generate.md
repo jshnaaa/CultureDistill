@@ -305,7 +305,7 @@ shutdown
 ```bash
 # 0 轮辩论
 python Cul/generate_culture_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file Cul/data/normad_mas_inference_nodebate.jsonl \
       --model_name llama \
       --use_vllm --tensor_parallel_size 2 \
@@ -313,7 +313,7 @@ python Cul/generate_culture_data.py \
 
 # 1 轮辩论
 python Cul/generate_culture_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file Cul/data/normad_mas_inference_1debate.jsonl \
       --model_name llama \
       --use_vllm --tensor_parallel_size 2 \
@@ -321,7 +321,7 @@ python Cul/generate_culture_data.py \
 
 # 2 轮辩论
 python Cul/generate_culture_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file Cul/data/normad_mas_inference_2debate.jsonl \
       --model_name llama \
       --use_vllm --tensor_parallel_size 2 \
@@ -585,9 +585,9 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
-      --input_file Cul/data/CulturalBench_mas.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/hf_cac_inference.jsonl \
-      --model_name llama \
+      --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 5 --negotiation_rounds 1 \
       --include_judge true
@@ -598,7 +598,7 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
@@ -608,7 +608,7 @@ shutdown
 
 # 消融：无协商（Guardian 和 Auditor 独立生成，不互看）
 python Cul/generate_hf_cac_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/hf_cac_independent.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
@@ -617,7 +617,7 @@ python Cul/generate_hf_cac_data.py \
 
 # 消融：无 Judge（仅 Agent 路径）
 python Cul/generate_hf_cac_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/hf_cac_nojudge.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \

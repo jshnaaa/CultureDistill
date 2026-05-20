@@ -82,7 +82,19 @@ Step 4: Judge — 带权威权重裁决
 在 Judge 裁决和 fallback 投票中：
 - 如果 Guardian 的答案与多数不同，但 Guardian 提供了具体文化证据 → 采信 Guardian
 - 如果 Guardian 的答案与多数相同 → 直接确认
-- 如果 Guardian 未能给出有效答案 → 退化为标准多数投票
+- 若 Guardian 失效 → 激活 Judge 启发式跨文化仲裁机制
+
+**Guardian 失效的判定条件**：(a) Guardian 回答中提取不到有效答案（格式崩溃、输出截断），OR (b) Guardian 的推理中包含明确的不确定性放弃标记（如 "I'm not sure"、"I don't have enough knowledge"、推理内容为空）。
+
+**跨文化谱系相似度仲裁（Cultural Affinity Arbitration）**：
+
+当主场 Guardian 未能给出清晰答案时，说明该国的文化知识可能属于"极度冷门"或"长尾知识"。此时 Judge 不做简单的多数投票计数，而是升级为"基于文化谱系的客观仲裁者"，通过跨文化亲缘度比对进行主动判断：
+
+判断逻辑：系统内置一张 6×6 的文化亲缘度矩阵（Cultural Affinity Matrix），刻画任意两个文化圈之间的"谱系距离"。当 Guardian 失效时，Judge 在裁决中对各 Auditor 的意见按亲缘度加权——与目标文化亲缘度更高的 Auditor 的推理获得更大权重。
+
+示例：若题目考的是埃及（属于 Islamic & Middle-Eastern 文化圈），Guardian（伊斯兰 Agent）失效。此时 Judge 不看简单投票数，而是参照亲缘度矩阵：Sub-Saharan African Agent（亲缘度 0.5，近亲地缘）的推理权重 > South & Southeast Asian Agent（亲缘度 0.3）> Western & Anglo-Saxon Agent（亲缘度 0.1）。即使投 "no" 的 Agent 更多，只要亲缘度更高的 Agent 给出了带有具体文化证据的不同答案，Judge 倾向于采信高亲缘度 Agent 的判断。
+
+亲缘度矩阵设计原则：基于地理邻近性、宗教传统共享度、历史交流深度三个维度综合打分（0-1），硬编码在配置文件中，确保确定性和可复现性。
 
 ### 2.4 推理路径的蒸馏价值
 
@@ -155,7 +167,7 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
@@ -165,7 +177,7 @@ shutdown
 
 # 消融：无协商（Guardian 和 Auditor 独立生成，不互看）
 python Cul/generate_hf_cac_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/hf_cac_independent.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
@@ -174,7 +186,7 @@ python Cul/generate_hf_cac_data.py \
 
 # 消融：无 Judge（仅 Agent 路径）
 python Cul/generate_hf_cac_data.py \
-      --input_file Cul/data/sample.json \
+      --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/hf_cac_nojudge.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
@@ -336,6 +348,18 @@ When evaluating:
      OR (d) the behavior simply has no cultural valence in the target context
    - When in doubt between a forced judgment and "neutral", prefer "3" —
      a calibrated "I'm not sure" is more valuable than a confident wrong answer.
+7. GUARDIAN FAILURE PROTOCOL — Cultural Affinity Arbitration:
+   If the Host-Culture Guardian has FAILED to provide a valid answer (format collapse,
+   empty reasoning, or explicit uncertainty), do NOT fall back to simple majority voting.
+   Instead, activate cross-cultural affinity-weighted arbitration:
+   - You will be provided with CULTURAL AFFINITY SCORES indicating how culturally
+     proximate each Auditor's background is to the target culture.
+   - Give HIGHER WEIGHT to Auditors with higher affinity scores — their cultural
+     proximity to the target culture makes their reasoning more reliable.
+   - Even if numerically fewer agents support an answer, prefer the answer backed
+     by the highest-affinity Auditor(s) IF they provide specific cultural evidence.
+   - Evaluate each Auditor's reasoning chain for concrete cultural references
+     (practices, traditions, norms) that align with the target culture context.
 ```
 
 中文翻译：
@@ -368,6 +392,16 @@ When evaluating:
      或 (d) 该行为在目标文化语境中根本不具有文化效价
    - 当在强制判断和"中性"之间犹豫时，倾向选择"3"——
      一个经过校准的"我不确定"比一个自信的错误答案更有价值。
+7. Guardian 失效协议——跨文化谱系相似度仲裁：
+   如果主场文化守护者未能提供有效答案（格式崩溃、推理为空或明确表示不确定），
+   不要回退到简单多数投票。而是激活跨文化亲缘度加权仲裁：
+   - 你将收到【文化亲缘度分数】，表示每个审计员的文化背景与目标文化的接近程度。
+   - 对亲缘度分数更高的审计员给予【更高权重】——他们与目标文化的接近性
+     使其推理更为可靠。
+   - 即使在数量上支持某答案的智能体较少，只要最高亲缘度的审计员提供了
+     具体的文化证据，仍倾向采信其答案。
+   - 审查每个审计员的推理链中是否包含具体的文化引用
+     （习俗、传统、规范），并评估其与目标文化语境的对齐度。
 ```
 
 #### 2.10.4 Guardian Per-Round User Prompt（Phase 1）
@@ -497,6 +531,8 @@ Answer: <数字>
 
 #### 2.10.6 Judge Per-Round User Prompt
 
+**（a）正常模式（Guardian 有效）：**
+
 ```
 TARGET CULTURE: {target_country}
 
@@ -538,7 +574,57 @@ Reasoning: <your reasoning, explicitly referencing the Guardian's claims>
 Answer: <number>
 ```
 
-中文翻译：
+**（b）Guardian 失效模式（Cultural Affinity Arbitration）：**
+
+当系统检测到 Guardian 失效（格式崩溃/答案不可提取/明确放弃）时，自动切换为以下 prompt：
+
+```
+TARGET CULTURE: {target_country}
+
+{question}
+
+⚠️ GUARDIAN FAILURE: The HOST-CULTURE GUARDIAN [{guardian_name}] has FAILED
+to provide a valid answer for this question. Activate Cultural Affinity
+Arbitration protocol.
+
+CULTURAL AFFINITY SCORES (proximity to {target_country}'s culture):
+  - [{auditor_1_name}]: {affinity_score_1}
+  - [{auditor_2_name}]: {affinity_score_2}
+  - [{auditor_3_name}]: {affinity_score_3}
+  - [{auditor_4_name}]: {affinity_score_4}
+  - [{auditor_5_name}]: {affinity_score_5}
+
+Agent responses:
+
+[{guardian_name}] (HOST-CULTURE GUARDIAN — FAILED, no valid answer):
+{guardian_response}
+
+[{auditor_1_name}] (Cross-Cultural Auditor, affinity to target culture: {score_1}):
+{auditor_1_response}
+
+[{auditor_2_name}] (Cross-Cultural Auditor, affinity to target culture: {score_2}):
+{auditor_2_response}
+
+...
+
+As the final arbitrator under Guardian Failure Protocol:
+- Do NOT use simple majority voting.
+- Give HIGHER WEIGHT to Auditors with higher affinity scores.
+- If the highest-affinity Auditor provides specific cultural evidence,
+  prefer their answer even if outnumbered.
+- Evaluate each Auditor's reasoning for concrete cultural references.
+
+CALIBRATION REMINDER: Approximately 28% of questions in this dataset have
+"neutral/indeterminate (3)" as the correct answer. If you find yourself
+never outputting "3", you are likely over-committing to binary judgments.
+Cultural expertise includes knowing when a behavior has NO specific
+cultural significance in the target culture.
+
+Reasoning: <your reasoning, referencing affinity-weighted evidence>
+Answer: <number>
+```
+
+中文翻译（正常模式）：
 
 ```
 目标文化：{target_country}
@@ -575,6 +661,41 @@ Answer: <number>
 文化专业能力包括知道某种行为在目标文化中何时不具有特定文化意义。
 
 Reasoning: <你的推理，需明确引用守护者的主张>
+Answer: <数字>
+```
+
+中文翻译（Guardian 失效模式）：
+
+```
+目标文化：{target_country}
+
+{question}
+
+⚠️ 守护者失效：【主场文化守护者】[{guardian_name}] 未能为此问题提供有效答案。
+激活跨文化谱系相似度仲裁协议。
+
+文化亲缘度分数（与{target_country}文化的接近度）：
+  - [{auditor_1_name}]: {affinity_score_1}
+  - [{auditor_2_name}]: {affinity_score_2}
+  ...
+
+各智能体回答：
+[{guardian_name}]（主场文化守护者 - 已失效，无有效答案）：
+{guardian_response}
+
+[{auditor_1_name}]（跨文化审计员，目标文化亲缘度：{score_1}）：
+{auditor_1_response}
+...
+
+作为 Guardian 失效协议下的最终仲裁者：
+- 不要使用简单多数投票。
+- 对亲缘度分数更高的审计员给予【更高权重】。
+- 如果最高亲缘度审计员提供了具体的文化证据，即使人数少数也倾向采信。
+- 审查每个审计员的推理中是否包含具体的文化引用。
+
+校准提醒：...（同上）
+
+Reasoning: <你的推理，需引用亲缘度加权证据>
 Answer: <数字>
 ```
 
@@ -1265,7 +1386,7 @@ python Cul/run_camad_pipeline.py \
 **Phase 0: HF-CAC 数据生成**
 ```bash
 python Cul/generate_hf_cac_data.py \
-    --input_file /autodl-fs/data/normad_merge_gen.json \
+    --input_file /autodl-fs/data/normad_mas.json \
     --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
     --model_name qwen \
     --use_vllm --tensor_parallel_size 2 \
@@ -1274,7 +1395,7 @@ python Cul/generate_hf_cac_data.py \
 
 | 参数 | 含义 |
 |------|------|
-| `--input_file` | 原始数据集 JSON（CulturalBench/NormAD 格式）|
+| `--input_file` | 原始数据集 JSON（normad_mas.json 格式：instruction/input/output/country）|
 | `--model_name` | 推理模型（Agent 共用同一模型）|
 | `--negotiation_rounds` | 协商轮数（0=独立推理，1=标准协商）|
 | `--include_judge` | 是否包含 Judge 裁决环节 |

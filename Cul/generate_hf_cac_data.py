@@ -13,18 +13,18 @@ label.py / split_solutions pipeline can be reused directly.
 Usage:
     # Quick test (5 samples, with negotiation)
     python Cul/generate_hf_cac_data.py \\
-        --input_file Cul/data/CulturalBench_mas.json \\
-        --output_file /autodl-fs/data/hf_cac_inference.jsonl \\
-        --model_name llama \\
+        --input_file /autodl-fs/data/normad_mas.json \\
+        --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \\
+        --model_name qwen \\
         --use_vllm --tensor_parallel_size 2 \\
         --max_samples 5 --negotiation_rounds 1 \\
         --include_judge true
 
     # Full dataset
     python Cul/generate_hf_cac_data.py \\
-        --input_file Cul/data/CulturalBench_mas.json \\
-        --output_file /autodl-fs/data/hf_cac_inference.jsonl \\
-        --model_name llama \\
+        --input_file /autodl-fs/data/normad_mas.json \\
+        --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \\
+        --model_name qwen \\
         --use_vllm --tensor_parallel_size 2 \\
         --max_samples 0 --negotiation_rounds 1 \\
         --include_judge true
@@ -58,10 +58,27 @@ def load_dataset(path):
 
 def convert_sample(item):
     """
-    Convert CulturalBench / NormAD / CultureLLM format to internal format.
+    Convert dataset sample to internal format.
+
+    Supports two input formats:
+      - normad_mas.json (new): {instruction, input, output, country}
+        → input contains concatenated "Country: ...\nCultural Background: ...\nScenario: ..."
+        → output is "1"/"2"/"3"
+      - CulturalBench / legacy NormAD: {instruction (with ### Answer:), output/label, Country}
 
     Returns: {"query": str, "gt": str, "country": str}
     """
+    # New format: normad_mas.json (has separate 'input' field with structured content)
+    if "input" in item and item["input"] and "country" in item:
+        # The 'input' field contains the full scenario text
+        # The 'instruction' is the task description (answer 1/2/3)
+        # Combine them as the query for the agent
+        query = item["input"].strip()
+        country = item["country"].strip()
+        gt = str(item.get("output", "")).strip()
+        return {"query": query, "gt": gt, "country": country}
+
+    # Legacy format: CulturalBench / old NormAD
     instruction = item["instruction"]
     query = instruction.split("### Answer:")[0].strip()
 

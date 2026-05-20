@@ -66,6 +66,12 @@ class HF_CAC_MAS:
         self.max_tokens = max_tokens
         self.model_name = model_name
 
+        # Cultural Affinity Matrix for Judge fallback arbitration
+        self.affinity_matrix = cfg.get("cultural_affinity_matrix", None)
+        self.guardian_failure_indicators = cfg.get(
+            "guardian_failure_indicators", []
+        )
+
         self.llm = LLM(
             model=model_name,
             tensor_parallel_size=tensor_parallel_size,
@@ -251,13 +257,114 @@ class HF_CAC_MAS:
         return digits[-1] if digits else None
 
     # ------------------------------------------------------------------
-    # Fallback consensus
+    # Guardian failure detection
+    # ------------------------------------------------------------------
+
+    def _detect_guardian_failure(self, guardian_response: str) -> bool:
+        """
+        Determine if the Guardian has failed to provide a valid answer.
+
+        Failure conditions:
+          (a) Response is empty or too short to be meaningful
+          (b) Cannot extract a valid answer number
+          (c) Reasoning contains explicit uncertainty/failure indicators
+        """
+        if not guardian_response or len(guardian_response.strip()) < 10:
+            return True
+
+        # Check if answer is extractable
+        answer = self._extract_answer(guardian_response)
+        if answer is None:
+            return True
+
+        # Check for explicit failure indicators in reasoning
+        response_lower = guardian_response.lower()
+        for indicator in self.guardian_failure_indicators:
+            if indicator.lower() in response_lower:
+                return True
+
+        return False
+
+    # ------------------------------------------------------------------
+    # Affinity-weighted arbitration (Guardian failure fallback)
+    # ------------------------------------------------------------------
+
+    def _get_affinity_scores(self, guardian_idx: int) -> list[float]:
+        """
+        Get cultural affinity scores of all agents relative to the Guardian's
+        culture (which IS the target culture).
+
+        Returns a list of affinity scores indexed by agent position.
+        """
+        if self.affinity_matrix is None:
+            # Fallback: equal weights if no matrix configured
+            return [1.0 / self.num_agents] * self.num_agents
+
+        # guardian_idx's row in the affinity matrix gives distances to all others
+        return self.affinity_matrix[guardian_idx]
+
+    def _build_judge_fallback_prompt(self, question: str, target_country: str,
+                                     guardian_idx: int,
+                                     agent_responses: list[tuple[str, str, bool]],
+                                     affinity_scores: list[float]) -> str:
+        """
+        Build a special Judge prompt for Guardian-failure scenarios.
+        Includes affinity scores to guide weighted arbitration.
+        """
+        responses_text = ""
+        for i, (name, resp, is_guard) in enumerate(agent_responses):
+            if is_guard:
+                responses_text += (
+                    f"\n[{name}] (HOST-CULTURE GUARDIAN — FAILED, no valid answer):\n"
+                    f"{resp}\n"
+                )
+            else:
+                score = affinity_scores[i]
+                responses_text += (
+                    f"\n[{name}] (Cross-Cultural Auditor, "
+                    f"affinity to target culture: {score:.1f}):\n{resp}\n"
+                )
+
+        guardian_name = self.culture_roles[guardian_idx]["name"]
+        user = (
+            f"TARGET CULTURE: {target_country}\n\n"
+            f"{question}\n\n"
+            f"⚠️ GUARDIAN FAILURE: The HOST-CULTURE GUARDIAN [{guardian_name}] has FAILED "
+            f"to provide a valid answer for this question. Activate Cultural Affinity "
+            f"Arbitration protocol.\n\n"
+            f"CULTURAL AFFINITY SCORES (proximity to {target_country}'s culture):\n"
+        )
+        for i, (name, _, is_guard) in enumerate(agent_responses):
+            if not is_guard:
+                user += f"  - [{name}]: {affinity_scores[i]:.1f}\n"
+        user += (
+            f"\nAgent responses:\n{responses_text}\n"
+            f"As the final arbitrator under Guardian Failure Protocol:\n"
+            f"- Do NOT use simple majority voting.\n"
+            f"- Give HIGHER WEIGHT to Auditors with higher affinity scores.\n"
+            f"- If the highest-affinity Auditor provides specific cultural evidence, "
+            f"prefer their answer even if outnumbered.\n"
+            f"- Evaluate each Auditor's reasoning for concrete cultural references.\n\n"
+            f"CALIBRATION REMINDER: Approximately 28% of questions in this dataset have\n"
+            f"\"neutral/indeterminate (3)\" as the correct answer. If you find yourself\n"
+            f"never outputting \"3\", you are likely over-committing to binary judgments.\n"
+            f"Cultural expertise includes knowing when a behavior has NO specific\n"
+            f"cultural significance in the target culture.\n\n"
+            f"Reasoning: <your reasoning, referencing affinity-weighted evidence>\n"
+            f"Answer: <number>"
+        )
+        return self._apply_chat(self.judge_system_prompt, user)
+
+    # ------------------------------------------------------------------
+    # Standard fallback (Guardian valid but Judge extraction fails)
     # ------------------------------------------------------------------
 
     def _majority_vote_with_guardian_veto(self, answers: list[str | None],
                                           guardian_idx: int) -> str | None:
         """
-        Majority vote with Guardian veto:
+        Majority vote with Guardian veto (used only when Judge itself fails
+        to produce a parseable answer, NOT when Guardian fails).
+
         If Guardian's answer exists and at least one other agent agrees, use Guardian's answer.
         Otherwise fall back to standard majority vote.
         """
@@ -330,21 +437,37 @@ class HF_CAC_MAS:
         for ai, out in zip(auditor_indices, auditor_outputs):
             agent_responses[ai] = out.outputs[0].text.strip()
 
-        # Step 4: Judge with Guardian-weighted deliberation
+        # Step 4: Detect Guardian failure and choose Judge strategy
+        guardian_failed = self._detect_guardian_failure(
+            agent_responses[guardian_idx]
+        )
+
         judge_response = ""
         if self.include_judge:
             judge_input = [
                 (self.culture_roles[i]["name"], agent_responses[i], i == guardian_idx)
                 for i in range(self.num_agents)
             ]
-            judge_prompt = self._build_judge_prompt(
-                question, target_country, guardian_idx, judge_input
-            )
+
+            if guardian_failed:
+                # Guardian failed → activate Cultural Affinity Arbitration
+                affinity_scores = self._get_affinity_scores(guardian_idx)
+                judge_prompt = self._build_judge_fallback_prompt(
+                    question, target_country, guardian_idx,
+                    judge_input, affinity_scores
+                )
+            else:
+                # Guardian valid → standard Judge deliberation
+                judge_prompt = self._build_judge_prompt(
+                    question, target_country, guardian_idx, judge_input
+                )
+
             judge_output = self.llm.generate([judge_prompt], self.judge_sampling)
             judge_response = judge_output[0].outputs[0].text.strip()
 
             judge_answer = self._extract_answer(judge_response)
             if judge_answer is None:
+                # Last resort: if Judge ALSO fails to parse, use weighted vote
                 all_answers = [self._extract_answer(r) for r in agent_responses]
                 fallback = self._majority_vote_with_guardian_veto(
                     all_answers, guardian_idx
@@ -355,10 +478,13 @@ class HF_CAC_MAS:
         formatted = ""
         for i, resp in enumerate(agent_responses):
             role_tag = "[GUARDIAN]" if i == guardian_idx else "[AUDITOR]"
+            if i == guardian_idx and guardian_failed:
+                role_tag = "[GUARDIAN-FAILED]"
             formatted += f"===== Solution {i + 1} {role_tag} =====\n{resp}\n"
         if self.include_judge:
+            judge_mode = "[JUDGE-AFFINITY-ARBITRATION]" if guardian_failed else "[JUDGE]"
             formatted += (
-                f"===== Solution {self.num_agents + 1} [JUDGE] =====\n"
+                f"===== Solution {self.num_agents + 1} {judge_mode} =====\n"
                 f"{judge_response}\n"
             )
 
@@ -366,6 +492,7 @@ class HF_CAC_MAS:
             "response": formatted,
             "guardian_idx": guardian_idx,
             "guardian_name": guardian_name,
+            "guardian_failed": guardian_failed,
         }
 
     # ------------------------------------------------------------------
@@ -426,6 +553,12 @@ class HF_CAC_MAS:
         for out, (si, ai) in zip(auditor_outputs, auditor_meta):
             agent_responses[si][ai] = out.outputs[0].text.strip()
 
+        # ---- Detect Guardian failures for all samples ----
+        guardian_failures = [
+            self._detect_guardian_failure(agent_responses[si][guardian_indices[si]])
+            for si in range(n)
+        ]
+
         # ---- Phase 3: Generate all Judge responses ----
         judge_responses = [""] * n
         if self.include_judge:
@@ -437,9 +570,19 @@ class HF_CAC_MAS:
                      ai == g_idx)
                     for ai in range(self.num_agents)
                 ]
-                prompt = self._build_judge_prompt(
-                    questions[si], countries[si], g_idx, judge_input
-                )
+
+                if guardian_failures[si]:
+                    # Guardian failed → affinity-based arbitration prompt
+                    affinity_scores = self._get_affinity_scores(g_idx)
+                    prompt = self._build_judge_fallback_prompt(
+                        questions[si], countries[si], g_idx,
+                        judge_input, affinity_scores
+                    )
+                else:
+                    # Guardian valid → standard Judge prompt
+                    prompt = self._build_judge_prompt(
+                        questions[si], countries[si], g_idx, judge_input
+                    )
                 judge_prompts.append(prompt)
 
             judge_outputs = self.llm.generate(judge_prompts, self.judge_sampling)
@@ -449,6 +592,7 @@ class HF_CAC_MAS:
                 judge_answer = self._extract_answer(judge_resp)
 
                 if judge_answer is None:
+                    # Last resort: if Judge ALSO fails to parse
                     all_answers = [
                         self._extract_answer(agent_responses[si][ai])
                         for ai in range(self.num_agents)
@@ -464,16 +608,22 @@ class HF_CAC_MAS:
         results = []
         for si in range(n):
             g_idx = guardian_indices[si]
+            failed = guardian_failures[si]
             formatted = ""
             for ai in range(self.num_agents):
                 role_tag = "[GUARDIAN]" if ai == g_idx else "[AUDITOR]"
+                if ai == g_idx and failed:
+                    role_tag = "[GUARDIAN-FAILED]"
                 formatted += (
                     f"===== Solution {ai + 1} {role_tag} =====\n"
                     f"{agent_responses[si][ai]}\n"
                 )
             if self.include_judge:
+                judge_mode = (
+                    "[JUDGE-AFFINITY-ARBITRATION]" if failed else "[JUDGE]"
+                )
                 formatted += (
-                    f"===== Solution {self.num_agents + 1} [JUDGE] =====\n"
+                    f"===== Solution {self.num_agents + 1} {judge_mode} =====\n"
                     f"{judge_responses[si]}\n"
                 )
 
@@ -481,6 +631,7 @@ class HF_CAC_MAS:
                 "response": formatted,
                 "guardian_idx": g_idx,
                 "guardian_name": self.culture_roles[g_idx]["name"],
+                "guardian_failed": failed,
             })
 
         return results
