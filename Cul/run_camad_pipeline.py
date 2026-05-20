@@ -3,7 +3,7 @@ CAMA-D Complete Pipeline Runner (完整管线运行入口)
 
 Orchestrates the full Culture-Aware Multi-Agent Distillation pipeline:
 
-  Phase 0: HFA-C²N Data Generation (multi-agent inference)
+  Phase 0: HF-CAC Data Generation (multi-agent inference)
   Phase 0.5: Data Splitting (8:1:1 → pkl)
   Phase 1: Stage 1 — Token-level Weighted SFT
   Phase 2: Stage 2 — Open-Book Step Labeling (split + label)
@@ -15,7 +15,7 @@ Usage (full pipeline):
     python Cul/run_camad_pipeline.py \\
         --mode full \\
         --model_name qwen \\
-        --hfa_c2n_data /path/to/hfa_c2n_inference.jsonl \\
+        --hf_cac_data /path/to/hf_cac_inference.jsonl \\
         --output_root /path/to/camad_outputs
 
 Usage (individual stages):
@@ -95,14 +95,14 @@ def run_cmd(cmd: list, description: str) -> int:
 
 
 def run_phase0_data_generation(args, output_root: Path) -> str:
-    """Phase 0: Generate HFA-C²N data."""
-    if args.hfa_c2n_data and Path(args.hfa_c2n_data).exists():
-        print(f"[Phase 0] Using existing HFA-C²N data: {args.hfa_c2n_data}")
-        return args.hfa_c2n_data
+    """Phase 0: Generate HF-CAC data."""
+    if args.hf_cac_data and Path(args.hf_cac_data).exists():
+        print(f"[Phase 0] Using existing HF-CAC data: {args.hf_cac_data}")
+        return args.hf_cac_data
 
-    output_file = str(output_root / "data" / "hfa_c2n_inference.jsonl")
+    output_file = str(output_root / "data" / "hf_cac_inference.jsonl")
     cmd = [
-        sys.executable, "Cul/generate_hfa_c2n_data.py",
+        sys.executable, "Cul/generate_hf_cac_data.py",
         "--input_file", args.input_dataset,
         "--output_file", output_file,
         "--model_name", args.model_name,
@@ -111,7 +111,7 @@ def run_phase0_data_generation(args, output_root: Path) -> str:
         "--negotiation_rounds", "1",
         "--include_judge", "true",
     ]
-    rc = run_cmd(cmd, "Phase 0: HFA-C²N Data Generation")
+    rc = run_cmd(cmd, "Phase 0: HF-CAC Data Generation")
     if rc != 0:
         raise RuntimeError("Phase 0 failed")
     return output_file
@@ -343,13 +343,13 @@ def main():
                         help="Training mode: full | sft_only | rl_only | sft_rl")
     parser.add_argument("--model_name", type=str, required=True,
                         help="'llama', 'qwen', or full model path")
-    parser.add_argument("--hfa_c2n_data", type=str, default=None,
-                        help="Pre-generated HFA-C²N inference JSONL "
+    parser.add_argument("--hf_cac_data", type=str, default=None,
+                        help="Pre-generated HF-CAC inference JSONL "
                              "(skip Phase 0 if provided)")
     parser.add_argument("--data_pkl", type=str, default=None,
                         help="Pre-split pkl file (skip Phase 0.5 if provided)")
     parser.add_argument("--input_dataset", type=str, default=None,
-                        help="Raw dataset for HFA-C²N generation (Phase 0)")
+                        help="Raw dataset for HF-CAC generation (Phase 0)")
     parser.add_argument("--output_root", type=str, required=True,
                         help="Root directory for all outputs")
     parser.add_argument("--num_gpus", type=int, default=2,
@@ -379,16 +379,16 @@ def main():
         if args.data_pkl and Path(args.data_pkl).exists():
             data_pkl = args.data_pkl
             print(f"[Data] Using pre-split pkl: {data_pkl}")
-            hfa_data = args.hfa_c2n_data  # May be None
+            hfa_data = args.hf_cac_data  # May be None
         else:
-            # Need HFA-C²N data to generate pkl
+            # Need HF-CAC data to generate pkl
             if args.mode == "full":
                 hfa_data = run_phase0_data_generation(args, output_root)
             else:
-                hfa_data = args.hfa_c2n_data
+                hfa_data = args.hf_cac_data
                 if not hfa_data:
                     raise ValueError(
-                        "--hfa_c2n_data or --data_pkl required for "
+                        "--hf_cac_data or --data_pkl required for "
                         f"{args.mode} mode"
                     )
 
@@ -403,7 +403,7 @@ def main():
             # Phase 2: Step labeling (needs raw JSONL for step splitting)
             if not hfa_data:
                 raise ValueError(
-                    "--hfa_c2n_data required for Phase 2 (step labeling)"
+                    "--hf_cac_data required for Phase 2 (step labeling)"
                 )
             prm_train, prm_val = run_phase2_step_labeling(
                 args, hfa_data, output_root
@@ -439,7 +439,7 @@ def main():
             # Still need PRM → need step labels → need raw JSONL
             if not hfa_data:
                 raise ValueError(
-                    "--hfa_c2n_data required for rl_only mode "
+                    "--hf_cac_data required for rl_only mode "
                     "(needed for PRM step labeling)"
                 )
 
@@ -472,7 +472,7 @@ def main():
             # Phase 2: Step labeling
             if not hfa_data:
                 raise ValueError(
-                    "--hfa_c2n_data required for sft_rl mode "
+                    "--hf_cac_data required for sft_rl mode "
                     "(needed for PRM step labeling)"
                 )
             prm_train, prm_val = run_phase2_step_labeling(

@@ -471,7 +471,7 @@ Judge 净纠错收益 = +50 样本（+4.1%），引入 Judge 有价值。
 
 ---
 
-## 12. HFA-C²N：基于主场权威激活的跨文化动态协商范式
+## 12. HF-CAC：基于主场文化激活的多智能体协作范式
 
 ### 12.1 动机与核心洞察
 
@@ -481,11 +481,11 @@ Judge 净纠错收益 = +50 样本（+4.1%），引入 Judge 有价值。
 
 ### 12.2 方法论定位
 
-HFA-C²N（Home-Field Authority-Activated Cross-Cultural Negotiation）是针对文化对齐任务量身定制的算法架构创新，核心思想是：**根据目标国家动态调整 Agent 的权威度**，引入"主场/客场"不对称机制，使多智能体系统在文化题目上产生更高质量的推理数据。
+HF-CAC（Home-Field Culture-Activated Collaboration）是针对文化对齐任务量身定制的算法架构创新，核心思想是：**根据目标国家动态调整 Agent 的权威度**，引入"主场/客场"不对称机制，使多智能体系统在文化题目上产生更高质量的推理数据。
 
 **与"简单搬用 RECONCILE"的本质区别**：
 - RECONCILE：所有 Agent 平等 → 多数投票 → 均质推理路径
-- HFA-C²N：动态权威激活 → 主场确权 + 客场审视 → 结构化对比推理路径
+- HF-CAC：动态权威激活 → 主场确权 + 客场审视 → 结构化对比推理路径
 
 这一改进直接回应了"仅是应用型论文，无方法论创新"的审稿质疑。
 
@@ -523,9 +523,9 @@ Step 3: Phase 2 — Auditors 生成（看到 Guardian 的分析后）
 
 Step 4: Judge — 带权威权重裁决
   规则：Guardian 有一票否决权（当 Guardian 提供具体证据时，
-       即使其他 4 个 Auditor 持不同意见，仍优先采信 Guardian）
+       即使其他 5 个 Auditor 持不同意见，仍优先采信 Guardian）
 
-输出：Solution 1-5 [GUARDIAN/AUDITOR] + Solution 6 [JUDGE]
+输出：Solution 1-6 [GUARDIAN/AUDITOR] + Solution 7 [JUDGE]
 ```
 
 #### 12.3.4 Guardian 一票否决权（Veto Power）机制
@@ -537,7 +537,7 @@ Step 4: Judge — 带权威权重裁决
 
 ### 12.4 推理路径的蒸馏价值提升
 
-传统 RECONCILE 生成的 CoT 数据是"各 Agent 各自站队"的扁平推理。HFA-C²N 生成的推理数据具有**结构化对比信息**，蒸馏价值显著更高：
+传统 RECONCILE 生成的 CoT 数据是"各 Agent 各自站队"的扁平推理。HF-CAC 生成的推理数据具有**结构化对比信息**，蒸馏价值显著更高：
 
 **客场 Auditor 的推理路径（增加蒸馏数据熵）**：
 ```
@@ -561,16 +561,16 @@ Step 4: Judge — 带权威权重裁决
 Cul/
 ├── configs/
 │   ├── reconcile_config.yaml        # 原 RECONCILE 配置（保留）
-│   └── hfa_c2n_config.yaml          # HFA-C²N 配置（新增）
+│   └── hf_cac_config.yaml          # HF-CAC 配置（新增）
 │                                     #   - 每个 Agent 含 guardian_prompt + auditor_prompt
 │                                     #   - region_keywords 用于主场匹配
 │                                     #   - Judge system prompt 含权威权重说明
-├── hfa_c2n_mas.py                   # HFA-C²N 核心推理引擎（新增）
-│                                     #   - HFA_C2N_MAS 类
+├── hf_cac_mas.py                   # HF-CAC 核心推理引擎（新增）
+│                                     #   - HF_CAC_MAS 类
 │                                     #   - detect_guardian(): 主场识别
 │                                     #   - 两阶段 batch inference
 │                                     #   - Guardian veto fallback
-├── generate_hfa_c2n_data.py         # HFA-C²N 数据生成入口（新增）
+├── generate_hf_cac_data.py         # HF-CAC 数据生成入口（新增）
 │                                     #   - 参数：--negotiation_rounds, --include_judge
 │                                     #   - 兼容现有 convert_sample / resume 逻辑
 ├── reconcile_mas.py                 # 原 RECONCILE 引擎（保留不动）
@@ -584,9 +584,9 @@ Cul/
 cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
-python Cul/generate_hfa_c2n_data.py \
+python Cul/generate_hf_cac_data.py \
       --input_file Cul/data/CulturalBench_mas.json \
-      --output_file /autodl-fs/data/hfa_c2n_inference.jsonl \
+      --output_file /autodl-fs/data/hf_cac_inference.jsonl \
       --model_name llama \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 5 --negotiation_rounds 1 \
@@ -597,9 +597,9 @@ shutdown
 cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
-python Cul/generate_hfa_c2n_data.py \
+python Cul/generate_hf_cac_data.py \
       --input_file Cul/data/sample.json \
-      --output_file /autodl-fs/data/qwen/normad_hfa_c2n_inference.jsonl \
+      --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
@@ -607,18 +607,18 @@ python Cul/generate_hfa_c2n_data.py \
 shutdown
 
 # 消融：无协商（Guardian 和 Auditor 独立生成，不互看）
-python Cul/generate_hfa_c2n_data.py \
+python Cul/generate_hf_cac_data.py \
       --input_file Cul/data/sample.json \
-      --output_file /autodl-fs/data/hfa_c2n_independent.jsonl \
+      --output_file /autodl-fs/data/hf_cac_independent.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 0 \
       --include_judge true
 
 # 消融：无 Judge（仅 Agent 路径）
-python Cul/generate_hfa_c2n_data.py \
+python Cul/generate_hf_cac_data.py \
       --input_file Cul/data/sample.json \
-      --output_file /autodl-fs/data/hfa_c2n_nojudge.jsonl \
+      --output_file /autodl-fs/data/hf_cac_nojudge.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
@@ -630,7 +630,7 @@ python Cul/generate_hfa_c2n_data.py \
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--negotiation_rounds` | 1 | 协商轮次。0=独立生成（Auditor 不看 Guardian），1=标准协商（Auditor 看到 Guardian 分析后生成） |
-| `--include_judge` | true | 是否包含 Judge 裁决。false 时仅输出 Solution 1-5 |
+| `--include_judge` | true | 是否包含 Judge 裁决。false 时仅输出 Solution 1-6 |
 | `--model_name` | — | `llama`/`qwen`/完整路径 |
 | `--max_samples` | 0 | 0=全量 |
 
@@ -643,7 +643,7 @@ python Cul/generate_hfa_c2n_data.py \
   "country": "China",
   "guardian_idx": 0,
   "guardian_name": "East Asian Culture",
-  "response": "===== Solution 1 [GUARDIAN] =====\nReasoning: ...\nAnswer: 1\n===== Solution 2 [AUDITOR] =====\n...\n===== Solution 6 [JUDGE] =====\n..."
+  "response": "===== Solution 1 [GUARDIAN] =====\nReasoning: ...\nAnswer: 1\n===== Solution 2 [AUDITOR] =====\n...\n===== Solution 7 [JUDGE] =====\n..."
 }
 ```
 
@@ -654,7 +654,7 @@ python Cul/generate_hfa_c2n_data.py \
 
 ### 12.8 与 SFT/GRPO 管道的衔接
 
-HFA-C²N 生成的数据完全兼容现有的蒸馏管道：
+HF-CAC 生成的数据完全兼容现有的蒸馏管道：
 
 **SFT 阶段**：`train_sft.py` 的 `split_solutions()` 使用正则 `===== Solution \d+ =====` 切分，`[GUARDIAN]`/`[AUDITOR]` 标签不影响切分。Guardian 路径和 Judge 路径作为高优先级监督数据。
 
@@ -669,17 +669,17 @@ HFA-C²N 生成的数据完全兼容现有的蒸馏管道：
 | 实验组 | 方法 | 预期效果 |
 |--------|------|---------|
 | Baseline（RECONCILE） | 原 `generate_culture_data.py`，平等 Agent | 全球平均准确率尚可，小众国家偏低 |
-| HFA-C²N（negotiation=0） | 主场/客场区分，但独立生成 | 小众国家准确率提升（Guardian 不被客场带偏） |
-| HFA-C²N（negotiation=1） | 完整协商（Auditor 看到 Guardian） | 准确率最高 + 推理路径含对比结构 |
+| HF-CAC（negotiation=0） | 主场/客场区分，但独立生成 | 小众国家准确率提升（Guardian 不被客场带偏） |
+| HF-CAC（negotiation=1） | 完整协商（Auditor 看到 Guardian） | 准确率最高 + 推理路径含对比结构 |
 
-**核心指标**：按国家分组的准确率。预期发现——HFA-C²N 在非西方、小众国家（如越南、肯尼亚、埃及）题目上准确率暴涨，因为这些题目不再被西方语料主导的 Agent 带偏。
+**核心指标**：按国家分组的准确率。预期发现——HF-CAC 在非西方、小众国家（如越南、肯尼亚、埃及）题目上准确率暴涨，因为这些题目不再被西方语料主导的 Agent 带偏。
 
 #### 12.9.2 单体蒸馏后消融（验证单体学得更好）
 
 | 实验组 | SFT 数据来源 | 验证指标 |
 |--------|-------------|---------|
 | SFT (RECONCILE data) | 原 RECONCILE 推理数据 | val_accuracy, Cultural Sensitivity |
-| SFT (HFA-C²N data) | HFA-C²N 推理数据 | val_accuracy, Cultural Sensitivity |
+| SFT (HF-CAC data) | HF-CAC 推理数据 | val_accuracy, Cultural Sensitivity |
 
 **预期结论**：学习了"主客场思辨/确权路径"的单体模型，在未见过的文化测试集上（Zero-shot OOD）表现出：
 - 更高的准确率（尤其小众国家）

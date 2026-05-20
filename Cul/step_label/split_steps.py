@@ -10,7 +10,7 @@ This module is used as a preprocessing step before the open-book auditor labelin
 
 Usage:
     python Cul/step_label/split_steps.py \\
-        --input_file  /path/to/hfa_c2n_inference.jsonl \\
+        --input_file  /path/to/hf_cac_inference.jsonl \\
         --output_file /path/to/steps_split.jsonl \\
         --max_sentences_per_step 3
 
@@ -101,12 +101,12 @@ def split_reasoning_into_steps(
 
 
 # ---------------------------------------------------------------------------
-# Extract reasoning from HFA-C²N output
+# Extract reasoning from HF-CAC output
 # ---------------------------------------------------------------------------
 
 def extract_agent_reasonings(response: str) -> list[dict]:
     """
-    Extract reasoning text from each agent in HFA-C²N output.
+    Extract reasoning text from each agent in HF-CAC output.
 
     Returns list of dicts:
       - source: "guardian" | "auditor-1" | "auditor-2" | ...
@@ -161,10 +161,10 @@ def process_file(input_file: str, output_file: str,
                  max_sentences_per_step: int = 3,
                  sources: list = None) -> None:
     """
-    Process HFA-C²N inference data into step-split format.
+    Process HF-CAC inference data into step-split format.
 
     Args:
-        input_file: Path to HFA-C²N inference JSONL
+        input_file: Path to HF-CAC inference JSONL
         output_file: Output JSONL with step-split data
         max_sentences_per_step: Max sentences per step
         sources: Which agent sources to include.
@@ -247,7 +247,7 @@ def main():
         description="CAMA-D Stage 2a: Heuristic Step Splitting"
     )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="HFA-C²N inference JSONL file")
+                        help="HF-CAC inference JSONL file")
     parser.add_argument("--output_file", type=str, required=True,
                         help="Output JSONL with step-split data")
     parser.add_argument("--max_sentences_per_step", type=int, default=3,

@@ -7,7 +7,7 @@ Key innovations over traditional SFT:
   - Auditor final round tokens: loss weight = 1.0 (learn cognitive transition)
   - LoRA fine-tuning: only adapter parameters saved (~300MB vs ~14GB)
 
-Training data: HFA-C²N multi-agent dialogue data with [GUARDIAN]/[AUDITOR] role tags.
+Training data: HF-CAC multi-agent dialogue data with [GUARDIAN]/[AUDITOR] role tags.
 
 Input format:  [{country}]\\n{question}
 Output format: [GUARDIAN] Reasoning: ... Answer: X\\n[AUDITOR-1] Reasoning: ... Answer: X\\n...
@@ -56,12 +56,12 @@ IGNORE_INDEX = -100
 
 
 # ---------------------------------------------------------------------------
-# Role span extraction from HFA-C²N output
+# Role span extraction from HF-CAC output
 # ---------------------------------------------------------------------------
 
 def extract_role_spans(text: str) -> list[dict]:
     """
-    Parse HFA-C²N structured output to identify role boundaries.
+    Parse HF-CAC structured output to identify role boundaries.
 
     Expected format in response:
       [GUARDIAN] Reasoning: ... Answer: X
@@ -114,12 +114,12 @@ def identify_final_round_auditors(spans: list[dict], negotiation_rounds: int = 1
     """
     Determine which Auditor spans are "final round" (should be learned).
 
-    In HFA-C²N with negotiation_rounds=1:
+    In HF-CAC with negotiation_rounds=1:
       - Round 0: Guardian initial response
       - Round 0: Auditors initial responses (non-final → mask)
       - Round 1: Guardian + Auditors after seeing each other (final round)
 
-    For negotiation_rounds=1 (standard HFA-C²N):
+    For negotiation_rounds=1 (standard HF-CAC):
       - If an Auditor appears only once → it's a single-round setup, treat as final
       - If an Auditor appears multiple times → only the last appearance is final
 
@@ -236,14 +236,14 @@ def _build_char_to_token_map(text: str, tokenizer) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Data loading from HFA-C²N inference output
+# Data loading from HF-CAC inference output
 # ---------------------------------------------------------------------------
 
-def parse_hfa_c2n_response(response: str) -> list[dict]:
+def parse_hf_cac_response(response: str) -> list[dict]:
     """
-    Parse HFA-C²N response into structured agent outputs.
+    Parse HF-CAC response into structured agent outputs.
 
-    HFA-C²N output format (from hfa_c2n_mas.py):
+    HF-CAC output format (from hf_cac_mas.py):
       ===== Solution 1 =====
       [GUARDIAN] Reasoning: ... Answer: X
       ===== Solution 2 =====
@@ -262,7 +262,7 @@ def parse_hfa_c2n_response(response: str) -> list[dict]:
 
 def build_sft_dialogue(response: str, gold: str) -> Optional[str]:
     """
-    From HFA-C²N inference output, reconstruct the multi-agent dialogue
+    From HF-CAC inference output, reconstruct the multi-agent dialogue
     suitable for token-weighted SFT.
 
     Only include samples where the Judge/Guardian answer matches gold.
@@ -270,7 +270,7 @@ def build_sft_dialogue(response: str, gold: str) -> Optional[str]:
     Returns the dialogue string with [GUARDIAN] and [AUDITOR-X] markers,
     or None if the sample should be skipped.
     """
-    parts = parse_hfa_c2n_response(response)
+    parts = parse_hf_cac_response(response)
     if not parts:
         return None
 
@@ -313,7 +313,7 @@ def _extract_answer_from_part(text: str) -> Optional[str]:
 
 def build_camad_sft_samples(samples_raw: list[dict]) -> list[dict]:
     """
-    Build SFT training samples from HFA-C²N inference data.
+    Build SFT training samples from HF-CAC inference data.
 
     Each sample contains:
       - query: the cultural question
@@ -597,7 +597,7 @@ def train(args):
     model.enable_input_require_grads()
     model.gradient_checkpointing_enable()
 
-    # Build SFT samples from HFA-C²N data
+    # Build SFT samples from HF-CAC data
     train_samples = build_camad_sft_samples(train_raw)
     if len(train_samples) == 0:
         raise ValueError("No valid SFT samples found. Check data format.")
