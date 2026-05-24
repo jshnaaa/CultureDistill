@@ -1155,43 +1155,6 @@ python Cul/split_data.py \
 | `--output` | 输出 pkl 文件路径（包含 train/val/test 三个 key）|
 | `--seed` | 随机种子（默认 42，确保可复现）|
 
-#### 一键运行（推荐：SFT+RL 全流程）
-
-```bash
-python Cul/run_camad_pipeline.py \
-    --mode sft_rl \
-    --model_name qwen \
-    --hf_cac_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --output_root /autodl-fs/data/model/qwen/normad_sftrl_camad_outputs
-```
-
-```bash
-python Cul/run_camad_pipeline.py \
-    --mode sft_only \
-    --model_name qwen \
-    --hf_cac_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --output_root /autodl-fs/data/model/qwen/normad_sft_camad_outputs
-```
-
-```bash
-python Cul/run_camad_pipeline.py \
-    --mode rl_only \
-    --model_name qwen \
-    --hf_cac_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --output_root /autodl-fs/data/model/qwen/normad_rl_camad_outputs
-```
-
-参数说明：
-
-| 参数 | 含义 |
-|------|------|
-| `--mode` | 训练模式：`full`（含数据生成）、`sft_only`、`rl_only`、`sft_rl`（推荐）|
-| `--model_name` | Student 模型：`qwen`（Qwen2.5-7B）或 `llama`（Llama-3.1-8B）|
-| `--hf_cac_data` | HF-CAC 推理数据 JSONL（pipeline 内部自动调用 split_data.py 生成 pkl）|
-| `--data_pkl` | 可选，直接提供已切分的 pkl 文件（跳过数据划分步骤）|
-| `--output_root` | 输出根目录，自动创建 `data/` 和 `models/` 子目录 |
-| `--num_gpus` | GPU 数量（仅用于 vLLM 推理阶段，训练阶段使用模型放置）|
-
 #### 分步运行
 
 **Phase 0: HF-CAC 数据生成（推荐）**
@@ -1408,6 +1371,44 @@ python Cul/evaluate.py \
 | `--grpo_adapter` | GRPO LoRA adapter 路径（rl 和 sft_rl 模式需要）|
 | `--output_json` | 可选，保存详细结果（含每条样本的预测和按国家分组准确率）|
 
+
+#### 一键运行
+
+```bash
+python Cul/run_camad_pipeline.py \
+    --mode sft_rl \
+    --model_name qwen \
+    --hf_cac_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_root /autodl-fs/data/model/qwen/normad_sftrl_camad_outputs
+```
+
+```bash
+python Cul/run_camad_pipeline.py \
+    --mode sft_only \
+    --model_name qwen \
+    --hf_cac_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_root /autodl-fs/data/model/qwen/normad_sft_camad_outputs
+```
+
+```bash
+python Cul/run_camad_pipeline.py \
+    --mode rl_only \
+    --model_name qwen \
+    --hf_cac_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_root /autodl-fs/data/model/qwen/normad_rl_camad_outputs
+```
+
+参数说明：
+
+| 参数 | 含义 |
+|------|------|
+| `--mode` | 训练模式：`full`（含数据生成）、`sft_only`、`rl_only`、`sft_rl`（推荐）|
+| `--model_name` | Student 模型：`qwen`（Qwen2.5-7B）或 `llama`（Llama-3.1-8B）|
+| `--hf_cac_data` | HF-CAC 推理数据 JSONL（pipeline 内部自动调用 split_data.py 生成 pkl）|
+| `--data_pkl` | 可选，直接提供已切分的 pkl 文件（跳过数据划分步骤）|
+| `--output_root` | 输出根目录，自动创建 `data/` 和 `models/` 子目录 |
+| `--num_gpus` | GPU 数量（仅用于 vLLM 推理阶段，训练阶段使用模型放置）|
+
 ### 9.4 计算资源需求
 
 **硬件要求：2×vGPU-48GB（总计 96GB 显存）**
@@ -1452,17 +1453,7 @@ python Cul/evaluate.py \
 | SFT + RL (CAMA-D full) | Stage 1 → Stage 3 | 最高 |
 | MAS Oracle | 多智能体系统直接推理 | 上界 |
 
-### 10.2 模块贡献消融
-
-| 消融项 | 对比 | 验证目标 |
-|--------|------|---------|
-| Token 加权 vs 样本级加权 | Stage 1 w/ vs w/o mask | 验证掩码 Auditor 混淆 Token 的价值 |
-| 开卷式标注 vs 闭卷式标注 | Stage 2 w/ vs w/o GT prior | 验证 GT 先验消除 self-evaluation bias |
-| 类别加权 MSE vs 均匀 MSE | PRM w/ vs w/o class weights | 验证加权对稀疏信号的保护 |
-| Mean(R_process) vs Sum(R_process) | GRPO reward 形式 | 验证加权平均消除长度偏差 |
-| alpha=0.6 vs alpha=0.8 vs alpha=0.4 | GRPO alpha 敏感性 | 找最优 R_outcome/R_process 平衡 |
-
-### 10.3 评估指标
+### 10.2 评估指标
 
 | 指标 | 说明 |
 |------|------|
