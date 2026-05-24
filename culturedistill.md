@@ -207,20 +207,22 @@ python Cul/generate_hf_cac_data.py \
 
 ```
 Cul/
+├── scripts/
+│   └── convert_normad.py           # 数据格式转换：normad.jsonl → normad_mas.json
 ├── configs/
-│   ├── reconcile_config.yaml        # 原 RECONCILE 配置（保留）
-│   └── hf_cac_config.yaml          # HF-CAC 配置
-│                                     #   - 每个 Agent 含 guardian_prompt + auditor_prompt
-│                                     #   - region_keywords 用于主场匹配
-│                                     #   - Judge system prompt 含权威权重说明
+│   ├── hf_cac_config.yaml          # HF-CAC 配置
+│   │                                 #   - 6 Guardian + 6 Auditor + Judge prompt
+│   │                                 #   - region_keywords 用于主场匹配
+│   │                                 #   - 6×6 Cultural Affinity Matrix
+│   └── reconcile_config.yaml        # 原 RECONCILE 配置（保留）
 ├── hf_cac_mas.py                   # HF-CAC 核心推理引擎
 │                                     #   - HF_CAC_MAS 类
 │                                     #   - detect_guardian(): 主场识别
 │                                     #   - 两阶段 batch inference
-│                                     #   - Guardian veto fallback
+│                                     #   - Cultural Affinity Arbitration fallback
 ├── generate_hf_cac_data.py         # HF-CAC 数据生成入口
 │                                     #   - 参数：--negotiation_rounds, --include_judge
-│                                     #   - 兼容现有 convert_sample / resume 逻辑
+│                                     #   - 兼容 normad_mas.json 新格式 + 旧格式
 ├── reconcile_mas.py                 # 原 RECONCILE 引擎（保留作为 baseline）
 └── generate_culture_data.py         # 原 RECONCILE 入口（保留作为 baseline）
 ```
@@ -1256,9 +1258,14 @@ Cul/
 ├── split_data.py                   # ★ 数据划分脚本（8:1:1 → pkl）
 ├── evaluate.py                     # ★ 评估脚本（支持 sft/rl/sft_rl 三种模式）
 ├── generate_hf_cac_data.py        # Phase 0: HF-CAC 多智能体数据生成
+├── generate_culture_data.py        # Phase 0 备选: RECONCILE 多智能体数据生成（baseline 对比）
 ├── hf_cac_mas.py                  # HF-CAC 多智能体系统核心实现
+├── reconcile_mas.py                # RECONCILE 多智能体系统核心实现（baseline 对比）
+├── scripts/
+│   └── convert_normad.py           # ★ 数据格式转换：normad.jsonl → normad_mas.json
 ├── configs/
-│   └── hf_cac_config.yaml         # HF-CAC Agent 提示词配置
+│   ├── hf_cac_config.yaml         # HF-CAC Agent 提示词配置（6 Guardian + 6 Auditor + Judge）
+│   └── reconcile_config.yaml       # RECONCILE Agent 提示词配置（5 文化 Agent + Judge）
 ├── sft/
 │   ├── train_sft_weighted.py       # ★ Stage 1: Token 级加权 SFT（CAMA-D 新）
 │   └── train_sft.py                # 旧管线: 传统 SFT（baseline 对比用）
@@ -1269,13 +1276,15 @@ Cul/
 ├── prm/
 │   ├── train_prm_mse.py            # ★ Stage 3-PRM: 类别加权 MSE 训练
 │   ├── eval_prm.py                 # ★ PRM 验证（三分类准确率、Spearman）
+│   ├── split_dataset.py            # ★ 数据集切分（PRM train/val/GRPO train，5:2:3）
 │   ├── train_prm.py                # 旧管线: Bradley-Terry PRM（baseline）
-│   ├── label_data.py               # 旧管线: 构建 pairwise 偏好对
-│   └── split_dataset.py            # 数据集切分（PRM train/val/GRPO train）
+│   └── label_data.py               # 旧管线: 构建 pairwise 偏好对
 ├── grpo/
 │   ├── train_grpo_v3.py            # ★ Stage 3-GRPO: Mean(R_process) reward
 │   └── train_grpo.py               # 旧管线: 旧 GRPO（baseline 对比用）
 └── data/                           # 数据存放目录
+    ├── normad.jsonl                # 原始 NormAD 数据集（JSONL 格式）
+    ├── normad_mas.json             # 转换后数据集（JSON 数组，instruction/input/output/country）
     ├── splits/                     # 数据集切分结果
     └── prm/                        # PRM 训练数据
 ```
@@ -1291,14 +1300,23 @@ Cul/
 | `run_camad_pipeline.py` | 一键运行 CAMA-D 全流程，支持 `full`、`sft_only`、`rl_only`、`sft_rl` 四种模式，自动串联 Phase 0-5 |
 | `split_data.py` | 将 HF-CAC 推理数据按 8:1:1 划分训练集/验证集/测试集，输出 pkl 文件供所有训练和评估脚本使用 |
 | `evaluate.py` | 在 pkl 测试集上评估最佳模型，支持 `sft`/`rl`/`sft_rl` 三种模式，输出整体准确率和按国家分组准确率 |
+| `scripts/convert_normad.py` | 将原始 NormAD 数据集（JSONL）转换为 HF-CAC MAS 输入格式（JSON 数组），执行标签映射 yes→1/no→2/neutral→3，构建 instruction/input/output/country 四字段结构 |
 
-**Phase 0: 数据生成**
+**Phase 0: 数据生成（HF-CAC，推荐）**
 
 | 文件 | 功能 |
 |------|------|
 | `generate_hf_cac_data.py` | 调用 HF-CAC 多智能体系统生成带角色标签的结构化推理数据 |
-| `hf_cac_mas.py` | HF-CAC 核心逻辑：Guardian/Auditor/Judge 三类智能体的 prompt 构建、vLLM batch 推理、多轮协商 |
-| `configs/hf_cac_config.yaml` | 6 个 Guardian prompt（按文化区域）+ 6 个 Auditor prompt + Judge prompt，已集成 Neutral 优化策略 |
+| `hf_cac_mas.py` | HF-CAC 核心逻辑：Guardian/Auditor/Judge 三类智能体的 prompt 构建、vLLM batch 推理、多轮协商，支持 Cultural Affinity Arbitration 仲裁回退 |
+| `configs/hf_cac_config.yaml` | 6 个 Guardian prompt（按文化区域）+ 6 个 Auditor prompt + Judge prompt + 6×6 Cultural Affinity Matrix，已集成 Neutral 优化策略 |
+
+**Phase 0: 数据生成（RECONCILE baseline）**
+
+| 文件 | 功能 |
+|------|------|
+| `generate_culture_data.py` | 调用 RECONCILE MAS 系统生成多智能体推理数据（作为 HF-CAC 的 baseline 对比），输出格式与 AgentArk LLM Debate 兼容 |
+| `reconcile_mas.py` | RECONCILE 核心逻辑：5 个同质文化 Agent（Asian/European/North American/Latin American/African）平等辩论 + Judge 裁决，支持多轮 debate 和 majority vote fallback |
+| `configs/reconcile_config.yaml` | 5 个文化 Agent 的 system_prompt + Judge prompt + debate 轮数等超参配置 |
 
 **Stage 1: Token 级加权 SFT**
 
@@ -1318,6 +1336,7 @@ Cul/
 
 | 文件 | 功能 |
 |------|------|
+| `prm/split_dataset.py` | 将 MAS 推理数据按 5:2:3 切分为 PRM train / PRM val / GRPO train 三个子集（按 question 维度切分，无交叉泄漏）|
 | `prm/train_prm_mse.py` | 以 base model + SFT-LoRA 合并 为基座 + 新 PRM-LoRA + Linear score_head + Sigmoid，用类别加权 MSE 在步骤标签上训练。加权：0.9→W=2.5, 0.1→W=2.0, 0.5→W=1.0 |
 | `prm/eval_prm.py` | PRM 综合评估：三分类准确率（目标>70%）、确权步召回率（>75%）、混淆步召回率（>65%）、Spearman（>0.6）|
 
@@ -1328,6 +1347,27 @@ Cul/
 | `grpo/train_grpo_v3.py` | GRPO 在线采样 → 启发式切步 → PRM 逐步打分 → Mean(R_process) → R_total = 0.6×R_outcome + 0.4×Mean(R_process) → RLOO Advantage → 策略梯度更新。LoRA Policy + `disable_adapter()` Reference，无 DeepSpeed |
 
 ### 9.3 运行命令
+
+#### 数据格式转换（原始 NormAD → MAS 输入格式）
+
+```bash
+python Cul/scripts/convert_normad.py
+```
+
+无命令行参数。脚本内部硬编码路径：读取 `Cul/data/normad.jsonl`，输出 `Cul/data/normad_mas.json`。转换完成后需手动上传至远程服务器 `/autodl-fs/data/normad_mas.json`。
+
+输出格式（JSON 数组，每条样本）：
+
+```json
+{
+  "instruction": "Read the following cultural background information...",
+  "input": "Country: Japan\n\nCultural Background:\n...\n\nScenario:\n...",
+  "output": "1",
+  "country": "Japan"
+}
+```
+
+标签映射：`yes → "1"（acceptable）`, `no → "2"（unacceptable）`, `neutral → "3"（neutral）`
 
 #### 数据划分（首先执行，生成 pkl 文件）
 
@@ -1383,7 +1423,7 @@ python Cul/run_camad_pipeline.py \
 
 #### 分步运行
 
-**Phase 0: HF-CAC 数据生成**
+**Phase 0: HF-CAC 数据生成（推荐）**
 ```bash
 python Cul/generate_hf_cac_data.py \
     --input_file /autodl-fs/data/normad_mas.json \
@@ -1399,6 +1439,28 @@ python Cul/generate_hf_cac_data.py \
 | `--model_name` | 推理模型（Agent 共用同一模型）|
 | `--negotiation_rounds` | 协商轮数（0=独立推理，1=标准协商）|
 | `--include_judge` | 是否包含 Judge 裁决环节 |
+
+**Phase 0 备选: RECONCILE 数据生成（baseline 对比）**
+```bash
+python Cul/generate_culture_data.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/qwen/normad_reconcile_inference.jsonl \
+    --model_name qwen \
+    --use_vllm --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --num_debate_rounds 1 --include_judge true
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--input_file` | 原始数据集 JSON（同 HF-CAC 输入格式）|
+| `--output_file` | 输出 JSONL（自动追加时间戳后缀）|
+| `--model_name` | 推理模型：`qwen`（Qwen2.5-7B）或 `llama`（Llama-3.1-8B）|
+| `--config_path` | 可选，RECONCILE 配置文件路径（默认 `configs/reconcile_config.yaml`）|
+| `--max_samples` | 处理样本数（0=全量，>0=取前 N 条用于快速测试）|
+| `--num_debate_rounds` | 辩论轮数（覆盖 config 中的值，0=无辩论仅独立推理）|
+| `--include_judge` | 是否包含 Judge 裁决（`true`/`false`）|
+| `--batch_size` | vLLM 批次大小（默认 8）|
 
 **Phase 1: Stage 1 Token 级加权 SFT（LoRA）**
 ```bash
@@ -1459,6 +1521,22 @@ python Cul/step_label/validate_labels.py \
     --input_file /autodl-fs/data/qwen/normad_step_labels.jsonl \
     --report
 ```
+
+**Phase 2.5: PRM/GRPO 数据切分（旧管线专用，CAMA-D 管线使用 split_data.py 的 pkl）**
+```bash
+python Cul/prm/split_dataset.py \
+    --input_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_dir /autodl-fs/data/qwen/splits \
+    --seed 42
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--input_file` | MAS 推理数据 JSONL |
+| `--output_dir` | 输出目录，生成 `prm_train.jsonl`、`prm_val.jsonl`、`grpo_train.jsonl` 三个文件 |
+| `--seed` | 随机种子（默认 42）|
+
+切分比例：50% PRM 训练 / 20% PRM 验证 / 30% GRPO 训练。
 
 **Phase 3: Culture-Aware PRM 训练（LoRA）**
 ```bash
