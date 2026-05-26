@@ -1344,6 +1344,102 @@ python Cul/evaluate.py \
 | `--output_json` | 可选，保存详细结果（含每条样本的预测和按国家分组准确率）|
 
 
+#### HF-CAC 推理数据质量分析
+
+对 `normad_hf_cac_inference_20260525_101428.jsonl`（2633 条样本）的分析结果：
+
+| 指标 | 数值 |
+|------|------|
+| 总样本数 | 2633 |
+| Guardian 失效样本 | 0（0%）|
+| Judge 准确率 | 66.46%（1750/2633）|
+| Guardian 准确率 | 66.81%（1759/2633）|
+
+GT 标签分布：`1`（acceptable）= 943，`2`（unacceptable）= 875，`3`（neutral）= 815，三类较为均衡。
+
+Judge 答案分布：`1` = 1160，`2` = 1402，`3` = 71。Judge 严重低估了 neutral 类别（仅 71 条 vs GT 815 条），倾向于将 neutral 判为 unacceptable。
+
+按国家准确率范围：50%（Syria）至 81%（Fiji），不同文化圈间存在显著差异。
+
+结论：推理数据质量可用于后续蒸馏训练。Judge 的 neutral 校准问题不影响 RL 训练（PRM 学习的是 Guardian 推理路径的步骤质量，而非 Judge 的最终答案）。
+
+#### RL-only 分步运行命令
+
+RL-only 模式跳过 Stage 1 SFT，直接从 base model 出发，通过 PRM 引导的 GRPO 进行强化学习。管线流程：数据划分 → 步骤切分 → 步骤打标 → PRM 训练 → GRPO 训练 → 评估。
+
+**Step 1: 数据划分（生成 train/val/test pkl）**
+```bash
+python Cul/split_data.py \
+    --input /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output /autodl-fs/data/qwen/normad_splits.pkl \
+    --seed 42
+```
+
+**Step 2: 启发式步骤切分**
+```bash
+python Cul/step_label/split_steps.py \
+    --input_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_file /autodl-fs/data/qwen/normad_steps_split.jsonl \
+    --max_sentences_per_step 3 \
+    --sources guardian
+```
+
+**Step 3: 开卷式审计器打标**
+```bash
+python Cul/step_label/label_steps.py \
+    --input_file /autodl-fs/data/qwen/normad_steps_split.jsonl \
+    --output_file /autodl-fs/data/qwen/normad_step_labels.jsonl \
+    --model_name qwen \
+    --batch_size 64 \
+    --tensor_parallel_size 2 \
+    --validate_consistency
+```
+
+**Step 4: PRM 训练（无 SFT adapter，直接基于 base model）**
+```bash
+python Cul/prm/train_prm_mse.py \
+    --base_model_path /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+    --train_file /autodl-fs/data/qwen/normad_step_labels_train.jsonl \
+    --val_file /autodl-fs/data/qwen/normad_step_labels_val.jsonl \
+    --output_dir /autodl-fs/data/model/qwen/normad_camad_prm_rl_only \
+    --epochs 5 \
+    --batch_size 8 \
+    --lr_head 5e-5 \
+    --lr_lora 1e-4 \
+    --lora_r 16 \
+    --eval_every_n_epochs 1
+```
+
+注意：RL-only 模式不传 `--sft_adapter_path`，PRM 直接在原始 base model 上训练。
+
+**Step 5: GRPO 强化学习（无 SFT adapter，lr=5e-5，max_rounds=30）**
+```bash
+python Cul/grpo/train_grpo_v3.py \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
+    --prm_backbone /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+    --output_dir /autodl-fs/data/model/qwen/normad_camad_grpo_rl_only \
+    --alpha 0.6 \
+    --n_samples 10 \
+    --max_rounds 30 \
+    --eval_every 5 \
+    --lr 5e-5 \
+    --lora_r 16
+```
+
+与 SFT+RL 模式的关键差异：不传 `--sft_adapter`（从 base model 出发），学习率 5e-5（高于 SFT+RL 的 2e-5），最大轮数 30（多于 SFT+RL 的 20）。
+
+**Step 6: 测试集评估**
+```bash
+python Cul/evaluate.py \
+    --mode rl \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --grpo_adapter /autodl-fs/data/model/qwen/normad_camad_grpo_rl_only/best \
+    --output_json /autodl-fs/data/model/qwen/eval_rl_only.json
+```
+
 #### 一键运行
 
 ```bash
