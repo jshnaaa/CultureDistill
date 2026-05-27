@@ -144,7 +144,7 @@ class CulturePRM_v3(nn.Module):
         input_text: str,
         tokenizer,
         device,
-        max_len: int = 2048,
+        max_len: int = 1024,
     ) -> float:
         """
         Score a full reasoning path and return Mean(R_process).
@@ -318,7 +318,7 @@ def generate_responses(
     model, tokenizer, prompts: list, n_samples: int,
     max_new_tokens: int, temperature: float, device
 ) -> list:
-    """Generate n_samples responses per prompt."""
+    """Generate n_samples responses per prompt using num_return_sequences."""
     all_responses = []
     for prompt in prompts:
         enc = tokenizer(
@@ -505,7 +505,7 @@ def train(args):
 
     # ---- Dataset ----
     grpo_ds = GRPOPromptDataset(train_data)
-    loader = DataLoader(grpo_ds, batch_size=args.prompt_batch, shuffle=True)
+    loader = DataLoader(grpo_ds, batch_size=args.prompt_batch, shuffle=True, pin_memory=False)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     best_val_acc = 0.0
@@ -513,6 +513,9 @@ def train(args):
 
     print(f"GRPO prompts: {len(grpo_ds)} | "
           f"Rounds: {args.max_rounds} | n_samples: {args.n_samples}")
+    print(f"Batches per round: {len(loader)} (prompt_batch={args.prompt_batch})")
+    print(f"Starting training...")
+    sys.stdout.flush()
 
     # ---- Training rounds ----
     for rnd in range(1, args.max_rounds + 1):
@@ -523,11 +526,14 @@ def train(args):
         round_r_total = 0.0
         round_n = 0
 
-        for batch in loader:
+        for batch_idx, batch in enumerate(loader):
             queries = batch["query"]
             countries = batch["country"]
             golds = batch["gt"]
             n_prompts = len(queries)
+
+            if batch_idx % 5 == 0:
+                print(f"  Round {rnd} | Batch {batch_idx+1}/{len(loader)} | Generating {n_prompts}×{args.n_samples} samples...", flush=True)
 
             # 1. Build prompts
             prompts = [build_prompt(q, c, tokenizer)
@@ -543,6 +549,9 @@ def train(args):
                 device=policy_device,
             )
             policy.train()
+
+            if batch_idx % 5 == 0:
+                print(f"  Round {rnd} | Batch {batch_idx+1}/{len(loader)} | Scoring with PRM...", flush=True)
 
             # 3. Compute rewards
             rewards = torch.zeros(n_prompts, args.n_samples, device=policy_device)
