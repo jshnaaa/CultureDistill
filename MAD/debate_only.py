@@ -309,34 +309,6 @@ def run_debate_only(args):
             }
             judge_prompts.append(apply_chat(tokenizer, PROMPT_A34_JUDGE.format(**kw)))
 
-        # -------- Save checkpoint after Stage 3 (before judge) --------
-        ckpt_path = out_json.replace(".json", "_stage3_checkpoint.jsonl")
-        os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
-        with open(ckpt_path, "w", encoding="utf-8") as f:
-            for p in parsed:
-                f.write(json.dumps({
-                    "instruction": p.get("instruction", ""),
-                    "input": p.get("input", ""),
-                    "output": p.get("output", ""),
-                    "country": p["country"],
-                    "scenario": p["scenario"],
-                    "model1_initial": p["model1_initial"],
-                    "model1_initial_ans": p.get("model1_initial_ans", ""),
-                    "model2_initial": p["model2_initial"],
-                    "model2_initial_ans": p.get("model2_initial_ans", ""),
-                    "model1_feedback": p["model1_feedback"],
-                    "model2_feedback": p["model2_feedback"],
-                    "model1_final": p["model1_final"],
-                    "model1_final_ans": p.get("model1_final_ans", ""),
-                    "model2_final": p["model2_final"],
-                    "model2_final_ans": p.get("model2_final_ans", ""),
-                }, ensure_ascii=False) + "\n")
-        print(f"Stage 3 checkpoint saved to: {ckpt_path}")
-
-        # -------- Stage 4: Judge (stream-write each batch) --------
-        tmp_path = out_json.replace(".json", "_tmp.jsonl")
-        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
-
         for i in tqdm(range(0, len(disagree_indices), batch_size), desc="Stage4-Judge"):
             batch_end = min(i + batch_size, len(disagree_indices))
             j_out = llm.generate(judge_prompts[i:batch_end], sampling, use_tqdm=False)
@@ -346,56 +318,42 @@ def run_debate_only(args):
                 parsed[didx]["judge_response"] = resp
                 parsed[didx]["judge_ans"] = extract_answer(resp)
 
-            # Stream-write this batch (only disagree entries just processed)
-            with open(tmp_path, "a", encoding="utf-8") as f:
-                for didx in disagree_indices[i:batch_end]:
-                    p = parsed[didx]
-                    f.write(json.dumps({
-                        "_idx": didx,
-                        "judge_response": p.get("judge_response", ""),
-                        "judge_ans": p.get("judge_ans", ""),
-                    }, ensure_ascii=False) + "\n")
-        print(f"Judge results streamed to: {tmp_path}")
-
-    # -------- Merge & write final output --------
+    # -------- Build results & write final output --------
     print("\n=== Writing output ===")
 
-    # Load checkpoint and merge judge results
     results = []
-    with open(ckpt_path, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                results.append(json.loads(line))
+    for p in parsed:
+        gt = str(p.get("output", "")).strip()
+        final_ans = p.get("judge_ans", "")
+        is_correct = (final_ans == gt) if final_ans else False
 
-    # Merge judge results from tmp
-    if disagree_indices:
-        judge_map = {}
-        with open(tmp_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    jr = json.loads(line)
-                    judge_map[jr["_idx"]] = jr
-        for didx in disagree_indices:
-            if didx in judge_map:
-                results[didx]["judge_response"] = judge_map[didx]["judge_response"]
-                results[didx]["judge_ans"] = judge_map[didx]["judge_ans"]
-
-    # Compute stats
-    total_count = 0
-    correct_count = 0
-    for r in results:
-        gt = str(r.get("output", "")).strip()
-        final_ans = r.get("judge_ans", "")
-        r["final_answer"] = final_ans
-        r["correct"] = (final_ans == gt) if final_ans else False
-        r["agree"] = (r.get("model1_final_ans", "") == r.get("model2_final_ans", ""))
-        if not r.get("agree"):
-            total_count += 1
-            if r["correct"]:
-                correct_count += 1
+        record = {
+            "instruction": p.get("instruction", ""),
+            "input": p.get("input", ""),
+            "output": gt,
+            "country": p["country"],
+            "scenario": p["scenario"],
+            "model1_initial": p["model1_initial"],
+            "model1_initial_ans": p.get("model1_initial_ans", ""),
+            "model2_initial": p["model2_initial"],
+            "model2_initial_ans": p.get("model2_initial_ans", ""),
+            "model1_feedback": p["model1_feedback"],
+            "model2_feedback": p["model2_feedback"],
+            "model1_final": p["model1_final"],
+            "model1_final_ans": p.get("model1_final_ans", ""),
+            "model2_final": p["model2_final"],
+            "model2_final_ans": p.get("model2_final_ans", ""),
+            "judge_response": p.get("judge_response", ""),
+            "final_answer": final_ans,
+            "correct": is_correct,
+            "agree": (p.get("model1_final_ans", "") == p.get("model2_final_ans", "")),
+        }
+        results.append(record)
 
     # Write JSON
-    os.makedirs(os.path.dirname(out_json), exist_ok=True)
+    out_dir = os.path.dirname(out_json)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"Inference results saved to: {out_json}")
@@ -409,7 +367,9 @@ def run_debate_only(args):
     metrics["agree_count"] = agree_count
     metrics["disagree_count"] = n - agree_count
 
-    os.makedirs(os.path.dirname(out_metrics), exist_ok=True)
+    metrics_dir = os.path.dirname(out_metrics)
+    if metrics_dir:
+        os.makedirs(metrics_dir, exist_ok=True)
     with open(out_metrics, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     print(f"Metrics saved to: {out_metrics}")

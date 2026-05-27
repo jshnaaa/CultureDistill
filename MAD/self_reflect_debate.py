@@ -476,13 +476,17 @@ def run_self_reflect_debate(args):
         results.append(record)
 
     # Write JSON
-    os.makedirs(os.path.dirname(out_json), exist_ok=True)
-    os.makedirs(os.path.dirname(out_json), exist_ok=True)
+    out_dir = os.path.dirname(out_json)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"Inference results saved to: {out_json}")
-    print(f"Total: {total_count}, Correct: {correct_count}, "
-          f"Accuracy: {correct_count/total_count:.4f}" if total_count > 0 else "N/A")
+    if total_count > 0:
+        print(f"Total: {total_count}, Correct: {correct_count}, "
+              f"Accuracy: {correct_count/total_count:.4f}")
+    else:
+        print("Total: 0 (no valid predictions)")
 
     # -------- Compute & save metrics --------
     metrics = compute_metrics(results)
@@ -500,8 +504,9 @@ def run_self_reflect_debate(args):
         "debate_ratio": debate_total / total_choices if total_choices > 0 else 0,
     }
 
-    os.makedirs(os.path.dirname(out_metrics), exist_ok=True)
-    os.makedirs(os.path.dirname(out_metrics), exist_ok=True)
+    metrics_dir = os.path.dirname(out_metrics)
+    if metrics_dir:
+        os.makedirs(metrics_dir, exist_ok=True)
     with open(out_metrics, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     print(f"Metrics saved to: {out_metrics}")
