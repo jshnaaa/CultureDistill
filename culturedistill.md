@@ -640,6 +640,110 @@ Answer: <数字>
 
 ---
 
+
+### 2.11 Baseline
+
+本小节记录用于对比 HF-CAC 的 Baseline 方法。所有 Baseline 均使用相同的 `normad_mas.json` 数据集，不带 rule-of-thumb 信息（对应论文 `Si(w/o)` 设定）。
+
+#### 2.11.1 MAD (Multi-Agent Debate)
+
+**方法简介**：MAD（Multiple LLM Agents Debate）是 Ki et al. (2024) 提出的多智能体辩论框架，通过两个 LLM Agent 对文化场景进行辩论来达成更准确的文化对齐判断。论文提出了两种变体：
+
+1. **Debate-Only**（A.3）：两个 Agent 独立给出初始判断 → 交换反馈 → 基于反馈给出最终判断 → 由 Judge LLM 仲裁分歧
+2. **Self-Reflect+Debate**（A.4）：两个 Agent 独立给出初始判断 → 各自选择自我反思(A)或辩论(B) → 执行所选动作 → 基于反馈给出最终判断 → Judge 仲裁
+
+**关键差异**：
+
+| 维度 | MAD | HF-CAC |
+|------|-----|--------|
+| Agent 角色 | 对称（无角色区分） | 不对称（Guardian vs Auditor） |
+| 文化权威 | 无（平等辩论） | 动态激活主场权威 |
+| 对话轮次 | 单轮反馈交换 | 两阶段结构化协商 |
+| Judge 权重 | 无偏好 | Guardian 加权 + 一票否决权 |
+| rule-of-thumb | 不使用 | 不使用（本 Baseline 统一） |
+
+**代码目录**：`MAD/`
+
+```
+MAD/
+├── mad_common.py               # 共享工具（数据解析、答案提取、提示词模板）
+├── debate_only.py               # Debate-Only Baseline（A.3）
+└── self_reflect_debate.py       # Self-Reflect+Debate Baseline（A.4）
+```
+
+**运行命令**：
+
+```bash
+# Debate-Only Baseline（Llama 基座）
+python MAD/debate_only.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/mad_debate_only_llama.jsonl \
+    --model_name llama \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+
+# Debate-Only Baseline（Qwen 基座）
+python MAD/debate_only.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/mad_debate_only_qwen.jsonl \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+
+# Self-Reflect+Debate Baseline（Llama 基座）
+python MAD/self_reflect_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/mad_srd_llama.jsonl \
+    --model_name llama \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+
+# Self-Reflect+Debate Baseline（Qwen 基座）
+python MAD/self_reflect_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/mad_srd_qwen.jsonl \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
+| `--output_file` | 输出 JSONL 路径 | 必填 |
+| `--model_name` | 模型别名（llama/qwen）或 HF 路径 | 必填 |
+| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
+| `--batch_size` | 每批处理样本数 | 8 |
+| `--max_samples` | 最大处理样本数（0=全部） | 0 |
+| `--temperature` | 采样温度 | 0.7 |
+| `--max_tokens` | 最大生成 token 数 | 512 |
+
+**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，仅移除 `Rule: {rule-of-thumb}` 相关行（对应论文 `without rule-of-thumb` 设定），其余内容不做修改。
+
+**推理阶段**（Debate-Only 共 4 阶段，Self-Reflect+Debate 共 5 阶段）：
+
+| 阶段 | Debate-Only | Self-Reflect+Debate |
+|------|-------------|---------------------|
+| 1 | 初始决策（A.3.1） | 初始决策（A.4.1） |
+| 2 | 生成反馈（A.3.2） | 选择 Reflect/Debate（A.4.2） |
+| 3 | 最终决策（A.3.3） | 执行所选动作（A.4.3/A.4.4） |
+| 4 | Judge 仲裁（A.3.4） | 最终决策（A.4.5） |
+| 5 | — | Judge 仲裁（A.4.6） |
+
+各阶段均使用 vLLM 批量推理，支持断点续传（`reserve_unprocessed_queries`）。
+
+
+
 ## 3. Stage 1：主场权威加权 SFT
 
 ### 3.1 动机
