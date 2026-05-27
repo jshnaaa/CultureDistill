@@ -1,0 +1,32 @@
+[
+  {
+    "instruction": "Below is a question about a specific country's culture, along with two candidate responses. One response reflects deeper, more culturally specific knowledge (e.g., unique traditions, lesser-known practices, or nuanced cultural significance), while the other is more generic or surface-level.\n\nChoose the response that demonstrates more culturally specific and insightful knowledge about the target country. Answer with a single number only:\n1 = Response 1 is more culturally specific\n2 = Response 2 is more culturally specific\nDo not provide any explanation. Only output the number.",
+    "input": "Country: Afghanistan\n\nQuestion: Write a short statement about Afghanistan and Afghan clothing.\n\nResponse 1: Traditional dresses for both men and women in Afghanistan tend to cover the whole body, with trousers gathered at the waist, a loose shirt or dress, and some form of head covering.\n\nResponse 2: Certain attire have special significance, for example in some Pashtun or Baloch cultures in southern Afghanistan, a boy marks his start of adulthood by being allowed to wear a turban.",
+    "output": "2",
+    "country": "Afghanistan"
+  },
+  {
+    "instruction": "Below is a question about a specific country's culture, along with two candidate responses. One response reflects deeper, more culturally specific knowledge (e.g., unique traditions, lesser-known practices, or nuanced cultural significance), while the other is more generic or surface-level.\n\nChoose the response that demonstrates more culturally specific and insightful knowledge about the target country. Answer with a single number only:\n1 = Response 1 is more culturally specific\n2 = Response 2 is more culturally specific\nDo not provide any explanation. Only output the number.",
+    "input": "Country: Japan\n\nQuestion: Write a short statement about Japan and tea ceremony.\n\nResponse 1: In the Japanese tea ceremony (chanoyu), the host rotates the tea bowl so that its most beautiful side faces the guest before serving, a gesture called 'shomen' that embodies the spirit of omotenashi (selfless hospitality).\n\nResponse 2: The Japanese tea ceremony involves preparing and drinking matcha (powdered green tea) in a traditional tearoom with tatami mats.",
+    "output": "1",
+    "country": "Japan"
+  },
+  {
+    "instruction": "Below is a question about a specific country's culture, along with two candidate responses. One response reflects deeper, more culturally specific knowledge (e.g., unique traditions, lesser-known practices, or nuanced cultural significance), while the other is more generic or surface-level.\n\nChoose the response that demonstrates more culturally specific and insightful knowledge about the target country. Answer with a single number only:\n1 = Response 1 is more culturally specific\n2 = Response 2 is more culturally specific\nDo not provide any explanation. Only output the number.",
+    "input": "Country: Brazil\n\nQuestion: Write a short statement about Brazil and Carnival.\n\nResponse 1: During Carnival in Salvador, Bahia, the 'blocos afro' such as Olodum and Ilê Aiyê celebrate African heritage through specific rhythms like samba-reggae, which was created in the 1970s as a form of Black cultural resistance.\n\nResponse 2: Brazil's Carnival is a famous annual festival featuring colorful parades, samba dancing, and elaborate costumes, celebrated across the country before Lent.",
+    "output": "1",
+    "country": "Brazil"
+  },
+  {
+    "instruction": "Below is a question about a specific country's culture, along with two candidate responses. One response reflects deeper, more culturally specific knowledge (e.g., unique traditions, lesser-known practices, or nuanced cultural significance), while the other is more generic or surface-level.\n\nChoose the response that demonstrates more culturally specific and insightful knowledge about the target country. Answer with a single number only:\n1 = Response 1 is more culturally specific\n2 = Response 2 is more culturally specific\nDo not provide any explanation. Only output the number.",
+    "input": "Country: India\n\nQuestion: Write a short statement about India and wedding traditions.\n\nResponse 1: In many South Indian weddings, the groom ties a 'thali' (mangalsutra) around the bride's neck with exactly three knots, each knot representing a different commitment — to God, to the families, and to each other.\n\nResponse 2: Indian weddings are colorful celebrations that typically last several days and involve various rituals, music, dancing, and elaborate feasts with family and friends.",
+    "output": "1",
+    "country": "India"
+  },
+  {
+    "instruction": "Below is a question about a specific country's culture, along with two candidate responses. One response reflects deeper, more culturally specific knowledge (e.g., unique traditions, lesser-known practices, or nuanced cultural significance), while the other is more generic or surface-level.\n\nChoose the response that demonstrates more culturally specific and insightful knowledge about the target country. Answer with a single number only:\n1 = Response 1 is more culturally specific\n2 = Response 2 is more culturally specific\nDo not provide any explanation. Only output the number.",
+    "input": "Country: Mexico\n\nQuestion: Write a short statement about Mexico and Day of the Dead.\n\nResponse 1: Day of the Dead is a Mexican holiday where families remember deceased loved ones by building altars, offering food, and visiting cemeteries.\n\nResponse 2: On Día de los Muertos, families in Michoacán spend the entire night of November 1st in cemeteries decorating graves with cempasúchil (marigold) petals arranged in paths to guide spirits home, a practice rooted in pre-Hispanic Purépecha traditions.",
+    "output": "2",
+    "country": "Mexico"
+  }
+]

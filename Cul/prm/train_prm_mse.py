@@ -400,17 +400,27 @@ def train(args):
     ).to(device)
 
     # Datasets
+    print("[INFO] Loading train dataset...", flush=True)
     train_ds = StepLabelDataset(args.train_file, tokenizer)
+    print("[INFO] Loading val dataset...", flush=True)
     val_ds = StepLabelDataset(args.val_file, tokenizer)
+    print("[INFO] Creating DataLoaders...", flush=True)
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0,
-        pin_memory=True,
+        pin_memory=False,
     )
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0,
-        pin_memory=True,
+        pin_memory=False,
     )
-    print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
+    print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}", flush=True)
+
+    # Sanity check: verify first batch is readable
+    print("[INFO] Testing first batch read...", flush=True)
+    for i, batch in enumerate(train_loader):
+        print(f"[INFO] First batch OK — input_ids shape: {batch['input_ids'].shape}, "
+              f"step_positions shape: {batch['step_end_positions'].shape}", flush=True)
+        break
 
     # Optimizer with different LRs for LoRA vs score_head
     param_groups = [
@@ -431,9 +441,13 @@ def train(args):
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     best_acc = 0.0
 
+    print(f"[INFO] Starting training: {args.epochs} epochs, "
+          f"{len(train_loader)} steps/epoch", flush=True)
+
     for epoch in range(1, args.epochs + 1):
         model.train()
         total_loss = 0.0
+        print(f"[INFO] Epoch {epoch}/{args.epochs} starting...", flush=True)
 
         for step, batch in enumerate(train_loader, 1):
             input_ids = batch["input_ids"].to(device)

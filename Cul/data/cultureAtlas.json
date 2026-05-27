@@ -1,0 +1,37 @@
+[
+  {
+    "instruction": "Write a short statement about Afghanistan and Afghan clothing.",
+    "positive_sample": "Certain attire have special significance, for example in some Pashtun or Baloch cultures in southern Afghanistan, a boy marks his start of adulthood by being allowed to wear a turban.",
+    "negative_sample": "Traditional dresses for both men and women in Afghanistan tend to cover the whole body, with trousers gathered at the waist, a loose shirt or dress, and some form of head covering.",
+    "country": "Afghanistan",
+    "keyword": "Afghan clothing"
+  },
+  {
+    "instruction": "Write a short statement about Japan and tea ceremony.",
+    "positive_sample": "In the Japanese tea ceremony (chanoyu), the host rotates the tea bowl so that its most beautiful side faces the guest before serving, a gesture called 'shomen' that embodies the spirit of omotenashi (selfless hospitality).",
+    "negative_sample": "The Japanese tea ceremony involves preparing and drinking matcha (powdered green tea) in a traditional tearoom with tatami mats.",
+    "country": "Japan",
+    "keyword": "tea ceremony"
+  },
+  {
+    "instruction": "Write a short statement about Brazil and Carnival.",
+    "positive_sample": "During Carnival in Salvador, Bahia, the 'blocos afro' such as Olodum and Ilê Aiyê celebrate African heritage through specific rhythms like samba-reggae, which was created in the 1970s as a form of Black cultural resistance.",
+    "negative_sample": "Brazil's Carnival is a famous annual festival featuring colorful parades, samba dancing, and elaborate costumes, celebrated across the country before Lent.",
+    "country": "Brazil",
+    "keyword": "Carnival"
+  },
+  {
+    "instruction": "Write a short statement about India and wedding traditions.",
+    "positive_sample": "In many South Indian weddings, the groom ties a 'thali' (mangalsutra) around the bride's neck with exactly three knots, each knot representing a different commitment — to God, to the families, and to each other.",
+    "negative_sample": "Indian weddings are colorful celebrations that typically last several days and involve various rituals, music, dancing, and elaborate feasts with family and friends.",
+    "country": "India",
+    "keyword": "wedding traditions"
+  },
+  {
+    "instruction": "Write a short statement about Mexico and Day of the Dead.",
+    "positive_sample": "On Día de los Muertos, families in Michoacán spend the entire night of November 1st in cemeteries decorating graves with cempasúchil (marigold) petals arranged in paths to guide spirits home, a practice rooted in pre-Hispanic Purépecha traditions.",
+    "negative_sample": "Day of the Dead is a Mexican holiday where families remember deceased loved ones by building altars, offering food, and visiting cemeteries.",
+    "country": "Mexico",
+    "keyword": "Day of the Dead"
+  }
+]
