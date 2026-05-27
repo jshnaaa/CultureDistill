@@ -28,19 +28,50 @@ Usage:
         --eval_every_n_epochs 1
 """
 
+import os
 import json
 import argparse
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     get_cosine_schedule_with_warmup,
 )
 from peft import LoraConfig, get_peft_model, PeftModel, TaskType
+
+
+# ---------------------------------------------------------------------------
+# DDP helpers
+# ---------------------------------------------------------------------------
+
+def setup_distributed():
+    """Initialize DDP if launched via torchrun/torch.distributed.launch."""
+    if "RANK" in os.environ:
+        dist.init_process_group(backend="nccl")
+        rank = dist.get_rank()
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        world_size = dist.get_world_size()
+        torch.cuda.set_device(local_rank)
+        return rank, local_rank, world_size
+    else:
+        # Single-GPU fallback
+        return 0, 0, 1
+
+
+def is_main_process(rank: int) -> bool:
+    return rank == 0
+
+
+def cleanup_distributed():
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 MAX_SEQ_LEN = 1024
@@ -379,11 +410,16 @@ def evaluate(model: CulturePRM, loader: DataLoader, device) -> dict:
 # ---------------------------------------------------------------------------
 
 def train(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
-    print(f"Base model: {args.base_model_path}")
-    print(f"SFT adapter: {args.sft_adapter_path or 'None (using base directly)'}")
-    print(f"Eval every {args.eval_every_n_epochs} epoch(s)")
+    # DDP setup
+    rank, local_rank, world_size = setup_distributed()
+    device = torch.device(f"cuda:{local_rank}")
+    use_ddp = world_size > 1
+
+    if is_main_process(rank):
+        print(f"Device: {device} | World size: {world_size}", flush=True)
+        print(f"Base model: {args.base_model_path}")
+        print(f"SFT adapter: {args.sft_adapter_path or 'None (using base directly)'}")
+        print(f"Eval every {args.eval_every_n_epochs} epoch(s)")
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.base_model_path, trust_remote_code=True
@@ -399,35 +435,56 @@ def train(args):
         lora_alpha=args.lora_alpha,
     ).to(device)
 
+    # Wrap with DDP if multi-GPU
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        if is_main_process(rank):
+            print(f"[INFO] DDP enabled on {world_size} GPUs", flush=True)
+
     # Datasets
-    print("[INFO] Loading train dataset...", flush=True)
+    if is_main_process(rank):
+        print("[INFO] Loading train dataset...", flush=True)
     train_ds = StepLabelDataset(args.train_file, tokenizer)
-    print("[INFO] Loading val dataset...", flush=True)
+    if is_main_process(rank):
+        print("[INFO] Loading val dataset...", flush=True)
     val_ds = StepLabelDataset(args.val_file, tokenizer)
-    print("[INFO] Creating DataLoaders...", flush=True)
+
+    # DataLoaders with DistributedSampler for multi-GPU
+    train_sampler = DistributedSampler(train_ds, shuffle=True) if use_ddp else None
+    val_sampler = DistributedSampler(val_ds, shuffle=False) if use_ddp else None
+
+    if is_main_process(rank):
+        print("[INFO] Creating DataLoaders...", flush=True)
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0,
-        pin_memory=False,
+        train_ds, batch_size=args.batch_size,
+        shuffle=(train_sampler is None), sampler=train_sampler,
+        num_workers=0, pin_memory=False,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0,
-        pin_memory=False,
+        val_ds, batch_size=args.batch_size,
+        shuffle=False, sampler=val_sampler,
+        num_workers=0, pin_memory=False,
     )
-    print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}", flush=True)
+    if is_main_process(rank):
+        print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}", flush=True)
 
     # Sanity check: verify first batch is readable
-    print("[INFO] Testing first batch read...", flush=True)
+    if is_main_process(rank):
+        print("[INFO] Testing first batch read...", flush=True)
     for i, batch in enumerate(train_loader):
-        print(f"[INFO] First batch OK — input_ids shape: {batch['input_ids'].shape}, "
-              f"step_positions shape: {batch['step_end_positions'].shape}", flush=True)
+        if is_main_process(rank):
+            print(f"[INFO] First batch OK — input_ids shape: {batch['input_ids'].shape}, "
+                  f"step_positions shape: {batch['step_end_positions'].shape}", flush=True)
         break
 
     # Optimizer with different LRs for LoRA vs score_head
+    # Access underlying model if wrapped in DDP
+    raw_model = model.module if use_ddp else model
     param_groups = [
-        {"params": [p for n, p in model.backbone.named_parameters()
+        {"params": [p for n, p in raw_model.backbone.named_parameters()
                     if p.requires_grad],
          "lr": args.lr_lora},
-        {"params": model.score_head.parameters(),
+        {"params": raw_model.score_head.parameters(),
          "lr": args.lr_head},
     ]
     optimizer = torch.optim.AdamW(param_groups, weight_decay=0.01)
@@ -441,13 +498,19 @@ def train(args):
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     best_acc = 0.0
 
-    print(f"[INFO] Starting training: {args.epochs} epochs, "
-          f"{len(train_loader)} steps/epoch", flush=True)
+    if is_main_process(rank):
+        print(f"[INFO] Starting training: {args.epochs} epochs, "
+              f"{len(train_loader)} steps/epoch", flush=True)
 
     for epoch in range(1, args.epochs + 1):
+        # Set epoch for DistributedSampler (ensures proper shuffling)
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+
         model.train()
         total_loss = 0.0
-        print(f"[INFO] Epoch {epoch}/{args.epochs} starting...", flush=True)
+        if is_main_process(rank):
+            print(f"[INFO] Epoch {epoch}/{args.epochs} starting...", flush=True)
 
         for step, batch in enumerate(train_loader, 1):
             input_ids = batch["input_ids"].to(device)
@@ -482,16 +545,18 @@ def train(args):
             scheduler.step()
 
             total_loss += loss.item()
-            if step % 20 == 0:
+            if step % 20 == 0 and is_main_process(rank):
                 print(f"  Epoch {epoch} step {step}/{len(train_loader)} "
                       f"loss={loss.item():.4f}")
 
         avg_loss = total_loss / max(len(train_loader), 1)
-        print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
+        if is_main_process(rank):
+            print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
 
-        # Evaluate every N epochs
-        if epoch % args.eval_every_n_epochs == 0:
-            metrics = evaluate(model, val_loader, device)
+        # Evaluate every N epochs (only on rank 0 to avoid duplicated work)
+        if epoch % args.eval_every_n_epochs == 0 and is_main_process(rank):
+            eval_model = raw_model
+            metrics = evaluate(eval_model, val_loader, device)
             print(f"  [Eval] Epoch {epoch} | "
                   f"acc={metrics['acc']:.4f} | spearman={metrics['spearman']:.4f}")
             print(f"    Recall: 0.9={metrics['recall_0.9']:.3f} "
@@ -503,25 +568,32 @@ def train(args):
                 ckpt_dir = Path(args.output_dir) / "best"
                 ckpt_dir.mkdir(exist_ok=True)
                 # Save LoRA adapter + score_head
-                model.backbone.save_pretrained(ckpt_dir)
+                raw_model.backbone.save_pretrained(ckpt_dir)
                 tokenizer.save_pretrained(ckpt_dir)
-                torch.save(model.score_head.state_dict(),
+                torch.save(raw_model.score_head.state_dict(),
                            ckpt_dir / "score_head.pt")
                 print(f"    ✓ Saved best (acc={best_acc:.4f}) → {ckpt_dir}")
             else:
                 print(f"    No improvement (best={best_acc:.4f})")
 
-    # If no eval was done, save final model
-    if best_acc == 0.0:
+        # Synchronize all processes after eval/save
+        if use_ddp:
+            dist.barrier()
+
+    # If no eval was done, save final model (rank 0 only)
+    if best_acc == 0.0 and is_main_process(rank):
         ckpt_dir = Path(args.output_dir) / "best"
         ckpt_dir.mkdir(exist_ok=True)
-        model.backbone.save_pretrained(ckpt_dir)
+        raw_model.backbone.save_pretrained(ckpt_dir)
         tokenizer.save_pretrained(ckpt_dir)
-        torch.save(model.score_head.state_dict(), ckpt_dir / "score_head.pt")
+        torch.save(raw_model.score_head.state_dict(), ckpt_dir / "score_head.pt")
         print(f"  Saved final model (no eval performed) → {ckpt_dir}")
 
-    print(f"\nTraining complete. Best accuracy: {best_acc:.4f}")
-    print(f"Best checkpoint: {args.output_dir}/best")
+    if is_main_process(rank):
+        print(f"\nTraining complete. Best accuracy: {best_acc:.4f}")
+        print(f"Best checkpoint: {args.output_dir}/best")
+
+    cleanup_distributed()
 
 
 # ---------------------------------------------------------------------------
