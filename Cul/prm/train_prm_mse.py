@@ -197,129 +197,91 @@ class StepLabelDataset(Dataset):
     Dataset for PRM training on step-labeled data.
 
     Each sample contains a full reasoning path with [Step N] markers.
-    We tokenize the full path and record positions of step terminators.
+    We pre-tokenize all samples in __init__ to avoid tokenizer calls in
+    __getitem__ (which would deadlock with num_workers > 0 due to
+    HuggingFace tokenizer's Rust parallelism being fork-unsafe).
     """
 
     def __init__(self, jsonl_path: str, tokenizer, max_len: int = MAX_SEQ_LEN):
-        self.tokenizer = tokenizer
+        import re
         self.max_len = max_len
-        self.samples = []
+        self.processed_samples = []
+        max_steps = 20
 
+        raw_count = 0
         for line in open(jsonl_path, encoding="utf-8"):
             obj = json.loads(line)
             steps = obj["steps"]
             if not steps or not all("label" in s for s in steps):
                 continue
 
+            raw_count += 1
             # Build full reasoning text with step markers
             question = obj["question"]
             country = obj.get("country", "")
             full_reasoning = "\n".join(s["text"] for s in steps)
-
-            # Input format: [country]\nquestion\nstep1\nstep2\n...
             input_text = f"[{country}]\n{question}\n{full_reasoning}"
             labels = [s["label"] for s in steps]
 
-            self.samples.append({
-                "input_text": input_text,
-                "labels": labels,
-                "steps": steps,
+            # Tokenize once with offset mapping
+            enc = tokenizer(
+                input_text,
+                max_length=max_len,
+                truncation=True,
+                padding="max_length",
+                return_tensors="pt",
+                return_offsets_mapping=True,
+            )
+            input_ids = enc["input_ids"].squeeze(0)
+            attention_mask = enc["attention_mask"].squeeze(0)
+            offsets = enc["offset_mapping"].squeeze(0).tolist()  # list of (start, end)
+
+            # Find step end positions using offset mapping
+            step_starts_char = [m.start() for m in re.finditer(r'\[Step \d+\]', input_text)]
+
+            if not step_starts_char:
+                continue
+
+            end_positions = []
+            for i, start_char in enumerate(step_starts_char):
+                if i + 1 < len(step_starts_char):
+                    end_char = step_starts_char[i + 1] - 1
+                else:
+                    end_char = len(input_text) - 1
+
+                # Find the last token whose span overlaps with end_char
+                end_tok_pos = 0
+                for tok_idx, (s, e) in enumerate(offsets):
+                    if s <= end_char < e or (e > 0 and e <= end_char + 1):
+                        end_tok_pos = tok_idx
+
+                end_positions.append(min(end_tok_pos, input_ids.shape[0] - 1))
+
+            # Pad to fixed size
+            labels_tensor = torch.full((max_steps,), -1.0)
+            positions_tensor = torch.full((max_steps,), -1, dtype=torch.long)
+
+            for i, (pos, label) in enumerate(zip(end_positions, labels)):
+                if i >= max_steps:
+                    break
+                positions_tensor[i] = pos
+                labels_tensor[i] = label
+
+            self.processed_samples.append({
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "step_end_positions": positions_tensor,
+                "labels": labels_tensor,
             })
 
-        print(f"Loaded {len(self.samples)} PRM training samples from {jsonl_path}")
+        print(f"Loaded {len(self.processed_samples)} PRM training samples "
+              f"from {jsonl_path} (filtered from {raw_count})")
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.processed_samples)
 
     def __getitem__(self, idx):
-        sample = self.samples[idx]
-        tok = self.tokenizer
-
-        # Tokenize full input
-        enc = tok(
-            sample["input_text"],
-            max_length=self.max_len,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt",
-            return_offsets_mapping=True,
-        )
-
-        input_ids = enc["input_ids"].squeeze(0)
-        attention_mask = enc["attention_mask"].squeeze(0)
-        offsets = enc["offset_mapping"].squeeze(0)
-
-        # Find step terminator positions
-        # Each [Step N] section ends at the last token before the next [Step N+1]
-        # or at the end of the sequence
-        step_end_positions = self._find_step_end_positions(
-            sample["input_text"], input_ids, tok
-        )
-
-        # Pad step positions to fixed size
-        max_steps = 20  # Maximum steps per sample
-        labels_tensor = torch.full((max_steps,), -1.0)
-        positions_tensor = torch.full((max_steps,), -1, dtype=torch.long)
-
-        for i, (pos, label) in enumerate(
-            zip(step_end_positions, sample["labels"])
-        ):
-            if i >= max_steps:
-                break
-            positions_tensor[i] = pos
-            labels_tensor[i] = label
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "step_end_positions": positions_tensor,
-            "labels": labels_tensor,
-        }
-
-    def _find_step_end_positions(
-        self, text: str, input_ids: torch.Tensor, tokenizer
-    ) -> list[int]:
-        """
-        Find the token position of the last token in each step.
-
-        Strategy: Find [Step N] token patterns and mark the last token
-        before the next [Step N+1] (or end of sequence) as the terminator.
-        """
-        import re
-
-        # Find character positions of each [Step N] marker
-        step_starts = []
-        for m in re.finditer(r'\[Step \d+\]', text):
-            step_starts.append(m.start())
-
-        if not step_starts:
-            return []
-
-        # Tokenize to get offset mapping
-        enc = tokenizer(
-            text, max_length=self.max_len, truncation=True,
-            return_offsets_mapping=True, add_special_tokens=True,
-        )
-        offsets = enc["offset_mapping"]
-
-        # For each step, find the last token before the next step starts
-        end_positions = []
-        for i, start_char in enumerate(step_starts):
-            if i + 1 < len(step_starts):
-                end_char = step_starts[i + 1] - 1
-            else:
-                # Last step: end at last non-padding token
-                end_char = len(text) - 1
-
-            # Find the token that covers end_char
-            end_tok_pos = 0
-            for tok_idx, (s, e) in enumerate(offsets):
-                if s <= end_char < e or (e > 0 and e <= end_char + 1):
-                    end_tok_pos = tok_idx
-
-            end_positions.append(min(end_tok_pos, input_ids.shape[0] - 1))
-
-        return end_positions
+        return self.processed_samples[idx]
 
 
 # ---------------------------------------------------------------------------
@@ -441,10 +403,12 @@ def train(args):
     train_ds = StepLabelDataset(args.train_file, tokenizer)
     val_ds = StepLabelDataset(args.val_file, tokenizer)
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=2
+        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0,
+        pin_memory=True,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2
+        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0,
+        pin_memory=True,
     )
     print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
 

@@ -36,6 +36,7 @@ import re
 import json
 import argparse
 import threading
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
@@ -125,9 +126,15 @@ def main():
     parser.add_argument("--include_judge", type=str, default="true",
                         choices=["true", "false"],
                         help="Whether to include Judge reasoning. Default: true.")
+    parser.add_argument("--eval_accuracy", type=str, default="true",
+                        choices=["true", "false"],
+                        help="Whether to compute and save accuracy metrics "
+                             "after inference. Results saved as JSON beside "
+                             "the output file. Default: true.")
 
     args = parser.parse_args()
     args.include_judge = args.include_judge.lower() == "true"
+    args.eval_accuracy = args.eval_accuracy.lower() == "true"
 
     # ------------------------------------------------------------------
     # Model alias resolution
@@ -209,6 +216,139 @@ def main():
             write_to_jsonl(lock, args.output_file, output)
 
     print(f"\nDone. Results saved to: {args.output_file}")
+
+    # ------------------------------------------------------------------
+    # Accuracy evaluation
+    # ------------------------------------------------------------------
+    if args.eval_accuracy:
+        metrics = compute_accuracy(args.output_file)
+        metrics_file = str(Path(args.output_file).with_suffix(".metrics.json"))
+        with open(metrics_file, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=2)
+        print(f"\n--- Accuracy Metrics ---")
+        print(f"Judge accuracy:    {metrics['judge_accuracy']:.4f} "
+              f"({metrics['judge_correct']}/{metrics['judge_total']})")
+        print(f"Guardian accuracy: {metrics['guardian_accuracy']:.4f} "
+              f"({metrics['guardian_correct']}/{metrics['guardian_total']})")
+        print(f"Metrics saved to: {metrics_file}")
+
+
+# ---------------------------------------------------------------------------
+# Accuracy computation
+# ---------------------------------------------------------------------------
+
+def extract_judge_answer(response_text: str):
+    """Extract Judge's final answer (1/2/3) from response text."""
+    judge_match = re.search(
+        r'===== Solution \d+ \[JUDGE.*?\] =====\n(.*?)$',
+        response_text, re.DOTALL
+    )
+    if not judge_match:
+        return None
+    judge_text = judge_match.group(1)
+    m = re.search(r'Answer\s*:\s*([1-3])', judge_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    digits = re.findall(r'\b([1-3])\b', judge_text)
+    return digits[-1] if digits else None
+
+
+def extract_guardian_answer(response_text: str):
+    """Extract Guardian's answer (1/2/3) from response text."""
+    guardian_match = re.search(
+        r'===== Solution \d+ \[GUARDIAN\] =====\n(.*?)(?=\n===== Solution)',
+        response_text, re.DOTALL
+    )
+    if not guardian_match:
+        return None
+    guardian_text = guardian_match.group(1)
+    m = re.search(r'Answer\s*:\s*([1-3])', guardian_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    digits = re.findall(r'\b([1-3])\b', guardian_text)
+    return digits[-1] if digits else None
+
+
+def compute_accuracy(output_file: str) -> dict:
+    """
+    Compute Judge and Guardian accuracy from inference output JSONL.
+
+    Returns a dict with overall metrics and per-country breakdown.
+    """
+    data = []
+    with open(output_file, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                data.append(json.loads(line))
+
+    judge_correct = 0
+    judge_total = 0
+    guardian_correct = 0
+    guardian_total = 0
+    country_stats = {}
+
+    for d in data:
+        gt = d.get("gt", "").strip()
+        if not gt:
+            continue
+        country = d.get("country", "unknown")
+        response = d.get("response", "")
+
+        judge_ans = extract_judge_answer(response)
+        guardian_ans = extract_guardian_answer(response)
+
+        if judge_ans:
+            judge_total += 1
+            if judge_ans == gt:
+                judge_correct += 1
+
+        if guardian_ans:
+            guardian_total += 1
+            if guardian_ans == gt:
+                guardian_correct += 1
+
+        if country not in country_stats:
+            country_stats[country] = {
+                "total": 0, "judge_correct": 0, "guardian_correct": 0
+            }
+        country_stats[country]["total"] += 1
+        if judge_ans == gt:
+            country_stats[country]["judge_correct"] += 1
+        if guardian_ans == gt:
+            country_stats[country]["guardian_correct"] += 1
+
+    # Per-country accuracy
+    per_country = {}
+    for country, stats in sorted(country_stats.items()):
+        per_country[country] = {
+            "total": stats["total"],
+            "judge_correct": stats["judge_correct"],
+            "judge_accuracy": (stats["judge_correct"] / stats["total"]
+                               if stats["total"] > 0 else 0.0),
+            "guardian_correct": stats["guardian_correct"],
+            "guardian_accuracy": (stats["guardian_correct"] / stats["total"]
+                                  if stats["total"] > 0 else 0.0),
+        }
+
+    # GT and prediction distributions
+    gt_dist = dict(Counter(d.get("gt", "").strip() for d in data if d.get("gt")))
+    judge_ans_dist = dict(Counter(
+        extract_judge_answer(d.get("response", "")) for d in data
+    ))
+
+    return {
+        "total_samples": len(data),
+        "judge_total": judge_total,
+        "judge_correct": judge_correct,
+        "judge_accuracy": judge_correct / judge_total if judge_total > 0 else 0.0,
+        "guardian_total": guardian_total,
+        "guardian_correct": guardian_correct,
+        "guardian_accuracy": (guardian_correct / guardian_total
+                              if guardian_total > 0 else 0.0),
+        "gt_distribution": gt_dist,
+        "judge_answer_distribution": judge_ans_dist,
+        "per_country": per_country,
+    }
 
 
 if __name__ == "__main__":
