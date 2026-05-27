@@ -653,16 +653,6 @@ Answer: <数字>
 1. **Debate-Only**（A.3）：两个 Agent 独立给出初始判断 → 交换反馈 → 基于反馈给出最终判断 → 由 Judge LLM 仲裁分歧
 2. **Self-Reflect+Debate**（A.4）：两个 Agent 独立给出初始判断 → 各自选择自我反思(A)或辩论(B) → 执行所选动作 → 基于反馈给出最终判断 → Judge 仲裁
 
-**关键差异**：
-
-| 维度 | MAD | HF-CAC |
-|------|-----|--------|
-| Agent 角色 | 对称（无角色区分） | 不对称（Guardian vs Auditor） |
-| 文化权威 | 无（平等辩论） | 动态激活主场权威 |
-| 对话轮次 | 单轮反馈交换 | 两阶段结构化协商 |
-| Judge 权重 | 无偏好 | Guardian 加权 + 一票否决权 |
-| rule-of-thumb | 不使用 | 不使用（本 Baseline 统一） |
-
 **代码目录**：`MAD/`
 
 ```
@@ -693,28 +683,10 @@ python MAD/debate_only.py \
     --temperature 0.7 \
     --max_tokens 512
 
-# Debate-Only Baseline（Llama 基座）
-python MAD/debate_only.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name llama \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512
-
 # Self-Reflect+Debate Baseline（Qwen 基座）
 python MAD/self_reflect_debate.py \
     --input_file /autodl-fs/data/normad_mas.json \
     --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512
-
-# Self-Reflect+Debate Baseline（Llama 基座）
-python MAD/self_reflect_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name llama \
     --tensor_parallel_size 2 \
     --max_samples 0 \
     --temperature 0.7 \

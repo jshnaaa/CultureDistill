@@ -29,8 +29,8 @@ Usage:
 
 import os
 import sys
+import json
 import argparse
-from datetime import datetime
 from tqdm import tqdm
 
 from vllm import LLM, SamplingParams
