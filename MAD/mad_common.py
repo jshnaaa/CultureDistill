@@ -193,3 +193,32 @@ def compute_metrics(results: list) -> dict:
         "prediction_distribution": dict(answer_dist),
         "per_country": per_country,
     }
+
+# ---------------------------------------------------------------------------
+# Incremental output helpers
+# ---------------------------------------------------------------------------
+
+import threading
+
+def init_jsonl(jsonl_path):
+    """Create/truncate JSONL file, ensure dir exists."""
+    os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
+    with open(jsonl_path, "w") as f:
+        pass  # truncate
+
+def append_jsonl(jsonl_path, record):
+    """Append one record to JSONL file (thread-safe via lock if provided)."""
+    with open(jsonl_path, "a") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+def jsonl_to_json(jsonl_path, json_path):
+    """Convert JSONL file to JSON array file."""
+    records = []
+    with open(jsonl_path, "r") as f:
+        for line in f:
+            if line.strip():
+                records.append(json.loads(line))
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    with open(json_path, "w") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    return records
