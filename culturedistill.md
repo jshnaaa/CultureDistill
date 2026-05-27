@@ -1395,6 +1395,17 @@ python Cul/step_label/label_steps.py \
     --validate_consistency
 ```
 
+**Step 3.5: 切分标注数据为 train/val（PRM 训练需要）**
+```bash
+python Cul/step_label/split_step_labels.py \
+    --input_file /autodl-fs/data/qwen/normad_step_labels.jsonl \
+    --output_dir /autodl-fs/data/qwen \
+    --val_ratio 0.2 \
+    --seed 42
+```
+
+输出：`normad_step_labels_train.jsonl`（80%）和 `normad_step_labels_val.jsonl`（20%）。一键运行模式下此步骤由 pipeline 内部自动完成。
+
 **Step 4: PRM 训练（无 SFT adapter，直接基于 base model）**
 ```bash
 python Cul/prm/train_prm_mse.py \
