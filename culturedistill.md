@@ -1035,7 +1035,7 @@ Cul/
 │   └── label_data.py               # 旧管线: 构建 pairwise 偏好对
 ├── grpo/
 │   ├── train_grpo_v3.py            # ★ Stage 3-GRPO: Mean(R_process) reward
-│   └── train_grpo.py               # 旧管线: 旧 GRPO（baseline 对比用）
+│   └── train_grpo.py               # ★ DeepSpeed ZeRO-3 GRPO（适配 train_prm_mse.py 的 PRM）
 └── data/                           # 数据存放目录
     ├── normad.jsonl                # 原始 NormAD 数据集（JSONL 格式）
     ├── normad_mas.json             # 转换后数据集（JSON 数组，instruction/input/output/country）
@@ -1441,6 +1441,33 @@ python Cul/grpo/train_grpo_v3.py \
 
 与 SFT+RL 模式的关键差异：不传 `--sft_adapter`（从 base model 出发），学习率 5e-5（高于 SFT+RL 的 2e-5），最大轮数 30（多于 SFT+RL 的 20）。
 
+**Step 5 备选: GRPO 强化学习（DeepSpeed ZeRO-3 版，train_grpo.py）**
+```bash
+deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
+    --model_name     qwen \
+    --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
+    --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
+    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
+    --prm_base_path  /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+    --output_dir     /autodl-fs/data/model/qwen/grpo_qwen_culture \
+    --n_samples      10 \
+    --max_rounds     30 \
+    --eval_every     5
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--grpo_data` | GRPO 训练数据（prompt 来源）|
+| `--val_data` | 验证数据 |
+| `--prm_path` | PRM checkpoint 路径（含 LoRA adapter + score_head.pt）|
+| `--prm_base_path` | PRM 基座模型路径（Qwen2.5-7B-Instruct）|
+| `--output_dir` | 输出目录 |
+| `--n_samples` | 每 prompt 采样数 G |
+| `--max_rounds` | 最大训练轮数 |
+| `--eval_every` | 每 N 轮评估一次 |
+
+与 `train_grpo_v3.py` 的区别：使用 DeepSpeed ZeRO-3 进行多卡并行（显存效率更高），R_total = 0.7×R_ans + 0.3×R_cultural，PRM 使用 step-level scoring（与 `train_prm_mse.py` 训练的 PRM 完全适配）。
+
 **Step 6: 测试集评估**
 ```bash
 python Cul/evaluate.py \
@@ -1551,5 +1578,5 @@ CAMA-D 与现有代码（`culturedebate.md` 描述的旧管线）的关系：
 - **数据生成**：复用 HF-CAC（`generate_hf_cac_data.py`），无需修改
 - **SFT**：需新建 `train_sft_weighted.py`，旧 `train_sft.py` 保留作为 baseline
 - **PRM**：需新建 `train_prm_mse.py`，旧 `train_prm.py`（Bradley-Terry）保留作为对比
-- **GRPO**：需修改 reward 计算逻辑（`train_grpo.py` → `train_grpo_v3.py`），旧版保留
+- **GRPO**：两个版本并存——`train_grpo_v3.py`（无 DeepSpeed，Mean(R_process) reward）和 `train_grpo.py`（DeepSpeed ZeRO-3，已适配新 PRM 架构）
 - **评估**：评估指标和脚本完全复用

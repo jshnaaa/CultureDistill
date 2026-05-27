@@ -3,19 +3,20 @@ GRPO fine-tuning for cultural alignment distillation.
 
 R_total = 0.7 * R_ans + 0.3 * R_cultural
   R_ans     : verifiable reward (answer == gold → 1, else 0)
-  R_cultural: PRM score (Qwen3-0.6B + LoRA + mean-pool reward head), clipped to [0.1, 0.9]
+  R_cultural: PRM score (Qwen2.5-7B + LoRA + score_head, step-level scoring), clipped to [0.1, 0.9]
 
 Training data: grpo_train.jsonl  (prompts, online sampling)
 Validation:    prm_val.jsonl     (samples, every eval_every rounds)
 
 Usage:
-    # RL-only (from base model)
+    # RL-only (from base model, PRM from train_prm_mse.py)
     deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
         --model_name     qwen \
         --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
         --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
-        --prm_path       /autodl-tmp/models/normad_prm_qwen3_0.6b_v2/best \
-        --output_dir     /autodl-tmp/models/grpo_qwen_culture \
+        --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
+        --prm_base_path  /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+        --output_dir     /autodl-fs/data/model/qwen/grpo_qwen_culture \
         --n_samples      10 \
         --max_rounds     30 \
         --eval_every     5
@@ -23,11 +24,12 @@ Usage:
     # SFT+RL (from SFT checkpoint)
     deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
         --model_name     qwen \
-        --pretrain_path  /autodl-tmp/models/sft_qwen/best \
+        --pretrain_path  /autodl-fs/data/model/qwen/sft_best \
         --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
         --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
-        --prm_path       /autodl-tmp/models/normad_prm_qwen3_0.6b_v2/best \
-        --output_dir     /autodl-tmp/models/grpo_sft_qwen_culture \
+        --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
+        --prm_base_path  /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+        --output_dir     /autodl-fs/data/model/qwen/grpo_sft_qwen_culture \
         --n_samples      10 \
         --max_rounds     30 \
         --eval_every     5
@@ -56,7 +58,6 @@ MODEL_ALIASES = {
     "llama": "/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
     "qwen":  "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
 }
-PRM_BASE = "/root/autodl-tmp/base/Qwen3-0.6B-Base"
 
 ALPHA = 0.7          # R_ans weight
 MAX_GEN_LEN  = 512
@@ -65,26 +66,35 @@ KL_COEF = 0.001
 
 
 # ---------------------------------------------------------------------------
-# PRM (frozen, for R_cultural scoring) — matches train_prm.py v2 architecture
+# PRM (frozen, for R_cultural scoring) — matches train_prm_mse.py architecture
 # ---------------------------------------------------------------------------
 
 class CultureRewardModel(nn.Module):
     """
-    Must match the architecture used during PRM training (v2):
-      - AutoModelForCausalLM (not AutoModel)
-      - LoRA adapter loaded on top
-      - Mean-pooling over non-padding tokens (not last-token)
-      - Input format: [country]\nquestion\nreasoning\n[ANSWER: X]
+    Matches the CulturePRM architecture from train_prm_mse.py:
+      - Base: Qwen2.5-7B-Instruct (AutoModelForCausalLM, output_hidden_states=True)
+      - LoRA adapter (q/k/v/o_proj, rank=16) loaded on top
+      - score_head: Linear(hidden_size, 1) + Sigmoid → per-step score ∈ (0, 1)
+      - Scoring: find [Step N] markers, extract hidden states at step ends,
+                 pass through score_head, return mean score as overall reward.
+      - Input format: [country]\nquestion\n[Step 1] reasoning...\n[Step 2] ...
+
+    For GRPO usage, we score the full response and return the mean of all
+    step-level scores as the overall R_cultural reward.
+    If no [Step N] markers are found, we fall back to last-token scoring.
     """
-    def __init__(self, prm_checkpoint_dir: str, base_path: str = PRM_BASE):
+    def __init__(self, prm_checkpoint_dir: str, base_path: str):
         super().__init__()
+        import re
+        self._re = re
+
         # Load base model
         base_model = AutoModelForCausalLM.from_pretrained(
             base_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
             output_hidden_states=True,
         )
 
-        # Load LoRA adapter if present
+        # Load LoRA adapter
         adapter_path = Path(prm_checkpoint_dir) / "adapter_model.safetensors"
         adapter_path_bin = Path(prm_checkpoint_dir) / "adapter_model.bin"
         if adapter_path.exists() or adapter_path_bin.exists():
@@ -92,41 +102,77 @@ class CultureRewardModel(nn.Module):
             self.model = PeftModel.from_pretrained(base_model, prm_checkpoint_dir)
             print(f"  [PRM] Loaded LoRA adapter from {prm_checkpoint_dir}")
         else:
-            # Fallback: full model checkpoint (no LoRA)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                prm_checkpoint_dir, torch_dtype=torch.bfloat16,
-                trust_remote_code=True, output_hidden_states=True,
-            )
-            print(f"  [PRM] Loaded full model from {prm_checkpoint_dir}")
+            self.model = base_model
+            print(f"  [PRM] No adapter found, using base model directly")
 
-        # Load reward head
+        # Load score_head (matches train_prm_mse.py: Linear(hidden_size, 1))
         hidden_size = base_model.config.hidden_size
-        self.reward_head = nn.Linear(hidden_size, 1)
-        head_path = Path(prm_checkpoint_dir) / "reward_head.pt"
+        self.score_head = nn.Linear(hidden_size, 1)
+        head_path = Path(prm_checkpoint_dir) / "score_head.pt"
         state = torch.load(head_path, map_location="cpu")
-        self.reward_head.load_state_dict(state)
-        print(f"  [PRM] Loaded reward head from {head_path}")
+        self.score_head.load_state_dict(state)
+        print(f"  [PRM] Loaded score_head from {head_path}")
 
-    def _pool(self, hidden_states: torch.Tensor,
-              attention_mask: torch.Tensor) -> torch.Tensor:
-        """Mean-pool over non-padding tokens (matches train_prm.py v2)."""
-        mask = attention_mask.unsqueeze(-1).float()
-        summed = (hidden_states * mask).sum(dim=1)
-        lengths = mask.sum(dim=1).clamp(min=1)
-        return summed / lengths
+        self.sigmoid = nn.Sigmoid()
 
     @torch.no_grad()
     def score(self, input_ids: torch.Tensor,
-              attention_mask: torch.Tensor) -> torch.Tensor:
+              attention_mask: torch.Tensor,
+              input_text: str = "") -> torch.Tensor:
+        """
+        Score a single response. Returns a scalar reward ∈ [0.1, 0.9].
+
+        Strategy:
+          1. If input_text contains [Step N] markers, find step-end positions
+             in the token sequence and score each step, return mean.
+          2. Otherwise, fall back to scoring at the last non-padding token.
+        """
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
         )
-        last_hidden = outputs.hidden_states[-1]
-        pooled = self._pool(last_hidden, attention_mask)
-        s = torch.sigmoid(self.reward_head(pooled.float()).squeeze(-1))
-        return s.clamp(0.1, 0.9)
+        last_hidden = outputs.hidden_states[-1]  # (1, seq_len, hidden)
+
+        # Try to find step markers in the text
+        step_starts = [m.start() for m in self._re.finditer(r'\[Step \d+\]', input_text)]
+
+        if step_starts and input_text:
+            # Tokenize to get offset mapping for position alignment
+            # Use last token of each step segment as the scoring position
+            seq_len = last_hidden.size(1)
+            text_len = len(input_text)
+
+            # Approximate: divide text into step segments, map to token positions
+            step_scores = []
+            for i, start_char in enumerate(step_starts):
+                # End of this step = start of next step (or end of text)
+                if i + 1 < len(step_starts):
+                    end_char = step_starts[i + 1] - 1
+                else:
+                    end_char = text_len - 1
+
+                # Map character position to approximate token position
+                # (proportional mapping: char_pos / text_len * seq_len)
+                end_tok = min(int(end_char / max(text_len, 1) * seq_len), seq_len - 1)
+                end_tok = max(end_tok, 0)
+
+                h = last_hidden[0, end_tok, :]  # (hidden,)
+                logit = self.score_head(h.float()).squeeze(-1)
+                score = self.sigmoid(logit)
+                step_scores.append(score)
+
+            if step_scores:
+                mean_score = torch.stack(step_scores).mean()
+                return mean_score.clamp(0.1, 0.9)
+
+        # Fallback: score at last non-padding token
+        lengths = attention_mask.sum(dim=1).long()  # (batch,)
+        last_pos = (lengths - 1).clamp(min=0).item()
+        h = last_hidden[0, last_pos, :]
+        logit = self.score_head(h.float()).squeeze(-1)
+        score = self.sigmoid(logit)
+        return score.clamp(0.1, 0.9)
 
 
 # ---------------------------------------------------------------------------
@@ -381,12 +427,13 @@ def train(args):
     for p in ref_model.parameters():
         p.requires_grad_(False)
 
-    # ---- PRM (frozen, on GPU) — v2 architecture with LoRA + mean-pool ----
+    # ---- PRM (frozen, on GPU) — CulturePRM (step-level scoring) ----
+    prm_base = args.prm_base_path if args.prm_base_path else model_path
     prm = CultureRewardModel(
         prm_checkpoint_dir=args.prm_path,
-        base_path=PRM_BASE,
+        base_path=prm_base,
     ).to(device)
-    prm_tokenizer = AutoTokenizer.from_pretrained(PRM_BASE, trust_remote_code=True)
+    prm_tokenizer = AutoTokenizer.from_pretrained(prm_base, trust_remote_code=True)
     if prm_tokenizer.pad_token is None:
         prm_tokenizer.pad_token = prm_tokenizer.eos_token
     for p in prm.parameters():
@@ -453,17 +500,18 @@ def train(args):
                     pred = extract_answer(resp)
                     r_ans = compute_r_ans(pred, str(gold).strip())
 
-                    # R_cultural via PRM (v2 format with [ANSWER: X])
+                    # R_cultural via PRM (step-level scoring)
                     prm_text = build_prm_input(
                         country, query, resp, pred
                     )
                     prm_enc = prm_tokenizer(
                         prm_text, return_tensors="pt",
-                        max_length=2048, truncation=True,
+                        max_length=1024, truncation=True,
                         padding="max_length",
                     ).to(device)
                     r_cultural = prm.score(
-                        prm_enc["input_ids"], prm_enc["attention_mask"]
+                        prm_enc["input_ids"], prm_enc["attention_mask"],
+                        input_text=prm_text,
                     ).item()
 
                     rewards[pi, si] = ALPHA * r_ans + (1 - ALPHA) * r_cultural
@@ -550,7 +598,9 @@ def main():
     parser.add_argument("--val_data",         type=str,   required=True,
                         help="prm_val.jsonl (validation samples)")
     parser.add_argument("--prm_path",         type=str,   required=True,
-                        help="PRM v2 checkpoint dir (LoRA adapter + reward_head.pt)")
+                        help="PRM checkpoint dir (LoRA adapter + score_head.pt)")
+    parser.add_argument("--prm_base_path",    type=str,   default=None,
+                        help="Base model for PRM (default: same as --model_name)")
     parser.add_argument("--output_dir",       type=str,   required=True)
     parser.add_argument("--n_samples",        type=int,   default=10,
                         help="Responses per prompt per round")
