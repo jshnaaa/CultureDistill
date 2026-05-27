@@ -361,6 +361,8 @@ def run_debate_only(args):
         results.append(record)
 
     # Write JSON
+    os.makedirs(os.path.dirname(out_json), exist_ok=True)
+    os.makedirs(os.path.dirname(out_json), exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"Inference results saved to: {out_json}")
@@ -377,6 +379,8 @@ def run_debate_only(args):
     metrics["agree_count"] = agree_count
     metrics["disagree_count"] = n - agree_count
 
+    os.makedirs(os.path.dirname(out_metrics), exist_ok=True)
+    os.makedirs(os.path.dirname(out_metrics), exist_ok=True)
     with open(out_metrics, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     print(f"Metrics saved to: {out_metrics}")

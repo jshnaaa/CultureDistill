@@ -476,6 +476,8 @@ def run_self_reflect_debate(args):
         results.append(record)
 
     # Write JSON
+    os.makedirs(os.path.dirname(out_json), exist_ok=True)
+    os.makedirs(os.path.dirname(out_json), exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"Inference results saved to: {out_json}")
@@ -498,6 +500,8 @@ def run_self_reflect_debate(args):
         "debate_ratio": debate_total / total_choices if total_choices > 0 else 0,
     }
 
+    os.makedirs(os.path.dirname(out_metrics), exist_ok=True)
+    os.makedirs(os.path.dirname(out_metrics), exist_ok=True)
     with open(out_metrics, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     print(f"Metrics saved to: {out_metrics}")
