@@ -43,7 +43,7 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, PeftModel, TaskType
 
 
-MAX_SEQ_LEN = 2048
+MAX_SEQ_LEN = 1024
 
 
 # ---------------------------------------------------------------------------
