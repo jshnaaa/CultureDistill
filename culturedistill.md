@@ -641,6 +641,7 @@ Answer: <数字>
 ---
 
 
+
 ### 2.11 Baseline
 
 本小节记录用于对比 HF-CAC 的 Baseline 方法。所有 Baseline 均使用相同的 `normad_mas.json` 数据集，不带 rule-of-thumb 信息（对应论文 `Si(w/o)` 设定）。
@@ -666,38 +667,35 @@ Answer: <数字>
 
 ```
 MAD/
-├── mad_common.py               # 共享工具（数据解析、答案提取、提示词模板）
+├── mad_common.py               # 共享工具（数据解析、答案提取、提示词模板、指标计算）
 ├── debate_only.py               # Debate-Only Baseline（A.3）
 └── self_reflect_debate.py       # Self-Reflect+Debate Baseline（A.4）
 ```
 
-**运行命令**：
+**输出文件命名规范**：`{dataset}_{方法}_{变体}_{基座}.json`
+
+| 变体 | 输出文件 | 指标文件 |
+|------|---------|---------|
+| Debate-Only (Qwen) | `normad_MAD_debateonly_qwen.json` | `normad_MAD_debateonly_qwen_metrics.json` |
+| Debate-Only (Llama) | `normad_MAD_debateonly_llama.json` | `normad_MAD_debateonly_llama_metrics.json` |
+| Self-Reflect+Debate (Qwen) | `normad_MAD_srd_qwen.json` | `normad_MAD_srd_qwen_metrics.json` |
+| Self-Reflect+Debate (Llama) | `normad_MAD_srd_llama.json` | `normad_MAD_srd_llama_metrics.json` |
+
+**运行命令**（文件名自动生成，无需指定 `--output_file`）：
 
 ```bash
-# Debate-Only Baseline（Llama 基座）
-python MAD/debate_only.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --output_file /autodl-fs/data/mad_debate_only_llama.jsonl \
-    --model_name llama \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512
-
 # Debate-Only Baseline（Qwen 基座）
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/normad_mas.json \
-    --output_file /autodl-fs/data/mad_debate_only_qwen.jsonl \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0 \
     --temperature 0.7 \
     --max_tokens 512
 
-# Self-Reflect+Debate Baseline（Llama 基座）
-python MAD/self_reflect_debate.py \
+# Debate-Only Baseline（Llama 基座）
+python MAD/debate_only.py \
     --input_file /autodl-fs/data/normad_mas.json \
-    --output_file /autodl-fs/data/mad_srd_llama.jsonl \
     --model_name llama \
     --tensor_parallel_size 2 \
     --max_samples 0 \
@@ -707,8 +705,16 @@ python MAD/self_reflect_debate.py \
 # Self-Reflect+Debate Baseline（Qwen 基座）
 python MAD/self_reflect_debate.py \
     --input_file /autodl-fs/data/normad_mas.json \
-    --output_file /autodl-fs/data/mad_srd_qwen.jsonl \
     --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+
+# Self-Reflect+Debate Baseline（Llama 基座）
+python MAD/self_reflect_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name llama \
     --tensor_parallel_size 2 \
     --max_samples 0 \
     --temperature 0.7 \
@@ -720,8 +726,8 @@ python MAD/self_reflect_debate.py \
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
-| `--output_file` | 输出 JSONL 路径 | 必填 |
 | `--model_name` | 模型别名（llama/qwen）或 HF 路径 | 必填 |
+| `--output_dir` | 输出目录（默认与 input_file 同目录） | None |
 | `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
 | `--batch_size` | 每批处理样本数 | 8 |
 | `--max_samples` | 最大处理样本数（0=全部） | 0 |
@@ -740,7 +746,56 @@ python MAD/self_reflect_debate.py \
 | 4 | Judge 仲裁（A.3.4） | 最终决策（A.4.5） |
 | 5 | — | Judge 仲裁（A.4.6） |
 
-各阶段均使用 vLLM 批量推理，支持断点续传（`reserve_unprocessed_queries`）。
+各阶段均使用 vLLM 批量推理。
+
+**输出格式**：JSON 数组，每条记录包含完整的多智能体推理过程：
+
+```json
+{
+  "instruction": "...",
+  "input": "...",
+  "output": "1",
+  "country": "egypt",
+  "scenario": "At a gathering...",
+  "model1_initial": "...",
+  "model1_initial_ans": "1",
+  "model2_initial": "...",
+  "model2_initial_ans": "1",
+  "model1_feedback": "...",
+  "model2_feedback": "...",
+  "model1_final": "...",
+  "model1_final_ans": "1",
+  "model2_final": "...",
+  "model2_final_ans": "1",
+  "judge_response": "",
+  "final_answer": "1",
+  "correct": true,
+  "agree": true
+}
+```
+
+**指标文件**（`_metrics.json`）包含：
+
+```json
+{
+  "method": "MAD",
+  "variant": "debateonly",
+  "model": "qwen",
+  "total_samples": 2633,
+  "correct": 2000,
+  "incorrect": 633,
+  "accuracy": 0.7596,
+  "agree_count": 1500,
+  "disagree_count": 1133,
+  "gt_distribution": {"1": 877, "2": 878, "3": 878},
+  "prediction_distribution": {"1": 900, "2": 850, "3": 883},
+  "per_country": {
+    "egypt": {"total": 35, "correct": 28, "accuracy": 0.8000},
+    "...": {}
+  }
+}
+```
+
 
 
 

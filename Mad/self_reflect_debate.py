@@ -10,19 +10,19 @@ Two LLM agents debate with dynamic choice between self-reflection and debate. St
 
 No rule-of-thumb information is provided (no-rule variant).
 
+Output naming: {dataset}_{MAD}_{srd}_{model}.json + _metrics.json
+
 Usage:
-    # Quick test
+    # Quick test (5 samples)
     python MAD/self_reflect_debate.py \
         --input_file /autodl-fs/data/normad_mas.json \
-        --output_file /autodl-fs/data/mad_self_reflect_debate.jsonl \
         --model_name qwen \
         --tensor_parallel_size 2 \
         --max_samples 5
 
-    # Full dataset (llama)
+    # Full dataset
     python MAD/self_reflect_debate.py \
         --input_file /autodl-fs/data/normad_mas.json \
-        --output_file /autodl-fs/data/mad_srd_llama.jsonl \
         --model_name llama \
         --tensor_parallel_size 2 \
         --max_samples 0
@@ -30,8 +30,8 @@ Usage:
 
 import os
 import sys
+import json
 import argparse
-from datetime import datetime
 from tqdm import tqdm
 
 from vllm import LLM, SamplingParams
@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from MAD.mad_common import (
     MODEL_ALIASES, ANSWER_MAP, REVERSE_ANSWER_MAP,
     load_dataset, parse_input, extract_answer, extract_choice,
-    write_to_jsonl, reserve_unprocessed_queries,
+    infer_output_path, compute_metrics,
 )
 
 
@@ -109,8 +109,7 @@ PROMPT_A44_DEBATE = (
 )
 
 # A.4.5: Making Final Decision (no rule)
-# {your_action} and {other_action} are filled with:
-#   "reflect on your response" / "provide feedback to the discussant"
+# {your_action} / {other_action}: "reflect on your response" / "provide feedback to the discussant"
 PROMPT_A45_FINAL = (
     "Task: You are currently discussing if the action in "
     "the story is socially acceptable in {country} with "
@@ -166,10 +165,6 @@ def apply_chat(tokenizer, user_content: str) -> str:
     )
 
 
-def build_prompts_batch(tokenizer, template: str, batch_kwargs: list) -> list:
-    return [apply_chat(tokenizer, template.format(**kw)) for kw in batch_kwargs]
-
-
 # ===================================================================
 # Main inference function
 # ===================================================================
@@ -179,19 +174,19 @@ def run_self_reflect_debate(args):
     model_path = MODEL_ALIASES.get(args.model_name.lower(), args.model_name)
     print(f"Model: {model_path}")
 
+    # --- Determine output paths ---
+    out_json, out_metrics = infer_output_path(
+        args.input_file, "MAD", "srd", args.model_name, args.output_dir
+    )
+    print(f"Output JSON:    {out_json}")
+    print(f"Output Metrics: {out_metrics}")
+
     # --- Load data ---
     raw_data = load_dataset(args.input_file)
     dataset = raw_data
     if args.max_samples > 0:
         dataset = dataset[:args.max_samples]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
-
-    # --- Resume ---
-    dataset = reserve_unprocessed_queries(args.output_file, dataset)
-    print(f"After resume filter: {len(dataset)} samples remaining")
-    if len(dataset) == 0:
-        print("All samples already processed.")
-        return
 
     # --- Pre-parse country & scenario ---
     parsed = []
@@ -202,6 +197,8 @@ def run_self_reflect_debate(args):
             "country": country,
             "scenario": scenario,
         })
+
+    n = len(parsed)
 
     # --- Initialize vLLM ---
     print("Initializing vLLM...")
@@ -235,8 +232,8 @@ def run_self_reflect_debate(args):
         prompts_a1.append(apply_chat(tokenizer, PROMPT_A41_INITIAL.format(**kw)))
         prompts_a2.append(apply_chat(tokenizer, PROMPT_A41_INITIAL.format(**kw)))
 
-    for i in tqdm(range(0, len(parsed), batch_size), desc="Stage1-Init"):
-        batch_end = min(i + batch_size, len(parsed))
+    for i in tqdm(range(0, n, batch_size), desc="Stage1-Init"):
+        batch_end = min(i + batch_size, n)
         ba1 = prompts_a1[i:batch_end]
         ba2 = prompts_a2[i:batch_end]
 
@@ -245,10 +242,12 @@ def run_self_reflect_debate(args):
 
         for j in range(batch_end - i):
             idx = i + j
-            parsed[idx]["resp1_init"] = out1[j].outputs[0].text.strip()
-            parsed[idx]["ans1_init"] = extract_answer(out1[j].outputs[0].text)
-            parsed[idx]["resp2_init"] = out2[j].outputs[0].text.strip()
-            parsed[idx]["ans2_init"] = extract_answer(out2[j].outputs[0].text)
+            r1 = out1[j].outputs[0].text.strip()
+            r2 = out2[j].outputs[0].text.strip()
+            parsed[idx]["model1_initial"] = r1
+            parsed[idx]["model1_initial_ans"] = extract_answer(r1)
+            parsed[idx]["model2_initial"] = r2
+            parsed[idx]["model2_initial_ans"] = extract_answer(r2)
 
     # -------- Stage 2: Choose self-reflect or debate --------
     print("\n=== Stage 2: Choose Self-Reflect or Debate ===")
@@ -257,19 +256,19 @@ def run_self_reflect_debate(args):
     for p in parsed:
         kw1 = {
             "country": p["country"], "story": p["scenario"],
-            "your_response": p["resp1_init"],
-            "other_response": p["resp2_init"],
+            "your_response": p["model1_initial"],
+            "other_response": p["model2_initial"],
         }
         kw2 = {
             "country": p["country"], "story": p["scenario"],
-            "your_response": p["resp2_init"],
-            "other_response": p["resp1_init"],
+            "your_response": p["model2_initial"],
+            "other_response": p["model1_initial"],
         }
         prompts_choose1.append(apply_chat(tokenizer, PROMPT_A42_CHOOSE.format(**kw1)))
         prompts_choose2.append(apply_chat(tokenizer, PROMPT_A42_CHOOSE.format(**kw2)))
 
-    for i in tqdm(range(0, len(parsed), batch_size), desc="Stage2-Choose"):
-        batch_end = min(i + batch_size, len(parsed))
+    for i in tqdm(range(0, n, batch_size), desc="Stage2-Choose"):
+        batch_end = min(i + batch_size, n)
         c1 = llm.generate(prompts_choose1[i:batch_end], sampling, use_tqdm=False)
         c2 = llm.generate(prompts_choose2[i:batch_end], sampling, use_tqdm=False)
 
@@ -277,56 +276,57 @@ def run_self_reflect_debate(args):
             idx = i + j
             ch1 = c1[j].outputs[0].text.strip()
             ch2 = c2[j].outputs[0].text.strip()
-            parsed[idx]["choice1"] = extract_choice(ch1)
-            parsed[idx]["choice2"] = extract_choice(ch2)
+            parsed[idx]["model1_choice"] = extract_choice(ch1)
+            parsed[idx]["model1_choice_raw"] = ch1
+            parsed[idx]["model2_choice"] = extract_choice(ch2)
+            parsed[idx]["model2_choice_raw"] = ch2
 
     # -------- Stage 3: Execute chosen action (Reflect or Debate) --------
     print("\n=== Stage 3: Execute Chosen Action ===")
-    # Build prompts based on choices
     action_prompts1 = []
     action_prompts2 = []
-    action_types1 = []  # "reflect" or "debate"
+    action_types1 = []
     action_types2 = []
 
     for p in parsed:
-        c1 = p["choice1"]
-        c2 = p["choice2"]
+        c1 = p["model1_choice"]
+        c2 = p["model2_choice"]
 
         if c1 == "A":
             kw1 = {"country": p["country"], "story": p["scenario"],
-                   "your_response": p["resp1_init"]}
+                   "your_response": p["model1_initial"]}
             action_prompts1.append(apply_chat(tokenizer, PROMPT_A43_REFLECT.format(**kw1)))
             action_types1.append("reflect")
         else:
             kw1 = {"country": p["country"], "story": p["scenario"],
-                   "your_response": p["resp1_init"],
-                   "other_response": p["resp2_init"]}
+                   "your_response": p["model1_initial"],
+                   "other_response": p["model2_initial"]}
             action_prompts1.append(apply_chat(tokenizer, PROMPT_A44_DEBATE.format(**kw1)))
             action_types1.append("debate")
 
         if c2 == "A":
             kw2 = {"country": p["country"], "story": p["scenario"],
-                   "your_response": p["resp2_init"]}
+                   "your_response": p["model2_initial"]}
             action_prompts2.append(apply_chat(tokenizer, PROMPT_A43_REFLECT.format(**kw2)))
             action_types2.append("reflect")
         else:
             kw2 = {"country": p["country"], "story": p["scenario"],
-                   "your_response": p["resp2_init"],
-                   "other_response": p["resp1_init"]}
+                   "your_response": p["model2_initial"],
+                   "other_response": p["model1_initial"]}
             action_prompts2.append(apply_chat(tokenizer, PROMPT_A44_DEBATE.format(**kw2)))
             action_types2.append("debate")
 
-    for i in tqdm(range(0, len(parsed), batch_size), desc="Stage3-Action"):
-        batch_end = min(i + batch_size, len(parsed))
+    for i in tqdm(range(0, n, batch_size), desc="Stage3-Action"):
+        batch_end = min(i + batch_size, n)
         a1 = llm.generate(action_prompts1[i:batch_end], sampling, use_tqdm=False)
         a2 = llm.generate(action_prompts2[i:batch_end], sampling, use_tqdm=False)
 
         for j in range(batch_end - i):
             idx = i + j
-            parsed[idx]["action_response1"] = a1[j].outputs[0].text.strip()
-            parsed[idx]["action_type1"] = action_types1[i + j]
-            parsed[idx]["action_response2"] = a2[j].outputs[0].text.strip()
-            parsed[idx]["action_type2"] = action_types2[i + j]
+            parsed[idx]["model1_action_type"] = action_types1[i + j]
+            parsed[idx]["model1_action_response"] = a1[j].outputs[0].text.strip()
+            parsed[idx]["model2_action_type"] = action_types2[i + j]
+            parsed[idx]["model2_action_response"] = a2[j].outputs[0].text.strip()
 
     # -------- Stage 4: Final decisions --------
     print("\n=== Stage 4: Final Decisions ===")
@@ -334,37 +334,36 @@ def run_self_reflect_debate(args):
     prompts_final2 = []
 
     for p in parsed:
-        # Your action description
-        ya1 = ("reflect on your response" if p["action_type1"] == "reflect"
+        ya1 = ("reflect on your response" if p["model1_action_type"] == "reflect"
                else "provide feedback to the discussant")
-        oa1 = ("reflect on their response" if p["action_type2"] == "reflect"
+        oa1 = ("reflect on their response" if p["model2_action_type"] == "reflect"
                else "provide feedback to you")
-        ya2 = ("reflect on your response" if p["action_type2"] == "reflect"
+        ya2 = ("reflect on your response" if p["model2_action_type"] == "reflect"
                else "provide feedback to the discussant")
-        oa2 = ("reflect on their response" if p["action_type1"] == "reflect"
+        oa2 = ("reflect on their response" if p["model1_action_type"] == "reflect"
                else "provide feedback to you")
 
         kw1 = {
             "country": p["country"], "story": p["scenario"],
             "your_action": ya1, "other_action": oa1,
-            "your_response": p["resp1_init"],
-            "other_response": p["resp2_init"],
-            "your_feedback": p["action_response1"],
-            "other_feedback": p["action_response2"],
+            "your_response": p["model1_initial"],
+            "other_response": p["model2_initial"],
+            "your_feedback": p["model1_action_response"],
+            "other_feedback": p["model2_action_response"],
         }
         kw2 = {
             "country": p["country"], "story": p["scenario"],
             "your_action": ya2, "other_action": oa2,
-            "your_response": p["resp2_init"],
-            "other_response": p["resp1_init"],
-            "your_feedback": p["action_response2"],
-            "other_feedback": p["action_response1"],
+            "your_response": p["model2_initial"],
+            "other_response": p["model1_initial"],
+            "your_feedback": p["model2_action_response"],
+            "other_feedback": p["model1_action_response"],
         }
         prompts_final1.append(apply_chat(tokenizer, PROMPT_A45_FINAL.format(**kw1)))
         prompts_final2.append(apply_chat(tokenizer, PROMPT_A45_FINAL.format(**kw2)))
 
-    for i in tqdm(range(0, len(parsed), batch_size), desc="Stage4-Final"):
-        batch_end = min(i + batch_size, len(parsed))
+    for i in tqdm(range(0, n, batch_size), desc="Stage4-Final"):
+        batch_end = min(i + batch_size, n)
         f1 = llm.generate(prompts_final1[i:batch_end], sampling, use_tqdm=False)
         f2 = llm.generate(prompts_final2[i:batch_end], sampling, use_tqdm=False)
 
@@ -372,23 +371,23 @@ def run_self_reflect_debate(args):
             idx = i + j
             rf1 = f1[j].outputs[0].text.strip()
             rf2 = f2[j].outputs[0].text.strip()
-            parsed[idx]["resp1_final"] = rf1
-            parsed[idx]["ans1_final"] = extract_answer(rf1)
-            parsed[idx]["resp2_final"] = rf2
-            parsed[idx]["ans2_final"] = extract_answer(rf2)
+            parsed[idx]["model1_final"] = rf1
+            parsed[idx]["model1_final_ans"] = extract_answer(rf1)
+            parsed[idx]["model2_final"] = rf2
+            parsed[idx]["model2_final_ans"] = extract_answer(rf2)
 
     # -------- Stage 5: Judge for disagreements --------
     print("\n=== Stage 5: Judge Resolution ===")
     disagree_indices = []
     for i, p in enumerate(parsed):
-        if p["ans1_final"] != p["ans2_final"]:
+        if p["model1_final_ans"] != p["model2_final_ans"]:
             disagree_indices.append(i)
         else:
-            parsed[i]["resp_judge"] = ""
-            parsed[i]["ans_judge"] = p["ans1_final"]
+            parsed[i]["judge_response"] = ""
+            parsed[i]["judge_ans"] = p["model1_final_ans"]
 
-    print(f"Agreements: {len(parsed) - len(disagree_indices)}, "
-          f"Disagreements: {len(disagree_indices)}")
+    agree_count = n - len(disagree_indices)
+    print(f"Agreements: {agree_count}, Disagreements: {len(disagree_indices)}")
 
     if disagree_indices:
         judge_prompts = []
@@ -397,82 +396,116 @@ def run_self_reflect_debate(args):
             kw = {
                 "country": p["country"],
                 "story": p["scenario"],
-                "model1_response": p["resp1_init"],
-                "model2_response": p["resp2_init"],
-                "model1_feedback": p["action_response1"],
-                "model2_feedback": p["action_response2"],
-                "model1_decision": p["resp1_final"],
-                "model2_decision": p["resp2_final"],
+                "model1_response": p["model1_initial"],
+                "model2_response": p["model2_initial"],
+                "model1_feedback": p["model1_action_response"],
+                "model2_feedback": p["model2_action_response"],
+                "model1_decision": p["model1_final"],
+                "model2_decision": p["model2_final"],
             }
             judge_prompts.append(apply_chat(tokenizer, PROMPT_A46_JUDGE.format(**kw)))
 
         for i in tqdm(range(0, len(disagree_indices), batch_size), desc="Stage5-Judge"):
             batch_end = min(i + batch_size, len(disagree_indices))
-            batch_prompts = judge_prompts[i:batch_end]
-            j_out = llm.generate(batch_prompts, sampling, use_tqdm=False)
+            j_out = llm.generate(judge_prompts[i:batch_end], sampling, use_tqdm=False)
 
             for j, (didx, jo) in enumerate(zip(disagree_indices[i:batch_end], j_out)):
                 resp = jo.outputs[0].text.strip()
-                parsed[didx]["resp_judge"] = resp
-                parsed[didx]["ans_judge"] = extract_answer(resp)
+                parsed[didx]["judge_response"] = resp
+                parsed[didx]["judge_ans"] = extract_answer(resp)
 
-    # -------- Write results --------
-    write_count = 0
+    # -------- Build output records --------
+    print("\n=== Writing output ===")
+    results = []
     correct_count = 0
-    reflect_count = 0
-    debate_count = 0
+    total_count = 0
+    reflect_total = 0
+    debate_total = 0
 
     for p in parsed:
         gt = str(p.get("output", "")).strip()
-        final_ans = p.get("ans_judge", "")
+        final_ans = p.get("judge_ans", "")
         is_correct = (final_ans == gt) if final_ans else False
-        if is_correct:
-            correct_count += 1
+        if final_ans:
+            total_count += 1
+            if is_correct:
+                correct_count += 1
 
         # Count choices
-        if p.get("choice1") == "A":
-            reflect_count += 1
+        if p.get("model1_choice") == "A":
+            reflect_total += 1
         else:
-            debate_count += 1
-        if p.get("choice2") == "A":
-            reflect_count += 1
+            debate_total += 1
+        if p.get("model2_choice") == "A":
+            reflect_total += 1
         else:
-            debate_count += 1
+            debate_total += 1
 
-        output = {
+        record = {
             "instruction": p.get("instruction", ""),
             "input": p.get("input", ""),
             "output": gt,
-            "country": p.get("country", ""),
-            "model1_init": p.get("resp1_init", ""),
-            "model1_ans_init": p.get("ans1_init", ""),
-            "model2_init": p.get("resp2_init", ""),
-            "model2_ans_init": p.get("ans2_init", ""),
-            "model1_choice": p.get("choice1", ""),
-            "model2_choice": p.get("choice2", ""),
-            "model1_action_type": p.get("action_type1", ""),
-            "model1_action_response": p.get("action_response1", ""),
-            "model2_action_type": p.get("action_type2", ""),
-            "model2_action_response": p.get("action_response2", ""),
-            "model1_final": p.get("resp1_final", ""),
-            "model1_ans_final": p.get("ans1_final", ""),
-            "model2_final": p.get("resp2_final", ""),
-            "model2_ans_final": p.get("ans2_final", ""),
-            "judge_response": p.get("resp_judge", ""),
+            "country": p["country"],
+            "scenario": p["scenario"],
+            # Stage 1: Initial decisions
+            "model1_initial": p["model1_initial"],
+            "model1_initial_ans": p.get("model1_initial_ans", ""),
+            "model2_initial": p["model2_initial"],
+            "model2_initial_ans": p.get("model2_initial_ans", ""),
+            # Stage 2: Choice
+            "model1_choice": p.get("model1_choice", ""),
+            "model1_choice_raw": p.get("model1_choice_raw", ""),
+            "model2_choice": p.get("model2_choice", ""),
+            "model2_choice_raw": p.get("model2_choice_raw", ""),
+            # Stage 3: Action
+            "model1_action_type": p.get("model1_action_type", ""),
+            "model1_action_response": p.get("model1_action_response", ""),
+            "model2_action_type": p.get("model2_action_type", ""),
+            "model2_action_response": p.get("model2_action_response", ""),
+            # Stage 4: Final decisions
+            "model1_final": p["model1_final"],
+            "model1_final_ans": p.get("model1_final_ans", ""),
+            "model2_final": p["model2_final"],
+            "model2_final_ans": p.get("model2_final_ans", ""),
+            # Stage 5: Judge
+            "judge_response": p.get("judge_response", ""),
             "final_answer": final_ans,
             "correct": is_correct,
-            "agree": (p.get("ans1_final", "") == p.get("ans2_final", "")),
+            "agree": (p.get("model1_final_ans", "") == p.get("model2_final_ans", "")),
         }
-        write_to_jsonl(args.output_file, output)
-        write_count += 1
+        results.append(record)
 
-    acc = correct_count / write_count if write_count > 0 else 0.0
-    total_choices = reflect_count + debate_count
-    print(f"\nDone. {write_count} samples written to {args.output_file}")
-    print(f"Accuracy: {correct_count}/{write_count} = {acc:.4f}")
+    # Write JSON
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    print(f"Inference results saved to: {out_json}")
+    print(f"Total: {total_count}, Correct: {correct_count}, "
+          f"Accuracy: {correct_count/total_count:.4f}" if total_count > 0 else "N/A")
+
+    # -------- Compute & save metrics --------
+    metrics = compute_metrics(results)
+    total_choices = reflect_total + debate_total
+    metrics["method"] = "MAD"
+    metrics["variant"] = "srd"
+    metrics["model"] = args.model_name
+    metrics["prompt_source"] = "Appendix A.4 (no rule-of-thumb)"
+    metrics["agree_count"] = agree_count
+    metrics["disagree_count"] = n - agree_count
+    metrics["choice_stats"] = {
+        "reflect_count": reflect_total,
+        "debate_count": debate_total,
+        "reflect_ratio": reflect_total / total_choices if total_choices > 0 else 0,
+        "debate_ratio": debate_total / total_choices if total_choices > 0 else 0,
+    }
+
+    with open(out_metrics, "w", encoding="utf-8") as f:
+        json.dump(metrics, f, ensure_ascii=False, indent=2)
+    print(f"Metrics saved to: {out_metrics}")
+    print(f"Accuracy: {metrics['accuracy']:.4f} "
+          f"({metrics['correct']}/{metrics['total_samples']})")
     if total_choices > 0:
-        print(f"Choices: reflect={reflect_count} ({reflect_count/total_choices:.1%}), "
-              f"debate={debate_count} ({debate_count/total_choices:.1%})")
+        print(f"Choices: reflect={reflect_total} ({reflect_total/total_choices:.1%}), "
+              f"debate={debate_total} ({debate_total/total_choices:.1%})")
 
 
 # ===================================================================
@@ -485,10 +518,10 @@ def main():
     )
     parser.add_argument("--input_file", type=str, required=True,
                         help="Path to normad_mas.json")
-    parser.add_argument("--output_file", type=str, required=True,
-                        help="Output JSONL path")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama/qwen) or HF path")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Output directory (default: same as input_file)")
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--max_samples", type=int, default=0,

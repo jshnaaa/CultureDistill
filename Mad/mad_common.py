@@ -11,7 +11,7 @@ All prompts use the NO-rule-of-thumb variant: Rule lines removed from original t
 import os
 import re
 import json
-import threading
+from collections import Counter
 
 # ---------------------------------------------------------------------------
 # Model aliases
@@ -104,28 +104,92 @@ def extract_choice(text):
 
 
 # ---------------------------------------------------------------------------
-# I/O helpers
+# Output naming
 # ---------------------------------------------------------------------------
 
-_io_lock = threading.Lock()
+def infer_output_path(input_file: str, method: str, variant: str, model_name: str,
+                      output_dir: str = None) -> tuple:
+    """
+    Infer output file paths following naming convention:
+      {dataset}_{method}_{variant}_{model}.json
+      {dataset}_{method}_{variant}_{model}_metrics.json
+
+    Returns: (output_json_path, metrics_json_path)
+    """
+    dataset_name = os.path.splitext(os.path.basename(input_file))[0]
+    # Strip trailing _mas if present
+    if dataset_name.endswith("_mas"):
+        dataset_name = dataset_name[:-4]
+
+    base_name = f"{dataset_name}_{method}_{variant}_{model_name}"
+
+    if output_dir is None:
+        output_dir = os.path.dirname(os.path.abspath(input_file))
+
+    json_path = os.path.join(output_dir, f"{base_name}.json")
+    metrics_path = os.path.join(output_dir, f"{base_name}_metrics.json")
+    return json_path, metrics_path
 
 
-def write_to_jsonl(file_name, data):
-    with _io_lock:
-        with open(file_name, 'a') as f:
-            json.dump(data, f)
-            f.write('\n')
+# ---------------------------------------------------------------------------
+# Metrics computation
+# ---------------------------------------------------------------------------
 
+def compute_metrics(results: list) -> dict:
+    """
+    Compute accuracy metrics from inference results.
 
-def reserve_unprocessed_queries(output_file, dataset):
-    if not os.path.exists(output_file):
-        return dataset
-    processed = set()
-    with open(output_file, 'r') as f:
-        for line in f:
-            try:
-                d = json.loads(line)
-                processed.add(d.get("input", "").strip())
-            except Exception:
-                continue
-    return [d for d in dataset if d.get("input", "").strip() not in processed]
+    Each entry in results should have:
+      - "gt": ground truth label (string "1"/"2"/"3")
+      - "country": country name
+      - "final_answer": predicted answer
+    """
+    total = 0
+    correct = 0
+    country_stats = {}
+    answer_dist = Counter()
+
+    for r in results:
+        gt = str(r.get("gt", r.get("output", ""))).strip()
+        if not gt:
+            continue
+        country = r.get("country", "unknown")
+        final_ans = r.get("final_answer", "")
+
+        total += 1
+        answer_dist[final_ans] += 1
+
+        if final_ans == gt:
+            correct += 1
+
+        if country not in country_stats:
+            country_stats[country] = {"total": 0, "correct": 0}
+        country_stats[country]["total"] += 1
+        if final_ans == gt:
+            country_stats[country]["correct"] += 1
+
+    # Per-country accuracy
+    per_country = {}
+    for country, stats in sorted(country_stats.items()):
+        per_country[country] = {
+            "total": stats["total"],
+            "correct": stats["correct"],
+            "accuracy": (stats["correct"] / stats["total"]
+                         if stats["total"] > 0 else 0.0),
+        }
+
+    # GT distribution
+    gt_dist = dict(Counter(
+        str(r.get("gt", r.get("output", ""))).strip()
+        for r in results if r.get("gt") or r.get("output")
+    ))
+
+    return {
+        "total_samples": total,
+        "correct": correct,
+        "incorrect": total - correct,
+        "accuracy": correct / total if total > 0 else 0.0,
+        "gt_distribution": gt_dist,
+        "prediction_distribution": dict(answer_dist),
+        "per_country": per_country,
+    }
