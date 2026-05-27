@@ -727,7 +727,7 @@ python MAD/self_reflect_debate.py \
 |------|------|--------|
 | `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
 | `--model_name` | 模型别名（llama/qwen）或 HF 路径 | 必填 |
-| `--output_dir` | 输出目录（默认与 input_file 同目录） | None |
+| `--output_dir` | 输出目录（默认 /autodl-fs/data/mad） | None |
 | `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
 | `--batch_size` | 每批处理样本数 | 8 |
 | `--max_samples` | 最大处理样本数（0=全部） | 0 |

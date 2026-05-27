@@ -124,7 +124,7 @@ def infer_output_path(input_file: str, method: str, variant: str, model_name: st
     base_name = f"{dataset_name}_{method}_{variant}_{model_name}"
 
     if output_dir is None:
-        output_dir = os.path.dirname(os.path.abspath(input_file))
+        output_dir = "/autodl-fs/data/mad"
 
     json_path = os.path.join(output_dir, f"{base_name}.json")
     metrics_path = os.path.join(output_dir, f"{base_name}_metrics.json")
