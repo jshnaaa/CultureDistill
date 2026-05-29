@@ -1431,9 +1431,9 @@ python Cul/split_data.py \
 python Cul/sft/train_sft_weighted.py \
     --model_name qwen \
     --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --output_dir /autodl-fs/data/model/qwen/normad_camad_sft \
+    --output_dir /root/autodl-tmp/model/qwen/normad_camad_sft \
     --alpha 2.0 \
-    --epochs 3 \
+    --epochs 5 \
     --batch_size 4 \
     --lr 2e-4 \
     --lora_r 32 \
