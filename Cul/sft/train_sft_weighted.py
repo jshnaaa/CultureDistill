@@ -500,6 +500,9 @@ def validate(model, tokenizer, val_samples: list[dict], device,
              max_samples: int = 200) -> float:
     """Compute accuracy on validation set (from pkl data)."""
     model.eval()
+    # Disable gradient checkpointing during generation (incompatible with use_cache)
+    model.gradient_checkpointing_disable()
+
     correct, total = 0, 0
 
     for obj in val_samples:
@@ -521,10 +524,11 @@ def validate(model, tokenizer, val_samples: list[dict], device,
 
         outs = model.generate(
             **enc,
-            max_new_tokens=512,
+            max_new_tokens=128,  # Multiple-choice: short answer suffices
             do_sample=False,
-            temperature=None,
+            top_k=None,
             top_p=None,
+            temperature=None,
             pad_token_id=tokenizer.pad_token_id,
         )
         prompt_len = enc["input_ids"].shape[1]
@@ -543,6 +547,12 @@ def validate(model, tokenizer, val_samples: list[dict], device,
             correct += 1
         total += 1
 
+        if total % 50 == 0:
+            print(f"    Eval progress: {total}/{max_samples} "
+                  f"(acc so far: {correct/total:.3f})", flush=True)
+
+    # Re-enable gradient checkpointing for training
+    model.gradient_checkpointing_enable()
     model.train()
     return correct / total if total > 0 else 0.0
 
@@ -662,6 +672,7 @@ def train(args):
 
         # Validate every N epochs
         if epoch % args.eval_every_n_epochs == 0:
+            print(f"  [Eval] Starting validation (max 200 samples)...", flush=True)
             val_acc = validate(model, tokenizer, val_raw, device)
             print(f"  [Eval] Epoch {epoch} | val_accuracy={val_acc:.4f}")
 
