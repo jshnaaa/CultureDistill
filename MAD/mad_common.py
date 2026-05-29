@@ -67,6 +67,7 @@ def extract_answer(text):
     """
     tl = text.strip().lower()
 
+    # Pattern 1: "answer: yes/no/neither" or "answer (yes/no/neither)"
     for pat in [
         r'answer\s*[:\(]\s*(yes|no|neither)',
         r'^\s*(yes|no|neither)\s*$',
@@ -76,13 +77,19 @@ def extract_answer(text):
         if m:
             return ANSWER_MAP.get(m.group(1))
 
+    # Pattern 2: starts with "yes/no/neither" (e.g., "No. Based on the...")
+    m = re.match(r'\s*(yes|no|neither)\b', tl)
+    if m:
+        return ANSWER_MAP.get(m.group(1))
+
+    # Pattern 3: find standalone word boundary matches (search all occurrences)
     for word in ["neither", "no", "yes"]:
-        idx = tl.rfind(word)
-        if idx >= 0:
-            before = tl[idx - 1] if idx > 0 else " "
-            after = tl[idx + len(word)] if idx + len(word) < len(tl) else " "
-            if not before.isalnum() and not after.isalnum():
-                return ANSWER_MAP[word]
+        # Use regex to find all word-boundary matches
+        pattern = r'\b' + word + r'\b'
+        matches = list(re.finditer(pattern, tl))
+        if matches:
+            return ANSWER_MAP[word]
+
     return None
 
 

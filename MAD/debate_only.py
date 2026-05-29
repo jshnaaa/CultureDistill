@@ -283,12 +283,14 @@ def run_debate_only(args):
     print("\n=== Stage 4: Judge Resolution ===")
     disagree_indices = []
     for i, p in enumerate(parsed):
-        if p["model1_final_ans"] != p["model2_final_ans"]:
+        m1_ans = p.get("model1_final_ans")
+        m2_ans = p.get("model2_final_ans")
+        if m1_ans != m2_ans:
             disagree_indices.append(i)
         else:
-            # Agents agree: no judge needed
+            # Agents agree: no judge needed, use their consensus answer
             parsed[i]["judge_response"] = ""
-            parsed[i]["judge_ans"] = p["model1_final_ans"]
+            parsed[i]["judge_ans"] = m1_ans if m1_ans is not None else ""
 
     agree_count = n - len(disagree_indices)
     print(f"Agreements: {agree_count}, Disagreements: {len(disagree_indices)}")
@@ -324,7 +326,7 @@ def run_debate_only(args):
     results = []
     for p in parsed:
         gt = str(p.get("output", "")).strip()
-        final_ans = p.get("judge_ans", "")
+        final_ans = p.get("judge_ans") or ""
         is_correct = (final_ans == gt) if final_ans else False
 
         record = {

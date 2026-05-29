@@ -766,7 +766,150 @@ python MAD/self_reflect_debate.py \
 }
 ```
 
+#### 2.11.2 MACD (Multi-Agent Cultural Debate)
 
+**方法简介**：MACD（Multi-Agent Cultural Debate）是 Tan et al. (2026) 提出的训练无关（training-free）多智能体文化辩论框架，通过赋予 Agent 显式的文化身份（而非功能性角色）来缓解 LLM 的文化偏见。该方法的核心思想是：
+
+1. **文化角色设计**：分配 5 个 Agent 分别代表 Western、East Asian、African、Middle Eastern、South Asian 文化视角，每个 Agent 配备详细的人物画像（职业、教育、生活经历）和文化价值观
+2. **多轮辩论（SCGRD 策略）**：Agent 先从各自文化视角独立回答，然后进行"求同存异"（Seeking Common Ground while Reserving Differences）策略的辩论，在共识中保留文化多样性
+3. **综合模型**：辩论结束后由 Summary 模型综合所有 Agent 的最终观点，生成文化中立的最终回答
+
+原论文在 CEBiasBench 上使用 GPT-4o 作为 backbone 取得了 57.6% Avg No Bias Rate 和 86.0% MAV No Bias Rate（vs. Direct 47.6%/69.0%）。本实现适配 NormAD 文化可接受性判断任务，将开放式文化中立回答生成转化为 Yes/No/Neither 判断任务。
+
+**代码目录**：`MACD/`
+
+```
+MACD/
+├── macd_common.py              # 共享工具（文化角色定义、SCGRD提示词、数据解析、指标计算）
+├── macd_debate.py              # MACD 主推理脚本
+└── Mitigating Cultural Bias in LLMs via Multi-Agent Cultural Debate.pdf  # 原论文
+```
+
+**输出文件命名规范**：`{dataset}_MACD_{基座}.json`
+
+| 基座 | 输出文件 | 指标文件 |
+|------|---------|---------|
+| Qwen | `normad_MACD_qwen.json` | `normad_MACD_qwen_metrics.json` |
+| Llama | `normad_MACD_llama.json` | `normad_MACD_llama_metrics.json` |
+
+**运行命令**：
+
+```bash
+# MACD Baseline（Qwen 基座，完整数据集）
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512 \
+    --num_rounds 2
+
+# MACD Baseline（Llama 基座，完整数据集）
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name llama \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512 \
+    --num_rounds 2
+
+# 快速测试（5 条样本）
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 5
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
+| `--model_name` | 模型别名（llama/qwen）或 HuggingFace 路径 | 必填 |
+| `--output_dir` | 输出目录 | /autodl-fs/data/macd |
+| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
+| `--batch_size` | 每批处理样本数 | 8 |
+| `--max_samples` | 最大处理样本数（0=全部） | 0 |
+| `--temperature` | 采样温度 | 0.7 |
+| `--max_tokens` | 最大生成 token 数 | 512 |
+| `--num_rounds` | 辩论轮数（论文默认 2 轮） | 2 |
+
+**提示词来源**：严格遵循论文附录 A（Meta prompt）、附录 B（Cultural Persona，含完整人物画像和文化价值观）、附录 C（SCGRD 策略提示词："Adjust your response to align with your agents' examples, seeking a general answer to the question, trying to find common ground and maximize overall agreement."）。为适配 NormAD 判断任务，仅在 Meta prompt 中将原文的开放式问答替换为 "Yes/No/Neither" 判断格式，其余提示词保持原文不变。
+
+**推理阶段**（共 3 大阶段）：
+
+| 阶段 | 说明 | 推理次数 |
+|------|------|---------|
+| 1 | Round 1：5 个文化 Agent 各自从其文化视角独立回答 | 5×N |
+| 2 | Round 2：每个 Agent 观看其他 4 个 Agent 的 Round-1 回答，基于 SCGRD 策略更新回答 | 5×N |
+| 3 | Summary：综合模型综合所有 Agent 的 Round-2 回答，输出最终判断 | 1×N |
+
+**5 个文化 Agent 设定**（来自论文 Appendix B）：
+
+| 文化角色 | 人物画像概要 | 文化价值观 |
+|---------|-------------|-----------|
+| Western | 29 岁女性，荷兰阿姆斯特丹，城市规划硕士 | 个人权利、自由、理性分析、功利主义 |
+| East Asian | 22 岁男性，中国广州，计算机硕士 | 社会和谐、集体福祉、孝道、面子 |
+| African | 30 岁女性，肯尼亚内罗毕，公共卫生专业 | 社区、Ubuntu、集体责任、尊重长辈 |
+| Middle Eastern | 32 岁女性，约旦安曼，餐饮企业经营者 | 家族荣誉、传统、宗教义务、好客 |
+| South Asian | 27 岁男性，印度金奈，电气工程师 | 达摩（道德义务）、业力、精神成长、尊重等级 |
+
+**输出格式**：JSON 数组，每条记录包含完整的多智能体辩论过程：
+
+```json
+{
+  "instruction": "...",
+  "input": "...",
+  "output": "1",
+  "country": "egypt",
+  "scenario": "At a gathering...",
+  "round1_responses": {
+    "Western": "Yes. In Western cultures...",
+    "East Asian": "Yes. From an East Asian...",
+    "African": "...",
+    "Middle Eastern": "...",
+    "South Asian": "..."
+  },
+  "round1_answers": {"Western": "1", "East Asian": "1", "African": "1", "Middle Eastern": "1", "South Asian": "1"},
+  "round2_responses": {
+    "Western": "Yes. After considering...",
+    "East Asian": "...",
+    "African": "...",
+    "Middle Eastern": "...",
+    "South Asian": "..."
+  },
+  "round2_answers": {"Western": "1", "East Asian": "1", "African": "1", "Middle Eastern": "1", "South Asian": "1"},
+  "summary_response": "Yes. Based on the consensus...",
+  "final_answer": "1",
+  "correct": true
+}
+```
+
+**指标文件**（`_metrics.json`）包含：
+
+```json
+{
+  "method": "MACD",
+  "model": "qwen",
+  "num_agents": 5,
+  "num_rounds": 2,
+  "cultures": ["Western", "East Asian", "African", "Middle Eastern", "South Asian"],
+  "total_samples": 2633,
+  "correct": 2000,
+  "accuracy": 0.7596,
+  "round1_full_agreement": 1800,
+  "round2_full_agreement": 2100,
+  "gt_distribution": {"1": 877, "2": 878, "3": 878},
+  "prediction_distribution": {"1": 900, "2": 850, "3": 883},
+  "per_country": {
+    "egypt": {"total": 35, "correct": 28, "accuracy": 0.8000},
+    "...": {}
+  }
+}
+```
 
 
 ## 3. Stage 1：主场权威加权 SFT

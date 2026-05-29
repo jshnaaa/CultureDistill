@@ -1,0 +1,401 @@
+{
+  "total_samples": 2633,
+  "correct": 170,
+  "incorrect": 2463,
+  "accuracy": 0.06456513482719331,
+  "gt_distribution": {
+    "1": 943,
+    "2": 875,
+    "3": 815
+  },
+  "prediction_distribution": {
+    "": 2257,
+    "2": 268,
+    "1": 21,
+    "3": 81,
+    "null": 6
+  },
+  "per_country": {
+    "afghanistan": {
+      "total": 41,
+      "correct": 1,
+      "accuracy": 0.024390243902439025
+    },
+    "argentina": {
+      "total": 33,
+      "correct": 1,
+      "accuracy": 0.030303030303030304
+    },
+    "australia": {
+      "total": 25,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "austria": {
+      "total": 33,
+      "correct": 5,
+      "accuracy": 0.15151515151515152
+    },
+    "bangladesh": {
+      "total": 33,
+      "correct": 3,
+      "accuracy": 0.09090909090909091
+    },
+    "bosnia_and_herzegovina": {
+      "total": 34,
+      "correct": 1,
+      "accuracy": 0.029411764705882353
+    },
+    "brazil": {
+      "total": 32,
+      "correct": 2,
+      "accuracy": 0.0625
+    },
+    "cambodia": {
+      "total": 36,
+      "correct": 3,
+      "accuracy": 0.08333333333333333
+    },
+    "canada": {
+      "total": 32,
+      "correct": 1,
+      "accuracy": 0.03125
+    },
+    "chile": {
+      "total": 35,
+      "correct": 1,
+      "accuracy": 0.02857142857142857
+    },
+    "china": {
+      "total": 36,
+      "correct": 1,
+      "accuracy": 0.027777777777777776
+    },
+    "colombia": {
+      "total": 32,
+      "correct": 1,
+      "accuracy": 0.03125
+    },
+    "croatia": {
+      "total": 35,
+      "correct": 2,
+      "accuracy": 0.05714285714285714
+    },
+    "cyprus": {
+      "total": 35,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "egypt": {
+      "total": 35,
+      "correct": 4,
+      "accuracy": 0.11428571428571428
+    },
+    "ethiopia": {
+      "total": 45,
+      "correct": 3,
+      "accuracy": 0.06666666666666667
+    },
+    "fiji": {
+      "total": 21,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "france": {
+      "total": 34,
+      "correct": 2,
+      "accuracy": 0.058823529411764705
+    },
+    "germany": {
+      "total": 43,
+      "correct": 1,
+      "accuracy": 0.023255813953488372
+    },
+    "greece": {
+      "total": 34,
+      "correct": 1,
+      "accuracy": 0.029411764705882353
+    },
+    "hong_kong": {
+      "total": 35,
+      "correct": 2,
+      "accuracy": 0.05714285714285714
+    },
+    "hungary": {
+      "total": 36,
+      "correct": 3,
+      "accuracy": 0.08333333333333333
+    },
+    "india": {
+      "total": 29,
+      "correct": 4,
+      "accuracy": 0.13793103448275862
+    },
+    "indonesia": {
+      "total": 26,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "iran": {
+      "total": 44,
+      "correct": 4,
+      "accuracy": 0.09090909090909091
+    },
+    "iraq": {
+      "total": 34,
+      "correct": 3,
+      "accuracy": 0.08823529411764706
+    },
+    "ireland": {
+      "total": 41,
+      "correct": 5,
+      "accuracy": 0.12195121951219512
+    },
+    "israel": {
+      "total": 42,
+      "correct": 3,
+      "accuracy": 0.07142857142857142
+    },
+    "italy": {
+      "total": 34,
+      "correct": 2,
+      "accuracy": 0.058823529411764705
+    },
+    "japan": {
+      "total": 35,
+      "correct": 6,
+      "accuracy": 0.17142857142857143
+    },
+    "kenya": {
+      "total": 33,
+      "correct": 1,
+      "accuracy": 0.030303030303030304
+    },
+    "laos": {
+      "total": 33,
+      "correct": 2,
+      "accuracy": 0.06060606060606061
+    },
+    "lebanon": {
+      "total": 26,
+      "correct": 2,
+      "accuracy": 0.07692307692307693
+    },
+    "malaysia": {
+      "total": 34,
+      "correct": 4,
+      "accuracy": 0.11764705882352941
+    },
+    "malta": {
+      "total": 36,
+      "correct": 1,
+      "accuracy": 0.027777777777777776
+    },
+    "mauritius": {
+      "total": 40,
+      "correct": 1,
+      "accuracy": 0.025
+    },
+    "mexico": {
+      "total": 34,
+      "correct": 4,
+      "accuracy": 0.11764705882352941
+    },
+    "myanmar": {
+      "total": 45,
+      "correct": 3,
+      "accuracy": 0.06666666666666667
+    },
+    "nepal": {
+      "total": 37,
+      "correct": 1,
+      "accuracy": 0.02702702702702703
+    },
+    "netherlands": {
+      "total": 36,
+      "correct": 3,
+      "accuracy": 0.08333333333333333
+    },
+    "new_zealand": {
+      "total": 42,
+      "correct": 4,
+      "accuracy": 0.09523809523809523
+    },
+    "north_macedonia": {
+      "total": 34,
+      "correct": 3,
+      "accuracy": 0.08823529411764706
+    },
+    "pakistan": {
+      "total": 35,
+      "correct": 3,
+      "accuracy": 0.08571428571428572
+    },
+    "palestinian_territories": {
+      "total": 34,
+      "correct": 2,
+      "accuracy": 0.058823529411764705
+    },
+    "papua_new_guinea": {
+      "total": 34,
+      "correct": 3,
+      "accuracy": 0.08823529411764706
+    },
+    "peru": {
+      "total": 32,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "philippines": {
+      "total": 32,
+      "correct": 3,
+      "accuracy": 0.09375
+    },
+    "poland": {
+      "total": 35,
+      "correct": 2,
+      "accuracy": 0.05714285714285714
+    },
+    "portugal": {
+      "total": 45,
+      "correct": 1,
+      "accuracy": 0.022222222222222223
+    },
+    "romania": {
+      "total": 36,
+      "correct": 4,
+      "accuracy": 0.1111111111111111
+    },
+    "russia": {
+      "total": 35,
+      "correct": 1,
+      "accuracy": 0.02857142857142857
+    },
+    "samoa": {
+      "total": 36,
+      "correct": 6,
+      "accuracy": 0.16666666666666666
+    },
+    "saudi_arabia": {
+      "total": 44,
+      "correct": 4,
+      "accuracy": 0.09090909090909091
+    },
+    "serbia": {
+      "total": 39,
+      "correct": 2,
+      "accuracy": 0.05128205128205128
+    },
+    "singapore": {
+      "total": 31,
+      "correct": 1,
+      "accuracy": 0.03225806451612903
+    },
+    "somalia": {
+      "total": 45,
+      "correct": 1,
+      "accuracy": 0.022222222222222223
+    },
+    "south_africa": {
+      "total": 36,
+      "correct": 3,
+      "accuracy": 0.08333333333333333
+    },
+    "south_korea": {
+      "total": 27,
+      "correct": 1,
+      "accuracy": 0.037037037037037035
+    },
+    "south_sudan": {
+      "total": 27,
+      "correct": 2,
+      "accuracy": 0.07407407407407407
+    },
+    "spain": {
+      "total": 34,
+      "correct": 2,
+      "accuracy": 0.058823529411764705
+    },
+    "sri_lanka": {
+      "total": 35,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "sudan": {
+      "total": 48,
+      "correct": 1,
+      "accuracy": 0.020833333333333332
+    },
+    "sweden": {
+      "total": 34,
+      "correct": 2,
+      "accuracy": 0.058823529411764705
+    },
+    "syria": {
+      "total": 18,
+      "correct": 1,
+      "accuracy": 0.05555555555555555
+    },
+    "taiwan": {
+      "total": 32,
+      "correct": 3,
+      "accuracy": 0.09375
+    },
+    "thailand": {
+      "total": 39,
+      "correct": 1,
+      "accuracy": 0.02564102564102564
+    },
+    "timor-leste": {
+      "total": 36,
+      "correct": 3,
+      "accuracy": 0.08333333333333333
+    },
+    "tonga": {
+      "total": 35,
+      "correct": 2,
+      "accuracy": 0.05714285714285714
+    },
+    "türkiye": {
+      "total": 35,
+      "correct": 4,
+      "accuracy": 0.11428571428571428
+    },
+    "ukraine": {
+      "total": 41,
+      "correct": 3,
+      "accuracy": 0.07317073170731707
+    },
+    "united_kingdom": {
+      "total": 27,
+      "correct": 1,
+      "accuracy": 0.037037037037037035
+    },
+    "united_states_of_america": {
+      "total": 42,
+      "correct": 3,
+      "accuracy": 0.07142857142857142
+    },
+    "venezuela": {
+      "total": 34,
+      "correct": 1,
+      "accuracy": 0.029411764705882353
+    },
+    "vietnam": {
+      "total": 36,
+      "correct": 1,
+      "accuracy": 0.027777777777777776
+    },
+    "zimbabwe": {
+      "total": 34,
+      "correct": 9,
+      "accuracy": 0.2647058823529412
+    }
+  },
+  "method": "MAD",
+  "variant": "debateonly",
+  "model": "qwen",
+  "prompt_source": "Appendix A.3 (no rule-of-thumb)",
+  "agree_count": 2257,
+  "disagree_count": 376
+}
