@@ -228,9 +228,318 @@ Cul/
 └── generate_culture_data.py         # 原 RECONCILE 入口（保留作为 baseline）
 ```
 
-### 2.10 各 Agent 完整 Prompt 记录
+### 2.10 Baseline
 
-#### 2.10.1 Guardian System Prompt
+本小节记录用于对比 HF-CAC 的 Baseline 方法。所有 Baseline 均使用相同的 `normad_mas.json` 数据集，不带 rule-of-thumb 信息（对应论文 `Si(w/o)` 设定）。
+
+#### 2.10.1 MAD (Multi-Agent Debate)
+
+**方法简介**：MAD（Multiple LLM Agents Debate）是 Ki et al. (2024) 提出的多智能体辩论框架，通过两个 LLM Agent 对文化场景进行辩论来达成更准确的文化对齐判断。论文提出了两种变体：
+
+1. **Debate-Only**（A.3）：两个 Agent 独立给出初始判断 → 交换反馈 → 基于反馈给出最终判断 → 由 Judge LLM 仲裁分歧
+2. **Self-Reflect+Debate**（A.4）：两个 Agent 独立给出初始判断 → 各自选择自我反思(A)或辩论(B) → 执行所选动作 → 基于反馈给出最终判断 → Judge 仲裁
+
+**代码目录**：`MAD/`
+
+```
+MAD/
+├── mad_common.py               # 共享工具（数据解析、答案提取、提示词模板、指标计算）
+├── debate_only.py               # Debate-Only Baseline（A.3）
+└── self_reflect_debate.py       # Self-Reflect+Debate Baseline（A.4）
+```
+
+**输出文件命名规范**：`{dataset}_{方法}_{变体}_{基座}.json`
+
+| 变体 | 输出文件 | 指标文件 |
+|------|---------|---------|
+| Debate-Only (Qwen) | `normad_MAD_debateonly_qwen.json` | `normad_MAD_debateonly_qwen_metrics.json` |
+| Debate-Only (Llama) | `normad_MAD_debateonly_llama.json` | `normad_MAD_debateonly_llama_metrics.json` |
+| Self-Reflect+Debate (Qwen) | `normad_MAD_srd_qwen.json` | `normad_MAD_srd_qwen_metrics.json` |
+| Self-Reflect+Debate (Llama) | `normad_MAD_srd_llama.json` | `normad_MAD_srd_llama_metrics.json` |
+
+**运行命令**（文件名自动生成，无需指定 `--output_file`）：
+
+```bash
+# Debate-Only Baseline（Qwen 基座）
+python MAD/debate_only.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+
+# Self-Reflect+Debate Baseline（Qwen 基座）
+python MAD/self_reflect_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
+| `--model_name` | 模型别名（llama/qwen）或 HF 路径 | 必填 |
+| `--output_dir` | 输出目录（默认 /autodl-fs/data/mad） | None |
+| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
+| `--batch_size` | 每批处理样本数 | 8 |
+| `--max_samples` | 最大处理样本数（0=全部） | 0 |
+| `--temperature` | 采样温度 | 0.7 |
+| `--max_tokens` | 最大生成 token 数 | 512 |
+
+**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，仅移除 `Rule: {rule-of-thumb}` 相关行（对应论文 `without rule-of-thumb` 设定），其余内容不做修改。
+
+**推理阶段**（Debate-Only 共 4 阶段，Self-Reflect+Debate 共 5 阶段）：
+
+| 阶段 | Debate-Only | Self-Reflect+Debate |
+|------|-------------|---------------------|
+| 1 | 初始决策（A.3.1） | 初始决策（A.4.1） |
+| 2 | 生成反馈（A.3.2） | 选择 Reflect/Debate（A.4.2） |
+| 3 | 最终决策（A.3.3） | 执行所选动作（A.4.3/A.4.4） |
+| 4 | Judge 仲裁（A.3.4） | 最终决策（A.4.5） |
+| 5 | — | Judge 仲裁（A.4.6） |
+
+**输出格式**：JSON 数组，每条记录包含完整的多智能体推理过程：
+
+```json
+{
+  "instruction": "...",
+  "input": "...",
+  "output": "1",
+  "country": "egypt",
+  "scenario": "At a gathering...",
+  "model1_initial": "...",
+  "model1_initial_ans": "1",
+  "model2_initial": "...",
+  "model2_initial_ans": "1",
+  "model1_feedback": "...",
+  "model2_feedback": "...",
+  "model1_final": "...",
+  "model1_final_ans": "1",
+  "model2_final": "...",
+  "model2_final_ans": "1",
+  "judge_response": "",
+  "final_answer": "1",
+  "correct": true,
+  "agree": true
+}
+```
+
+#### 2.10.2 MACD (Multi-Agent Cultural Debate)
+
+**方法简介**：MACD（Multi-Agent Cultural Debate）是 Tan et al. (2026) 提出的训练无关（training-free）多智能体文化辩论框架，通过赋予 Agent 显式的文化身份（而非功能性角色）来缓解 LLM 的文化偏见。该方法的核心思想是：
+
+1. **文化角色设计**：分配 5 个 Agent 分别代表 Western、East Asian、African、Middle Eastern、South Asian 文化视角，每个 Agent 配备详细的人物画像（职业、教育、生活经历）和文化价值观
+2. **多轮辩论（SCGRD 策略）**：Agent 先从各自文化视角独立回答，然后进行"求同存异"（Seeking Common Ground while Reserving Differences）策略的辩论，在共识中保留文化多样性
+3. **综合模型**：辩论结束后由 Summary 模型综合所有 Agent 的最终观点，生成文化中立的最终回答
+
+原论文在 CEBiasBench 上使用 GPT-4o 作为 backbone 取得了 57.6% Avg No Bias Rate 和 86.0% MAV No Bias Rate（vs. Direct 47.6%/69.0%）。本实现适配 NormAD 文化可接受性判断任务，将开放式文化中立回答生成转化为 Yes/No/Neither 判断任务。
+
+**代码目录**：`MACD/`
+
+```
+MACD/
+├── macd_common.py              # 共享工具（文化角色定义、SCGRD提示词、数据解析、指标计算）
+├── macd_debate.py              # MACD 主推理脚本
+└── Mitigating Cultural Bias in LLMs via Multi-Agent Cultural Debate.pdf  # 原论文
+```
+
+**输出文件命名规范**：`{dataset}_MACD_{基座}.json`
+
+**运行命令**：
+
+```bash
+# MACD Baseline（Qwen 基座，完整数据集）
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512 \
+    --num_rounds 2
+
+# 快速测试（5 条样本）
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 5
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
+| `--model_name` | 模型别名（llama/qwen）或 HuggingFace 路径 | 必填 |
+| `--output_dir` | 输出目录 | /autodl-fs/data/macd |
+| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
+| `--batch_size` | 每批处理样本数 | 8 |
+| `--max_samples` | 最大处理样本数（0=全部） | 0 |
+| `--temperature` | 采样温度 | 0.7 |
+| `--max_tokens` | 最大生成 token 数 | 512 |
+| `--num_rounds` | 辩论轮数（论文默认 2 轮） | 2 |
+
+**提示词来源**：严格遵循论文附录 A（Meta prompt）、附录 B（Cultural Persona，含完整人物画像和文化价值观）、附录 C（SCGRD 策略提示词："Adjust your response to align with your agents' examples, seeking a general answer to the question, trying to find common ground and maximize overall agreement."）。为适配 NormAD 判断任务，仅在 Meta prompt 中将原文的开放式问答替换为 "Yes/No/Neither" 判断格式，其余提示词保持原文不变。
+
+**推理阶段**（共 3 大阶段）：
+
+| 阶段 | 说明 | 推理次数 |
+|------|------|---------|
+| 1 | Round 1：5 个文化 Agent 各自从其文化视角独立回答 | 5×N |
+| 2 | Round 2：每个 Agent 观看其他 4 个 Agent 的 Round-1 回答，基于 SCGRD 策略更新回答 | 5×N |
+| 3 | Summary：综合模型综合所有 Agent 的 Round-2 回答，输出最终判断 | 1×N |
+
+**5 个文化 Agent 设定**（来自论文 Appendix B）：
+
+| 文化角色 | 人物画像概要 | 文化价值观 |
+|---------|-------------|-----------|
+| Western | 29 岁女性，荷兰阿姆斯特丹，城市规划硕士 | 个人权利、自由、理性分析、功利主义 |
+| East Asian | 22 岁男性，中国广州，计算机硕士 | 社会和谐、集体福祉、孝道、面子 |
+| African | 30 岁女性，肯尼亚内罗毕，公共卫生专业 | 社区、Ubuntu、集体责任、尊重长辈 |
+| Middle Eastern | 32 岁女性，约旦安曼，餐饮企业经营者 | 家族荣誉、传统、宗教义务、好客 |
+| South Asian | 27 岁男性，印度金奈，电气工程师 | 达摩（道德义务）、业力、精神成长、尊重等级 |
+
+**输出格式**：JSON 数组，每条记录包含完整的多智能体辩论过程：
+
+```json
+{
+  "instruction": "...",
+  "input": "...",
+  "output": "1",
+  "country": "egypt",
+  "scenario": "At a gathering...",
+  "round1_responses": {
+    "Western": "Yes. In Western cultures...",
+    "East Asian": "Yes. From an East Asian...",
+    "African": "...",
+    "Middle Eastern": "...",
+    "South Asian": "..."
+  },
+  "round1_answers": {"Western": "1", "East Asian": "1", "African": "1", "Middle Eastern": "1", "South Asian": "1"},
+  "round2_responses": {
+    "Western": "Yes. After considering...",
+    "East Asian": "...",
+    "African": "...",
+    "Middle Eastern": "...",
+    "South Asian": "..."
+  },
+  "round2_answers": {"Western": "1", "East Asian": "1", "African": "1", "Middle Eastern": "1", "South Asian": "1"},
+  "summary_response": "Yes. Based on the consensus...",
+  "final_answer": "1",
+  "correct": true
+}
+```
+
+#### 2.10.3 OG-MAR (Ontology-Guided Multi-Agent Reasoning)
+
+**方法简介**：OG-MAR 是 Seo et al. (2026) 提出的本体引导多智能体推理框架（"Toward Culturally Aligned LLMs through Ontology-Guided Multi-Agent Reasoning"），通过构建全球文化本体（ontology）来指导多智能体的文化对齐推理。其核心创新在于：
+
+1. **文化本体构建**：基于 World Values Survey (WVS) 的 12 个顶层价值域和 76 个细粒度类别，通过 Competency Questions (CQs) 引导 LLM 生成类别间的方向性关系（ontology triples），再经人工专家验证，最终构建包含 76 个类和 150 对 object properties 的文化价值本体。
+2. **人口统计检索**：使用密集嵌入检索与目标人群特征最相似的 K 个个体，获取其结构化价值摘要作为 persona 的依据。
+3. **多 Persona 模拟**：为每个检索到的个体实例化一个 Value-Persona Agent，每个 Agent 基于本体三元组（ontology triples）、该个体的价值摘要和人口统计属性进行推理，输出答案和推理轨迹。
+4. **约束元裁决**：Final Judgment Agent 通过 Evidence-First 协议综合所有 Persona 输出——优先考虑证据强度（是否显式引用了本体关系和人口统计），仅在平局时参考投票计数，最终输出文化对齐的判断。
+
+原论文在 6 个区域基准测试集上使用 GPT-4o-mini/Gemini 2.5/Qwen 2.5/EXAONE 3.5 进行评估，OG-MAR 在 Gemini 2.5 Flash Lite 上达到 0.6308 平均准确率，在 EXAONE 3.5 上达到 0.6317。本实现适配 NormAD 文化可接受性判断任务，将 WVS 人口统计检索替换为基于国家/文化轴的模拟 persona 生成，本体三元组检索基于场景的文化轴进行。
+
+**代码目录**：`OG/`
+
+```
+OG/
+├── og_common.py    # 共享工具（文化本体数据、提示词模板、人口统计生成、三元组检索、指标计算）
+├── og_mar.py       # OG-MAR 主推理脚本（Persona Agent + Judgment Agent pipeline）
+└── Toward Culturally Aligned LLMs through Ontology-Guided Multi-Agent Reasoning.pdf  # 原论文
+```
+
+**输出文件命名规范**：`{dataset}_OGMAR_{基座}.json`
+
+**运行命令**：
+
+```bash
+# OG-MAR Baseline（Qwen 基座，完整数据集，论文默认参数）
+python OG/og_mar.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.0 \
+    --max_tokens 768 \
+    --num_personas 5 \
+    --num_triples 5
+
+# 快速测试（5 条样本）
+python OG/og_mar.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 5
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
+| `--model_name` | 模型别名（llama/qwen）或 HuggingFace 路径 | 必填 |
+| `--output_dir` | 输出目录 | /autodl-fs/data/ogmar |
+| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
+| `--batch_size` | 每批处理样本数 | 8 |
+| `--max_samples` | 最大处理样本数（0=全部） | 0 |
+| `--temperature` | 采样温度（论文使用 0 保证稳定行为） | 0.0 |
+| `--max_tokens` | 最大生成 token 数（JSON 输出较长） | 768 |
+| `--num_personas` | Persona Agent 数量 K（论文默认 5） | 5 |
+| `--num_triples` | 检索的本体三元组数量 M（论文默认 3-9） | 5 |
+
+**提示词来源**：严格遵循论文 Appendix E Table 8（Persona Agent Prompt）和 Table 9（Judgment Agent Prompt）。为适配 NormAD 任务做的最小调整包括：(1) 将 WVS 问卷的人口统计/选项格式替换为 NormAD 的国家/场景/可接受性判断格式；(2) 将 `reasoning must be >= 250 words` 缩减为 `>= 100 words` 以适配本地模型上下文长度；(3) 保留了所有核心约束规则（禁止外部知识、仅使用 provided inputs、显式引用本体关系等）。
+
+**推理阶段**（共 3 大阶段）：
+
+| 阶段 | 说明 | 推理次数 |
+|------|------|---------|
+| 1 | 本体 & 人口统计检索：为每条样本检索 M 个相关本体三元组，生成 K 个 persona 的人口统计描述和价值摘要 | 预计算（无 LLM 调用） |
+| 2 | Persona Agent 模拟：K 个 persona 各自基于本体上下文、价值摘要和人口统计推理，输出答案和推理轨迹 | K×N |
+| 3 | Judgment Agent 裁决：综合所有 Persona 输出 + 投票摘要，通过 Evidence-First 协议输出最终判断 | 1×N |
+
+**文化本体数据**：代码内置了论文 Table 16 的完整 12 域 76 类别分类体系，以及 Table 17 中的代表性本体三元组（约 37 条方向性关系），涵盖经济价值观、伦理价值观、宗教价值观、社会价值观等之间的跨域关系。三元组检索基于场景的文化轴（Etiquette/Morality/Law/Religion/Family 等）匹配相关的价值域和类别。
+
+**输出格式**：JSON 数组，每条记录包含完整的本体引导多智能体推理过程：
+
+```json
+{
+  "instruction": "...",
+  "input": "...",
+  "output": "1",
+  "country": "egypt",
+  "scenario": "At a gathering...",
+  "axis": "Etiquette",
+  "ontology_triples": [
+    "Generalized Trust fundamentally underpins Outgroup Tolerance",
+    "Interpersonal Trust helps cultivate Outgroup Tolerance",
+    "..."
+  ],
+  "persona_outputs": {
+    "persona_1": {"response": "...", "answer": "1"},
+    "persona_2": {"response": "...", "answer": "1"},
+    "persona_3": {"response": "...", "answer": "1"},
+    "persona_4": {"response": "...", "answer": "2"},
+    "persona_5": {"response": "...", "answer": "1"}
+  },
+  "persona_vote_summary": "Option 1 (Yes): 4 vote(s); Option 2 (No): 1 vote(s)",
+  "judgment_response": "{\"final_answer\": \"1: acceptable\", \"reasoning\": \"...\"}",
+  "final_answer": "1",
+  "correct": true
+}
+```
+
+### 2.11 各 Agent 完整 Prompt 记录
+
+#### 2.11.1 Guardian System Prompt
 
 所有 6 个文化 Agent 共享同一模板，仅文化区域名称和 cognitive foundation 描述不同：
 
@@ -279,7 +588,7 @@ Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
 | Islamic & Middle-Eastern | Sharia law, Eid al-Fitr, Eid al-Adha, unique halal dietary prohibitions, the sanctity of the color green and the right hand, and other Islamic cultural norms prevalent in the Middle East, North Africa, and parts of Southeast Asia |
 | South & Southeast Asian | Buddhist and Hindu traditions, as well as the unique folk customs and cultural taboos of tropical regions (such as not touching someone's head), prevalent in India, Thailand, Malaysia, etc. |
 
-#### 2.10.2 Auditor System Prompt
+#### 2.11.2 Auditor System Prompt
 
 同样 6 个 Agent 共享模板，仅文化背景名和 cognitive foundation 不同：
 
@@ -307,7 +616,7 @@ Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
 格式：Reasoning: <你的跨文化对比分析>\nAnswer: <数字>
 ```
 
-#### 2.10.3 Judge System Prompt
+#### 2.11.3 Judge System Prompt
 
 ```
 You are a neutral cultural fact-checker and final arbitrator.
@@ -374,7 +683,7 @@ When evaluating:
    - 审查每个审计员的推理链中是否包含具体的文化引用（习俗、传统、规范），并评估其与目标文化语境的对齐度。
 ```
 
-#### 2.10.4 Guardian Per-Round User Prompt（Phase 1）
+#### 2.11.4 Guardian Per-Round User Prompt（Phase 1）
 
 Guardian 在第一阶段独立生成时接收的用户消息：
 
@@ -415,7 +724,7 @@ Reasoning: <你的权威文化分析>
 Answer: <数字>
 ```
 
-#### 2.10.5 Auditor Per-Round User Prompt
+#### 2.11.5 Auditor Per-Round User Prompt
 
 **（a）有协商模式（negotiation_rounds=1）：Auditor 看到 Guardian 回答后生成**
 
@@ -487,7 +796,7 @@ Reasoning: <你的跨文化对比分析>
 Answer: <数字>
 ```
 
-#### 2.10.6 Judge Per-Round User Prompt
+#### 2.11.6 Judge Per-Round User Prompt
 
 **（a）正常模式（Guardian 有效）：**
 
@@ -654,7 +963,7 @@ Reasoning: <你的推理，需引用亲缘度加权证据>
 Answer: <数字>
 ```
 
-#### 2.10.7 采样温度配置
+#### 2.11.7 采样温度配置
 
 | 角色 | Temperature | 设计意图 |
 |------|-------------|---------|
@@ -663,417 +972,6 @@ Answer: <数字>
 | Judge | 0.3 | 极低温确保裁决稳定性 |
 
 ---
-
-
-
-### 2.11 Baseline
-
-本小节记录用于对比 HF-CAC 的 Baseline 方法。所有 Baseline 均使用相同的 `normad_mas.json` 数据集，不带 rule-of-thumb 信息（对应论文 `Si(w/o)` 设定）。
-
-#### 2.11.1 MAD (Multi-Agent Debate)
-
-**方法简介**：MAD（Multiple LLM Agents Debate）是 Ki et al. (2024) 提出的多智能体辩论框架，通过两个 LLM Agent 对文化场景进行辩论来达成更准确的文化对齐判断。论文提出了两种变体：
-
-1. **Debate-Only**（A.3）：两个 Agent 独立给出初始判断 → 交换反馈 → 基于反馈给出最终判断 → 由 Judge LLM 仲裁分歧
-2. **Self-Reflect+Debate**（A.4）：两个 Agent 独立给出初始判断 → 各自选择自我反思(A)或辩论(B) → 执行所选动作 → 基于反馈给出最终判断 → Judge 仲裁
-
-**代码目录**：`MAD/`
-
-```
-MAD/
-├── mad_common.py               # 共享工具（数据解析、答案提取、提示词模板、指标计算）
-├── debate_only.py               # Debate-Only Baseline（A.3）
-└── self_reflect_debate.py       # Self-Reflect+Debate Baseline（A.4）
-```
-
-**输出文件命名规范**：`{dataset}_{方法}_{变体}_{基座}.json`
-
-| 变体 | 输出文件 | 指标文件 |
-|------|---------|---------|
-| Debate-Only (Qwen) | `normad_MAD_debateonly_qwen.json` | `normad_MAD_debateonly_qwen_metrics.json` |
-| Debate-Only (Llama) | `normad_MAD_debateonly_llama.json` | `normad_MAD_debateonly_llama_metrics.json` |
-| Self-Reflect+Debate (Qwen) | `normad_MAD_srd_qwen.json` | `normad_MAD_srd_qwen_metrics.json` |
-| Self-Reflect+Debate (Llama) | `normad_MAD_srd_llama.json` | `normad_MAD_srd_llama_metrics.json` |
-
-**运行命令**（文件名自动生成，无需指定 `--output_file`）：
-
-```bash
-# Debate-Only Baseline（Qwen 基座）
-python MAD/debate_only.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512
-
-# Self-Reflect+Debate Baseline（Qwen 基座）
-python MAD/self_reflect_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512
-```
-
-**参数说明**：
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
-| `--model_name` | 模型别名（llama/qwen）或 HF 路径 | 必填 |
-| `--output_dir` | 输出目录（默认 /autodl-fs/data/mad） | None |
-| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
-| `--batch_size` | 每批处理样本数 | 8 |
-| `--max_samples` | 最大处理样本数（0=全部） | 0 |
-| `--temperature` | 采样温度 | 0.7 |
-| `--max_tokens` | 最大生成 token 数 | 512 |
-
-**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，仅移除 `Rule: {rule-of-thumb}` 相关行（对应论文 `without rule-of-thumb` 设定），其余内容不做修改。
-
-**推理阶段**（Debate-Only 共 4 阶段，Self-Reflect+Debate 共 5 阶段）：
-
-| 阶段 | Debate-Only | Self-Reflect+Debate |
-|------|-------------|---------------------|
-| 1 | 初始决策（A.3.1） | 初始决策（A.4.1） |
-| 2 | 生成反馈（A.3.2） | 选择 Reflect/Debate（A.4.2） |
-| 3 | 最终决策（A.3.3） | 执行所选动作（A.4.3/A.4.4） |
-| 4 | Judge 仲裁（A.3.4） | 最终决策（A.4.5） |
-| 5 | — | Judge 仲裁（A.4.6） |
-
-**输出格式**：JSON 数组，每条记录包含完整的多智能体推理过程：
-
-```json
-{
-  "instruction": "...",
-  "input": "...",
-  "output": "1",
-  "country": "egypt",
-  "scenario": "At a gathering...",
-  "model1_initial": "...",
-  "model1_initial_ans": "1",
-  "model2_initial": "...",
-  "model2_initial_ans": "1",
-  "model1_feedback": "...",
-  "model2_feedback": "...",
-  "model1_final": "...",
-  "model1_final_ans": "1",
-  "model2_final": "...",
-  "model2_final_ans": "1",
-  "judge_response": "",
-  "final_answer": "1",
-  "correct": true,
-  "agree": true
-}
-```
-
-**指标文件**（`_metrics.json`）包含：
-
-```json
-{
-  "method": "MAD",
-  "variant": "debateonly",
-  "model": "qwen",
-  "total_samples": 2633,
-  "correct": 2000,
-  "incorrect": 633,
-  "accuracy": 0.7596,
-  "agree_count": 1500,
-  "disagree_count": 1133,
-  "gt_distribution": {"1": 877, "2": 878, "3": 878},
-  "prediction_distribution": {"1": 900, "2": 850, "3": 883},
-  "per_country": {
-    "egypt": {"total": 35, "correct": 28, "accuracy": 0.8000},
-    "...": {}
-  }
-}
-```
-
-#### 2.11.2 MACD (Multi-Agent Cultural Debate)
-
-**方法简介**：MACD（Multi-Agent Cultural Debate）是 Tan et al. (2026) 提出的训练无关（training-free）多智能体文化辩论框架，通过赋予 Agent 显式的文化身份（而非功能性角色）来缓解 LLM 的文化偏见。该方法的核心思想是：
-
-1. **文化角色设计**：分配 5 个 Agent 分别代表 Western、East Asian、African、Middle Eastern、South Asian 文化视角，每个 Agent 配备详细的人物画像（职业、教育、生活经历）和文化价值观
-2. **多轮辩论（SCGRD 策略）**：Agent 先从各自文化视角独立回答，然后进行"求同存异"（Seeking Common Ground while Reserving Differences）策略的辩论，在共识中保留文化多样性
-3. **综合模型**：辩论结束后由 Summary 模型综合所有 Agent 的最终观点，生成文化中立的最终回答
-
-原论文在 CEBiasBench 上使用 GPT-4o 作为 backbone 取得了 57.6% Avg No Bias Rate 和 86.0% MAV No Bias Rate（vs. Direct 47.6%/69.0%）。本实现适配 NormAD 文化可接受性判断任务，将开放式文化中立回答生成转化为 Yes/No/Neither 判断任务。
-
-**代码目录**：`MACD/`
-
-```
-MACD/
-├── macd_common.py              # 共享工具（文化角色定义、SCGRD提示词、数据解析、指标计算）
-├── macd_debate.py              # MACD 主推理脚本
-└── Mitigating Cultural Bias in LLMs via Multi-Agent Cultural Debate.pdf  # 原论文
-```
-
-**输出文件命名规范**：`{dataset}_MACD_{基座}.json`
-
-| 基座 | 输出文件 | 指标文件 |
-|------|---------|---------|
-| Qwen | `normad_MACD_qwen.json` | `normad_MACD_qwen_metrics.json` |
-| Llama | `normad_MACD_llama.json` | `normad_MACD_llama_metrics.json` |
-
-**运行命令**：
-
-```bash
-# MACD Baseline（Qwen 基座，完整数据集）
-python MACD/macd_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512 \
-    --num_rounds 2
-
-# MACD Baseline（Llama 基座，完整数据集）
-python MACD/macd_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name llama \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512 \
-    --num_rounds 2
-
-# 快速测试（5 条样本）
-python MACD/macd_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 5
-```
-
-**参数说明**：
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
-| `--model_name` | 模型别名（llama/qwen）或 HuggingFace 路径 | 必填 |
-| `--output_dir` | 输出目录 | /autodl-fs/data/macd |
-| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
-| `--batch_size` | 每批处理样本数 | 8 |
-| `--max_samples` | 最大处理样本数（0=全部） | 0 |
-| `--temperature` | 采样温度 | 0.7 |
-| `--max_tokens` | 最大生成 token 数 | 512 |
-| `--num_rounds` | 辩论轮数（论文默认 2 轮） | 2 |
-
-**提示词来源**：严格遵循论文附录 A（Meta prompt）、附录 B（Cultural Persona，含完整人物画像和文化价值观）、附录 C（SCGRD 策略提示词："Adjust your response to align with your agents' examples, seeking a general answer to the question, trying to find common ground and maximize overall agreement."）。为适配 NormAD 判断任务，仅在 Meta prompt 中将原文的开放式问答替换为 "Yes/No/Neither" 判断格式，其余提示词保持原文不变。
-
-**推理阶段**（共 3 大阶段）：
-
-| 阶段 | 说明 | 推理次数 |
-|------|------|---------|
-| 1 | Round 1：5 个文化 Agent 各自从其文化视角独立回答 | 5×N |
-| 2 | Round 2：每个 Agent 观看其他 4 个 Agent 的 Round-1 回答，基于 SCGRD 策略更新回答 | 5×N |
-| 3 | Summary：综合模型综合所有 Agent 的 Round-2 回答，输出最终判断 | 1×N |
-
-**5 个文化 Agent 设定**（来自论文 Appendix B）：
-
-| 文化角色 | 人物画像概要 | 文化价值观 |
-|---------|-------------|-----------|
-| Western | 29 岁女性，荷兰阿姆斯特丹，城市规划硕士 | 个人权利、自由、理性分析、功利主义 |
-| East Asian | 22 岁男性，中国广州，计算机硕士 | 社会和谐、集体福祉、孝道、面子 |
-| African | 30 岁女性，肯尼亚内罗毕，公共卫生专业 | 社区、Ubuntu、集体责任、尊重长辈 |
-| Middle Eastern | 32 岁女性，约旦安曼，餐饮企业经营者 | 家族荣誉、传统、宗教义务、好客 |
-| South Asian | 27 岁男性，印度金奈，电气工程师 | 达摩（道德义务）、业力、精神成长、尊重等级 |
-
-**输出格式**：JSON 数组，每条记录包含完整的多智能体辩论过程：
-
-```json
-{
-  "instruction": "...",
-  "input": "...",
-  "output": "1",
-  "country": "egypt",
-  "scenario": "At a gathering...",
-  "round1_responses": {
-    "Western": "Yes. In Western cultures...",
-    "East Asian": "Yes. From an East Asian...",
-    "African": "...",
-    "Middle Eastern": "...",
-    "South Asian": "..."
-  },
-  "round1_answers": {"Western": "1", "East Asian": "1", "African": "1", "Middle Eastern": "1", "South Asian": "1"},
-  "round2_responses": {
-    "Western": "Yes. After considering...",
-    "East Asian": "...",
-    "African": "...",
-    "Middle Eastern": "...",
-    "South Asian": "..."
-  },
-  "round2_answers": {"Western": "1", "East Asian": "1", "African": "1", "Middle Eastern": "1", "South Asian": "1"},
-  "summary_response": "Yes. Based on the consensus...",
-  "final_answer": "1",
-  "correct": true
-}
-```
-
-**指标文件**（`_metrics.json`）包含：
-
-```json
-{
-  "method": "MACD",
-  "model": "qwen",
-  "num_agents": 5,
-  "num_rounds": 2,
-  "cultures": ["Western", "East Asian", "African", "Middle Eastern", "South Asian"],
-  "total_samples": 2633,
-  "correct": 2000,
-  "accuracy": 0.7596,
-  "round1_full_agreement": 1800,
-  "round2_full_agreement": 2100,
-  "gt_distribution": {"1": 877, "2": 878, "3": 878},
-  "prediction_distribution": {"1": 900, "2": 850, "3": 883},
-  "per_country": {
-    "egypt": {"total": 35, "correct": 28, "accuracy": 0.8000},
-    "...": {}
-  }
-}
-```
-
-#### 2.11.3 OG-MAR (Ontology-Guided Multi-Agent Reasoning)
-
-**方法简介**：OG-MAR 是 Seo et al. (2026) 提出的本体引导多智能体推理框架（"Toward Culturally Aligned LLMs through Ontology-Guided Multi-Agent Reasoning"），通过构建全球文化本体（ontology）来指导多智能体的文化对齐推理。其核心创新在于：
-
-1. **文化本体构建**：基于 World Values Survey (WVS) 的 12 个顶层价值域和 76 个细粒度类别，通过 Competency Questions (CQs) 引导 LLM 生成类别间的方向性关系（ontology triples），再经人工专家验证，最终构建包含 76 个类和 150 对 object properties 的文化价值本体。
-2. **人口统计检索**：使用密集嵌入检索与目标人群特征最相似的 K 个个体，获取其结构化价值摘要作为 persona 的依据。
-3. **多 Persona 模拟**：为每个检索到的个体实例化一个 Value-Persona Agent，每个 Agent 基于本体三元组（ontology triples）、该个体的价值摘要和人口统计属性进行推理，输出答案和推理轨迹。
-4. **约束元裁决**：Final Judgment Agent 通过 Evidence-First 协议综合所有 Persona 输出——优先考虑证据强度（是否显式引用了本体关系和人口统计），仅在平局时参考投票计数，最终输出文化对齐的判断。
-
-原论文在 6 个区域基准测试集上使用 GPT-4o-mini/Gemini 2.5/Qwen 2.5/EXAONE 3.5 进行评估，OG-MAR 在 Gemini 2.5 Flash Lite 上达到 0.6308 平均准确率，在 EXAONE 3.5 上达到 0.6317。本实现适配 NormAD 文化可接受性判断任务，将 WVS 人口统计检索替换为基于国家/文化轴的模拟 persona 生成，本体三元组检索基于场景的文化轴进行。
-
-**代码目录**：`OG/`
-
-```
-OG/
-├── og_common.py    # 共享工具（文化本体数据、提示词模板、人口统计生成、三元组检索、指标计算）
-├── og_mar.py       # OG-MAR 主推理脚本（Persona Agent + Judgment Agent pipeline）
-└── Toward Culturally Aligned LLMs through Ontology-Guided Multi-Agent Reasoning.pdf  # 原论文
-```
-
-**输出文件命名规范**：`{dataset}_OGMAR_{基座}.json`
-
-| 基座 | 输出文件 | 指标文件 |
-|------|---------|---------|
-| Qwen | `normad_OGMAR_qwen.json` | `normad_OGMAR_qwen_metrics.json` |
-| Llama | `normad_OGMAR_llama.json` | `normad_OGMAR_llama_metrics.json` |
-
-**运行命令**：
-
-```bash
-# OG-MAR Baseline（Qwen 基座，完整数据集，论文默认参数）
-python OG/og_mar.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.0 \
-    --max_tokens 768 \
-    --num_personas 5 \
-    --num_triples 5
-
-# OG-MAR Baseline（Llama 基座，完整数据集）
-python OG/og_mar.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name llama \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.0 \
-    --max_tokens 768 \
-    --num_personas 5 \
-    --num_triples 5
-
-# 快速测试（5 条样本）
-python OG/og_mar.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 5
-```
-
-**参数说明**：
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--input_file` | 输入数据集路径（normad_mas.json） | 必填 |
-| `--model_name` | 模型别名（llama/qwen）或 HuggingFace 路径 | 必填 |
-| `--output_dir` | 输出目录 | /autodl-fs/data/ogmar |
-| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
-| `--batch_size` | 每批处理样本数 | 8 |
-| `--max_samples` | 最大处理样本数（0=全部） | 0 |
-| `--temperature` | 采样温度（论文使用 0 保证稳定行为） | 0.0 |
-| `--max_tokens` | 最大生成 token 数（JSON 输出较长） | 768 |
-| `--num_personas` | Persona Agent 数量 K（论文默认 5） | 5 |
-| `--num_triples` | 检索的本体三元组数量 M（论文默认 3-9） | 5 |
-
-**提示词来源**：严格遵循论文 Appendix E Table 8（Persona Agent Prompt）和 Table 9（Judgment Agent Prompt）。为适配 NormAD 任务做的最小调整包括：(1) 将 WVS 问卷的人口统计/选项格式替换为 NormAD 的国家/场景/可接受性判断格式；(2) 将 `reasoning must be >= 250 words` 缩减为 `>= 100 words` 以适配本地模型上下文长度；(3) 保留了所有核心约束规则（禁止外部知识、仅使用 provided inputs、显式引用本体关系等）。
-
-**推理阶段**（共 3 大阶段）：
-
-| 阶段 | 说明 | 推理次数 |
-|------|------|---------|
-| 1 | 本体 & 人口统计检索：为每条样本检索 M 个相关本体三元组，生成 K 个 persona 的人口统计描述和价值摘要 | 预计算（无 LLM 调用） |
-| 2 | Persona Agent 模拟：K 个 persona 各自基于本体上下文、价值摘要和人口统计推理，输出答案和推理轨迹 | K×N |
-| 3 | Judgment Agent 裁决：综合所有 Persona 输出 + 投票摘要，通过 Evidence-First 协议输出最终判断 | 1×N |
-
-**文化本体数据**：代码内置了论文 Table 16 的完整 12 域 76 类别分类体系，以及 Table 17 中的代表性本体三元组（约 37 条方向性关系），涵盖经济价值观、伦理价值观、宗教价值观、社会价值观等之间的跨域关系。三元组检索基于场景的文化轴（Etiquette/Morality/Law/Religion/Family 等）匹配相关的价值域和类别。
-
-**输出格式**：JSON 数组，每条记录包含完整的本体引导多智能体推理过程：
-
-```json
-{
-  "instruction": "...",
-  "input": "...",
-  "output": "1",
-  "country": "egypt",
-  "scenario": "At a gathering...",
-  "axis": "Etiquette",
-  "ontology_triples": [
-    "Generalized Trust fundamentally underpins Outgroup Tolerance",
-    "Interpersonal Trust helps cultivate Outgroup Tolerance",
-    "..."
-  ],
-  "persona_outputs": {
-    "persona_1": {"response": "...", "answer": "1"},
-    "persona_2": {"response": "...", "answer": "1"},
-    "persona_3": {"response": "...", "answer": "1"},
-    "persona_4": {"response": "...", "answer": "2"},
-    "persona_5": {"response": "...", "answer": "1"}
-  },
-  "persona_vote_summary": "Option 1 (Yes): 4 vote(s); Option 2 (No): 1 vote(s)",
-  "judgment_response": "{\"final_answer\": \"1: acceptable\", \"reasoning\": \"...\"}",
-  "final_answer": "1",
-  "correct": true
-}
-```
-
-**指标文件**（`_metrics.json`）包含：
-
-```json
-{
-  "method": "OG-MAR",
-  "model": "qwen",
-  "num_personas": 5,
-  "num_triples": 5,
-  "temperature": 0.0,
-  "framework": "Ontology-Guided Multi-Agent Reasoning",
-  "prompt_source": "Appendix E, Tables 8-9 (OG-MAR paper, Seo et al. 2026)",
-  "total_samples": 2633,
-  "correct": 2000,
-  "accuracy": 0.7596,
-  "persona_full_agreement": 1800,
-  "gt_distribution": {"1": 877, "2": 878, "3": 878},
-  "prediction_distribution": {"1": 900, "2": 850, "3": 883},
-  "per_country": {
-    "egypt": {"total": 35, "correct": 28, "accuracy": 0.8000},
-    "...": {}
-  }
-}
-```
 
 
 ## 3. Stage 1：主场权威加权 SFT
