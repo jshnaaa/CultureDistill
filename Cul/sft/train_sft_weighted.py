@@ -612,6 +612,13 @@ def train(args):
     if len(train_samples) == 0:
         raise ValueError("No valid SFT samples found. Check data format.")
 
+    # Limit training samples if --max_samples is specified
+    if args.max_samples > 0:
+        train_samples = train_samples[:args.max_samples]
+        print(f"Using first {args.max_samples} training samples (out of {len(train_raw)} raw)")
+    else:
+        print(f"Using all {len(train_samples)} training samples")
+
     train_ds = WeightedSFTDataset(train_samples, tokenizer, alpha=args.alpha)
     loader = DataLoader(
         train_ds,
@@ -726,6 +733,8 @@ def main():
                         help="LoRA alpha (default: 64)")
     parser.add_argument("--eval_every_n_epochs", type=int, default=1,
                         help="Evaluate on val set every N epochs (default: 1)")
+    parser.add_argument("--max_samples", type=int, default=0,
+                        help="Max training samples to use. 0 = all (default: 0)")
     args = parser.parse_args()
     train(args)
 
