@@ -7,11 +7,15 @@ HF-CAC (Home-Field Culture-Activated Collaboration):
   - Cross-Cultural Auditors provide contrastive perspectives
   - Judge weights Guardian's claims with veto mechanism
 
+Supports two dataset types (auto-detected from data format):
+  - NormAD: behavior acceptability judgment (1/2/3) — uses hf_cac_config.yaml
+  - CultureAtlas: comparative cultural depth (1/2) — uses hf_cac_config_cultureatlas.yaml
+
 Output format mirrors AgentArk LLM Debate so that the existing
 label.py / split_solutions pipeline can be reused directly.
 
 Usage:
-    # Quick test (5 samples, with negotiation)
+    # NormAD dataset (auto-detected)
     python Cul/generate_hf_cac_data.py \\
         --input_file /autodl-fs/data/normad_mas.json \\
         --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \\
@@ -20,10 +24,19 @@ Usage:
         --max_samples 5 --negotiation_rounds 1 \\
         --include_judge true
 
-    # Full dataset
+    # CultureAtlas dataset (auto-detected)
     python Cul/generate_hf_cac_data.py \\
-        --input_file /autodl-fs/data/normad_mas.json \\
-        --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \\
+        --input_file /autodl-fs/data/cultureAtlas_mas.json \\
+        --output_file /autodl-fs/data/qwen/cultureatlas_hf_cac_inference.jsonl \\
+        --model_name qwen \\
+        --use_vllm --tensor_parallel_size 2 \\
+        --max_samples 5 --negotiation_rounds 1 \\
+        --include_judge true
+
+    # Explicit config override (skip auto-detection)
+    python Cul/generate_hf_cac_data.py \\
+        --input_file /autodl-fs/data/cultureAtlas_mas.json \\
+        --config_path Cul/configs/hf_cac_config_cultureatlas.yaml \\
         --model_name qwen \\
         --use_vllm --tensor_parallel_size 2 \\
         --max_samples 0 --negotiation_rounds 1 \\
@@ -55,6 +68,60 @@ def load_dataset(path):
     if isinstance(data, dict):
         data = list(data.values())[0]
     return data
+
+
+def detect_dataset_type(data: list) -> str:
+    """
+    Auto-detect dataset type from data content.
+
+    Returns:
+        "cultureatlas" if data matches CultureAtlas format (comparative, binary 1/2)
+        "normad" otherwise (behavior acceptability, 3-way 1/2/3)
+
+    Detection heuristics (in priority order):
+      1. Instruction content: CultureAtlas mentions "more culturally specific" or
+         "Response 1"/"Response 2"; NormAD mentions "acceptable"/"unacceptable"
+      2. Input field: CultureAtlas has "Response 1:" and "Response 2:" patterns
+      3. Output distribution (full dataset): CultureAtlas only has 1/2, NormAD has 1/2/3
+    """
+    if not data:
+        return "normad"
+
+    # Sample first few items for instruction-based detection (most reliable)
+    sample = data[:min(10, len(data))]
+
+    # Check instruction content — most reliable signal
+    for item in sample:
+        instruction = item.get("instruction", "")
+        instr_lower = instruction.lower()
+        # CultureAtlas markers
+        if "more culturally specific" in instr_lower:
+            return "cultureatlas"
+        if "response 1" in instr_lower and "response 2" in instr_lower:
+            return "cultureatlas"
+        # NormAD markers
+        if "acceptable" in instr_lower or "unacceptable" in instr_lower:
+            return "normad"
+        if "determine whether the behavior" in instr_lower:
+            return "normad"
+
+    # Check if input contains "Response 1" / "Response 2" pattern
+    for item in sample:
+        inp = item.get("input", "")
+        if "Response 1:" in inp and "Response 2:" in inp:
+            return "cultureatlas"
+
+    # Fallback: check output distribution across a larger sample
+    # Use up to 100 samples to avoid false positives from small samples
+    check_size = min(100, len(data))
+    outputs = set(str(item.get("output", "")).strip()
+                  for item in data[:check_size])
+    if "3" in outputs:
+        return "normad"
+    if outputs and outputs <= {"1", "2"}:
+        return "cultureatlas"
+
+    return "normad"
 
 
 def convert_sample(item):
@@ -108,7 +175,7 @@ def main():
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama / qwen) or full local path")
     parser.add_argument("--config_path", type=str, default=None,
-                        help="Path to hf_cac_config.yaml")
+                        help="Path to hf_cac_config.yaml (auto-detected if not specified)")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_tokens", type=int, default=1024)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
@@ -168,6 +235,21 @@ def main():
     dataset = [convert_sample(item) for item in raw_data]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
 
+    # ------------------------------------------------------------------
+    # Auto-detect dataset type and resolve config path
+    # ------------------------------------------------------------------
+    dataset_type = detect_dataset_type(raw_data)
+    print(f"Detected dataset type: {dataset_type}")
+
+    if args.config_path is None:
+        # Auto-select config based on dataset type
+        config_dir = os.path.join(os.path.dirname(__file__), "configs")
+        if dataset_type == "cultureatlas":
+            args.config_path = os.path.join(config_dir, "hf_cac_config_cultureatlas.yaml")
+        else:
+            args.config_path = os.path.join(config_dir, "hf_cac_config.yaml")
+        print(f"Auto-selected config: {args.config_path}")
+
     if args.max_samples > 0:
         dataset = dataset[: args.max_samples]
         print(f"Using first {args.max_samples} samples")
@@ -197,6 +279,7 @@ def main():
         negotiation_rounds=args.negotiation_rounds,
     )
     print(f"HF-CAC initialized:")
+    print(f"  Task type: {mas.task_type}")
     print(f"  Include Judge: {args.include_judge}")
     print(f"  Negotiation rounds: {args.negotiation_rounds}")
 
@@ -226,6 +309,7 @@ def main():
         with open(metrics_file, "w", encoding="utf-8") as f:
             json.dump(metrics, f, ensure_ascii=False, indent=2)
         print(f"\n--- Accuracy Metrics ---")
+        print(f"Task type: {metrics['task_type']}")
         print(f"Judge accuracy:    {metrics['judge_accuracy']:.4f} "
               f"({metrics['judge_correct']}/{metrics['judge_total']})")
         print(f"Guardian accuracy: {metrics['guardian_accuracy']:.4f} "
@@ -237,8 +321,16 @@ def main():
 # Accuracy computation
 # ---------------------------------------------------------------------------
 
-def extract_judge_answer(response_text: str):
-    """Extract Judge's final answer (1/2/3) from response text."""
+def detect_task_type_from_output(data: list) -> str:
+    """Detect task type from inference output data (for accuracy computation)."""
+    outputs = set(d.get("gt", "").strip() for d in data[:20] if d.get("gt"))
+    if outputs and outputs <= {"1", "2"}:
+        return "cultureatlas"
+    return "normad"
+
+
+def extract_judge_answer(response_text: str, max_choice: int = 3):
+    """Extract Judge's final answer from response text."""
     judge_match = re.search(
         r'===== Solution \d+ \[JUDGE.*?\] =====\n(.*?)$',
         response_text, re.DOTALL
@@ -246,15 +338,16 @@ def extract_judge_answer(response_text: str):
     if not judge_match:
         return None
     judge_text = judge_match.group(1)
-    m = re.search(r'Answer\s*:\s*([1-3])', judge_text, re.IGNORECASE)
+    pattern = f'[1-{max_choice}]'
+    m = re.search(rf'Answer\s*:\s*({pattern})', judge_text, re.IGNORECASE)
     if m:
         return m.group(1)
-    digits = re.findall(r'\b([1-3])\b', judge_text)
+    digits = re.findall(rf'\b({pattern})\b', judge_text)
     return digits[-1] if digits else None
 
 
-def extract_guardian_answer(response_text: str):
-    """Extract Guardian's answer (1/2/3) from response text."""
+def extract_guardian_answer(response_text: str, max_choice: int = 3):
+    """Extract Guardian's answer from response text."""
     guardian_match = re.search(
         r'===== Solution \d+ \[GUARDIAN\] =====\n(.*?)(?=\n===== Solution)',
         response_text, re.DOTALL
@@ -262,10 +355,11 @@ def extract_guardian_answer(response_text: str):
     if not guardian_match:
         return None
     guardian_text = guardian_match.group(1)
-    m = re.search(r'Answer\s*:\s*([1-3])', guardian_text, re.IGNORECASE)
+    pattern = f'[1-{max_choice}]'
+    m = re.search(rf'Answer\s*:\s*({pattern})', guardian_text, re.IGNORECASE)
     if m:
         return m.group(1)
-    digits = re.findall(r'\b([1-3])\b', guardian_text)
+    digits = re.findall(rf'\b({pattern})\b', guardian_text)
     return digits[-1] if digits else None
 
 
@@ -273,6 +367,7 @@ def compute_accuracy(output_file: str) -> dict:
     """
     Compute Judge and Guardian accuracy from inference output JSONL.
 
+    Auto-detects task type (NormAD 3-way vs CultureAtlas 2-way) from GT labels.
     Returns a dict with overall metrics and per-country breakdown.
     """
     data = []
@@ -280,6 +375,11 @@ def compute_accuracy(output_file: str) -> dict:
         for line in f:
             if line.strip():
                 data.append(json.loads(line))
+
+    # Auto-detect task type for answer extraction
+    task_type = detect_task_type_from_output(data)
+    max_choice = 2 if task_type == "cultureatlas" else 3
+    print(f"Accuracy evaluation — detected task type: {task_type} (max_choice={max_choice})")
 
     judge_correct = 0
     judge_total = 0
@@ -294,8 +394,8 @@ def compute_accuracy(output_file: str) -> dict:
         country = d.get("country", "unknown")
         response = d.get("response", "")
 
-        judge_ans = extract_judge_answer(response)
-        guardian_ans = extract_guardian_answer(response)
+        judge_ans = extract_judge_answer(response, max_choice)
+        guardian_ans = extract_guardian_answer(response, max_choice)
 
         if judge_ans:
             judge_total += 1
@@ -333,11 +433,12 @@ def compute_accuracy(output_file: str) -> dict:
     # GT and prediction distributions
     gt_dist = dict(Counter(d.get("gt", "").strip() for d in data if d.get("gt")))
     judge_ans_dist = dict(Counter(
-        extract_judge_answer(d.get("response", "")) for d in data
+        extract_judge_answer(d.get("response", ""), max_choice) for d in data
     ))
 
     return {
         "total_samples": len(data),
+        "task_type": task_type,
         "judge_total": judge_total,
         "judge_correct": judge_correct,
         "judge_accuracy": judge_correct / judge_total if judge_total > 0 else 0.0,

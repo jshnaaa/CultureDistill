@@ -157,13 +157,28 @@ Phase 3（Judge）：  N × 1 = N 次
 ### 2.8 运行命令
 
 ```bash
-# 全量生成（NormAD 数据集，Qwen）
+# 全量生成（NormAD 数据集，Qwen）— 自动检测为 normad 类型，使用 hf_cac_config.yaml
 cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
       --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+      --model_name qwen \
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 0 --negotiation_rounds 1 \
+      --include_judge true
+shutdown
+```
+
+```bash
+# 全量生成（CultureAtlas 数据集，Qwen）— 自动检测为 cultureatlas 类型，使用 hf_cac_config_cultureatlas.yaml
+cd autodl-tmp/distill
+source /etc/network_turbo
+sh git.sh
+python Cul/generate_hf_cac_data.py \
+      --input_file /autodl-fs/data/cultureAtlas_mas.json \
+      --output_file /autodl-fs/data/qwen/cultureatlas_hf_cac_inference.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
@@ -179,6 +194,9 @@ shutdown
 | `--include_judge` | true | 是否包含 Judge 裁决。false 时仅输出 Solution 1-6 |
 | `--model_name` | — | `llama`/`qwen`/完整路径 |
 | `--max_samples` | 0 | 0=全量 |
+| `--config_path` | None | 手动指定配置文件路径。不指定时根据数据集自动检测 |
+
+**数据集自动检测逻辑：** 脚本会检查输入数据的 instruction 字段和 output 分布，自动判断是 NormAD（三分类 1/2/3）还是 CultureAtlas（二分类比较 1/2），并选择对应的配置文件。也可通过 `--config_path` 手动覆盖。
 
 ### 2.9 代码结构
 
@@ -187,19 +205,25 @@ Cul/
 ├── scripts/
 │   └── convert_normad.py           # 数据格式转换：normad.jsonl → normad_mas.json
 ├── configs/
-│   ├── hf_cac_config.yaml          # HF-CAC 配置
+│   ├── hf_cac_config.yaml          # HF-CAC 配置（NormAD：行为可接受性三分类 1/2/3）
 │   │                                 #   - 6 Guardian + 6 Auditor + Judge prompt
 │   │                                 #   - region_keywords 用于主场匹配
 │   │                                 #   - 6×6 Cultural Affinity Matrix
+│   ├── hf_cac_config_cultureatlas.yaml  # HF-CAC 配置（CultureAtlas：文化深度比较二分类 1/2）
+│   │                                 #   - 同样 6 Guardian + 6 Auditor + Judge
+│   │                                 #   - 提示词适配比较任务（哪个回答更具文化特异性）
+│   │                                 #   - task_type: "cultureatlas", answer_choices: [1, 2]
 │   └── reconcile_config.yaml        # 原 RECONCILE 配置（保留）
 ├── hf_cac_mas.py                   # HF-CAC 核心推理引擎
 │                                     #   - HF_CAC_MAS 类
 │                                     #   - detect_guardian(): 主场识别
 │                                     #   - 两阶段 batch inference
 │                                     #   - Cultural Affinity Arbitration fallback
+│                                     #   - 支持 task_type 分支（normad / cultureatlas）
 ├── generate_hf_cac_data.py         # HF-CAC 数据生成入口
-│                                     #   - 参数：--negotiation_rounds, --include_judge
-│                                     #   - 兼容 normad_mas.json 新格式 + 旧格式
+│                                     #   - 自动检测数据集类型（NormAD / CultureAtlas）
+│                                     #   - 根据类型自动选择对应 config
+│                                     #   - 兼容 normad_mas.json + cultureAtlas_mas.json
 ├── reconcile_mas.py                 # 原 RECONCILE 引擎（保留作为 baseline）
 └── generate_culture_data.py         # 原 RECONCILE 入口（保留作为 baseline）
 ```
@@ -1325,9 +1349,10 @@ Cul/
 
 | 文件 | 功能 |
 |------|------|
-| `generate_hf_cac_data.py` | 调用 HF-CAC 多智能体系统生成带角色标签的结构化推理数据 |
-| `hf_cac_mas.py` | HF-CAC 核心逻辑：Guardian/Auditor/Judge 三类智能体的 prompt 构建、vLLM batch 推理、多轮协商，支持 Cultural Affinity Arbitration 仲裁回退 |
-| `configs/hf_cac_config.yaml` | 6 个 Guardian prompt（按文化区域）+ 6 个 Auditor prompt + Judge prompt + 6×6 Cultural Affinity Matrix，已集成 Neutral 优化策略 |
+| `generate_hf_cac_data.py` | 调用 HF-CAC 多智能体系统生成带角色标签的结构化推理数据。自动检测数据集类型（NormAD/CultureAtlas）并选择对应配置 |
+| `hf_cac_mas.py` | HF-CAC 核心逻辑：Guardian/Auditor/Judge 三类智能体的 prompt 构建、vLLM batch 推理、多轮协商，支持 Cultural Affinity Arbitration 仲裁回退。通过 `task_type` 字段适配不同任务类型 |
+| `configs/hf_cac_config.yaml` | NormAD 配置：6 个 Guardian prompt + 6 个 Auditor prompt + Judge prompt + 6×6 Cultural Affinity Matrix，三分类（1=acceptable/2=unacceptable/3=neutral） |
+| `configs/hf_cac_config_cultureatlas.yaml` | CultureAtlas 配置：同样 6+6+Judge 结构，但提示词适配二分类比较任务（1=Response 1 更具文化特异性/2=Response 2 更具文化特异性） |
 
 **Phase 0: 数据生成（RECONCILE baseline）**
 

@@ -66,6 +66,10 @@ class HF_CAC_MAS:
         self.max_tokens = max_tokens
         self.model_name = model_name
 
+        # Task type: "normad" (3-way acceptability) or "cultureatlas" (2-way comparison)
+        self.task_type = cfg.get("task_type", "normad")
+        self.answer_choices = cfg.get("answer_choices", [1, 2, 3])
+
         # Cultural Affinity Matrix for Judge fallback arbitration
         self.affinity_matrix = cfg.get("cultural_affinity_matrix", None)
         self.guardian_failure_indicators = cfg.get(
@@ -141,23 +145,41 @@ class HF_CAC_MAS:
                                target_country: str) -> str:
         """Build prompt for the Host-Culture Guardian (Phase 1: independent)."""
         system = self.culture_roles[agent_idx]["guardian_prompt"].strip()
-        user = (
-            f"TARGET CULTURE: {target_country}\n\n"
-            f"{question}\n\n"
-            f"As the Host-Culture Guardian for {target_country}, provide your "
-            f"AUTHORITATIVE analysis. Cite specific cultural practices, traditions, "
-            f"or norms by name. Explain why certain options align or conflict with "
-            f"the target culture's values.\n\n"
-            f"Answer choices:\n"
-            f"1 = The behavior is clearly ACCEPTABLE in {target_country}'s culture\n"
-            f"2 = The behavior is clearly UNACCEPTABLE in {target_country}'s culture\n"
-            f"3 = The behavior is NEUTRAL/INDETERMINATE — it has no specific cultural valence\n"
-            f"    in {target_country}, or cultural norms on this topic vary significantly\n"
-            f"    within the country, or the behavior is universally human rather than\n"
-            f"    culturally specific\n\n"
-            f"Reasoning: <your authoritative cultural analysis>\n"
-            f"Answer: <number>"
-        )
+
+        if self.task_type == "cultureatlas":
+            # CultureAtlas: comparative cultural depth (binary 1/2)
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"As the Host-Culture Guardian for {target_country}, determine which "
+                f"response demonstrates MORE culturally specific and insightful knowledge "
+                f"about {target_country}. Use your deep expertise to identify genuine "
+                f"cultural depth vs. surface-level generalizations.\n\n"
+                f"Answer choices:\n"
+                f"1 = Response 1 is more culturally specific\n"
+                f"2 = Response 2 is more culturally specific\n\n"
+                f"Reasoning: <your authoritative analysis of cultural depth>\n"
+                f"Answer: <1 or 2>"
+            )
+        else:
+            # NormAD: behavior acceptability (3-way 1/2/3)
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"As the Host-Culture Guardian for {target_country}, provide your "
+                f"AUTHORITATIVE analysis. Cite specific cultural practices, traditions, "
+                f"or norms by name. Explain why certain options align or conflict with "
+                f"the target culture's values.\n\n"
+                f"Answer choices:\n"
+                f"1 = The behavior is clearly ACCEPTABLE in {target_country}'s culture\n"
+                f"2 = The behavior is clearly UNACCEPTABLE in {target_country}'s culture\n"
+                f"3 = The behavior is NEUTRAL/INDETERMINATE — it has no specific cultural valence\n"
+                f"    in {target_country}, or cultural norms on this topic vary significantly\n"
+                f"    within the country, or the behavior is universally human rather than\n"
+                f"    culturally specific\n\n"
+                f"Reasoning: <your authoritative cultural analysis>\n"
+                f"Answer: <number>"
+            )
         return self._apply_chat(system, user)
 
     def _build_auditor_prompt(self, agent_idx: int, question: str,
@@ -171,36 +193,69 @@ class HF_CAC_MAS:
         system = self.culture_roles[agent_idx]["auditor_prompt"].strip()
         agent_name = self.culture_roles[agent_idx]["name"]
 
+        answer_hint = "<1 or 2>" if self.task_type == "cultureatlas" else "<number>"
+
         if guardian_response:
             # Phase 2: Auditor sees Guardian's response
-            user = (
-                f"TARGET CULTURE: {target_country}\n\n"
-                f"{question}\n\n"
-                f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
-                f"authoritative analysis:\n"
-                f"---\n{guardian_response}\n---\n\n"
-                f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
-                f"1. Provide your comparative perspective (similarities/differences "
-                f"between your culture and {target_country}).\n"
-                f"2. If you agree with the Guardian, explain WHY from your cultural lens.\n"
-                f"3. If you disagree, provide specific counter-evidence — but acknowledge "
-                f"that the Guardian has primary authority on {target_country}.\n\n"
-                f"Reasoning: <your cross-cultural comparative analysis>\n"
-                f"Answer: <number>"
-            )
+            if self.task_type == "cultureatlas":
+                user = (
+                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"{question}\n\n"
+                    f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
+                    f"authoritative analysis:\n"
+                    f"---\n{guardian_response}\n---\n\n"
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
+                    f"1. Assess which response shows deeper cultural knowledge from "
+                    f"your cross-cultural perspective.\n"
+                    f"2. If you agree with the Guardian, explain WHY from your cultural lens.\n"
+                    f"3. If you disagree, provide specific reasoning — but acknowledge "
+                    f"that the Guardian has primary authority on {target_country}.\n\n"
+                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Answer: {answer_hint}"
+                )
+            else:
+                user = (
+                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"{question}\n\n"
+                    f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
+                    f"authoritative analysis:\n"
+                    f"---\n{guardian_response}\n---\n\n"
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
+                    f"1. Provide your comparative perspective (similarities/differences "
+                    f"between your culture and {target_country}).\n"
+                    f"2. If you agree with the Guardian, explain WHY from your cultural lens.\n"
+                    f"3. If you disagree, provide specific counter-evidence — but acknowledge "
+                    f"that the Guardian has primary authority on {target_country}.\n\n"
+                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Answer: {answer_hint}"
+                )
         else:
             # Phase 1 (negotiation_rounds=0): independent generation
-            user = (
-                f"TARGET CULTURE: {target_country}\n\n"
-                f"{question}\n\n"
-                f"As a Cross-Cultural Auditor from [{agent_name}] background, "
-                f"provide your comparative perspective on this question about "
-                f"{target_country}. Note similarities and differences with your own "
-                f"cultural framework, and acknowledge uncertainty where the target "
-                f"culture differs from your expertise.\n\n"
-                f"Reasoning: <your cross-cultural comparative analysis>\n"
-                f"Answer: <number>"
-            )
+            if self.task_type == "cultureatlas":
+                user = (
+                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"{question}\n\n"
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
+                    f"assess which response demonstrates more culturally specific "
+                    f"knowledge about {target_country}. Note what appears generic vs. "
+                    f"genuinely culture-specific from your cross-cultural perspective, "
+                    f"and acknowledge uncertainty where the target culture differs "
+                    f"from your expertise.\n\n"
+                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Answer: {answer_hint}"
+                )
+            else:
+                user = (
+                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"{question}\n\n"
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
+                    f"provide your comparative perspective on this question about "
+                    f"{target_country}. Note similarities and differences with your own "
+                    f"cultural framework, and acknowledge uncertainty where the target "
+                    f"culture differs from your expertise.\n\n"
+                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Answer: {answer_hint}"
+                )
         return self._apply_chat(system, user)
 
     def _build_judge_prompt(self, question: str, target_country: str,
@@ -217,43 +272,68 @@ class HF_CAC_MAS:
             responses_text += f"\n[{name}] ({role_tag}):\n{resp}\n"
 
         guardian_name = self.culture_roles[guardian_idx]["name"]
-        user = (
-            f"TARGET CULTURE: {target_country}\n\n"
-            f"{question}\n\n"
-            f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
-            f"expertise most closely matches {target_country}.\n\n"
-            f"Agent responses:\n{responses_text}\n"
-            f"Determine the correct answer. Remember:\n"
-            f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
-            f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
-            f"- Cross-Cultural Auditors provide valuable comparative context\n"
-            f"- Base your final decision on verifiable cultural facts\n\n"
-            f"CALIBRATION REMINDER: Approximately 28% of questions in this dataset have\n"
-            f"\"neutral/indeterminate (3)\" as the correct answer. If you find yourself\n"
-            f"never outputting \"3\", you are likely over-committing to binary judgments.\n"
-            f"Cultural expertise includes knowing when a behavior has NO specific\n"
-            f"cultural significance in the target culture.\n\n"
-            f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
-            f"Answer: <number>"
-        )
+
+        if self.task_type == "cultureatlas":
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
+                f"expertise most closely matches {target_country}.\n\n"
+                f"Agent responses:\n{responses_text}\n"
+                f"Determine which response demonstrates MORE culturally specific knowledge. "
+                f"Remember:\n"
+                f"- Give HIGHER WEIGHT to the Guardian's assessment of cultural depth\n"
+                f"- The Guardian has VETO AUTHORITY — they best know what constitutes "
+                f"genuine cultural specificity for {target_country}\n"
+                f"- Cross-Cultural Auditors help identify generic vs. specific patterns\n"
+                f"- Look for: named traditions, local terms, nuanced significance, "
+                f"lesser-known practices\n\n"
+                f"IMPORTANT: You MUST answer either 1 or 2. There is no neutral option.\n"
+                f"One response is always more culturally specific than the other.\n\n"
+                f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
+                f"Answer: <1 or 2>"
+            )
+        else:
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
+                f"expertise most closely matches {target_country}.\n\n"
+                f"Agent responses:\n{responses_text}\n"
+                f"Determine the correct answer. Remember:\n"
+                f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
+                f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
+                f"- Cross-Cultural Auditors provide valuable comparative context\n"
+                f"- Base your final decision on verifiable cultural facts\n\n"
+                f"CALIBRATION REMINDER: Approximately 28% of questions in this dataset have\n"
+                f"\"neutral/indeterminate (3)\" as the correct answer. If you find yourself\n"
+                f"never outputting \"3\", you are likely over-committing to binary judgments.\n"
+                f"Cultural expertise includes knowing when a behavior has NO specific\n"
+                f"cultural significance in the target culture.\n\n"
+                f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
+                f"Answer: <number>"
+            )
         return self._apply_chat(self.judge_system_prompt, user)
 
     # ------------------------------------------------------------------
     # Answer extraction
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _extract_answer(text: str) -> str | None:
-        m = re.search(r"Answer\s*:\s*([1-4])", text, re.IGNORECASE)
+    def _extract_answer(self, text: str) -> str | None:
+        """Extract answer from response text. Respects task_type for valid range."""
+        max_choice = 2 if self.task_type == "cultureatlas" else 4
+        pattern = f"[1-{max_choice}]"
+
+        m = re.search(rf"Answer\s*:\s*({pattern})", text, re.IGNORECASE)
         if m:
             return m.group(1)
-        m = re.search(r"answer\s+is\s*:?\s*([1-4])\b", text, re.IGNORECASE)
+        m = re.search(rf"answer\s+is\s*:?\s*({pattern})\b", text, re.IGNORECASE)
         if m:
             return m.group(1)
-        m = re.search(r"option\s*:?\s*([1-4])\b", text, re.IGNORECASE)
+        m = re.search(rf"option\s*:?\s*({pattern})\b", text, re.IGNORECASE)
         if m:
             return m.group(1)
-        digits = re.findall(r"\b([1-4])\b", text)
+        digits = re.findall(rf"\b({pattern})\b", text)
         return digits[-1] if digits else None
 
     # ------------------------------------------------------------------
@@ -345,14 +425,24 @@ class HF_CAC_MAS:
             f"- If the highest-affinity Auditor provides specific cultural evidence, "
             f"prefer their answer even if outnumbered.\n"
             f"- Evaluate each Auditor's reasoning for concrete cultural references.\n\n"
-            f"CALIBRATION REMINDER: Approximately 28% of questions in this dataset have\n"
-            f"\"neutral/indeterminate (3)\" as the correct answer. If you find yourself\n"
-            f"never outputting \"3\", you are likely over-committing to binary judgments.\n"
-            f"Cultural expertise includes knowing when a behavior has NO specific\n"
-            f"cultural significance in the target culture.\n\n"
-            f"Reasoning: <your reasoning, referencing affinity-weighted evidence>\n"
-            f"Answer: <number>"
         )
+        if self.task_type == "cultureatlas":
+            user += (
+                f"IMPORTANT: You MUST answer either 1 or 2. There is no neutral option.\n"
+                f"One response is always more culturally specific than the other.\n\n"
+                f"Reasoning: <your reasoning, referencing affinity-weighted evidence>\n"
+                f"Answer: <1 or 2>"
+            )
+        else:
+            user += (
+                f"CALIBRATION REMINDER: Approximately 28% of questions in this dataset have\n"
+                f"\"neutral/indeterminate (3)\" as the correct answer. If you find yourself\n"
+                f"never outputting \"3\", you are likely over-committing to binary judgments.\n"
+                f"Cultural expertise includes knowing when a behavior has NO specific\n"
+                f"cultural significance in the target culture.\n\n"
+                f"Reasoning: <your reasoning, referencing affinity-weighted evidence>\n"
+                f"Answer: <number>"
+            )
         return self._apply_chat(self.judge_system_prompt, user)
 
     # ------------------------------------------------------------------
