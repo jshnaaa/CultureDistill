@@ -39,25 +39,34 @@ def load_dataset(path):
 
 def parse_input(input_text):
     """
-    Parse the 'input' field to extract Country and Scenario.
-    Strips Cultural Background section (rule-of-thumb equivalent).
+    Parse the 'input' field to extract Country, Cultural Background, and Scenario.
 
-    Returns: (country: str, scenario: str)
+    Returns: (country: str, scenario: str, cultural_context: str)
     """
     m = re.search(r'Country:\s*(.+?)(?:\n|$)', input_text, re.IGNORECASE)
     country = m.group(1).strip() if m else ""
 
+    # Extract Cultural Background section
+    cultural_context = ""
+    bg_match = re.search(
+        r'Cultural Background:\s*\n(.*?)(?=\nScenario:)',
+        input_text, re.DOTALL | re.IGNORECASE
+    )
+    if bg_match:
+        cultural_context = bg_match.group(1).strip()
+
+    # Extract Scenario
     m = re.search(r'Scenario:\s*\n(.+)$', input_text, re.DOTALL)
     if m:
         scenario = m.group(1).strip()
     else:
         si = input_text.rfind("Scenario:")
         if si >= 0:
-            scenario = input_text[si:].strip()
+            scenario = input_text[si + len("Scenario:"):].strip()
         else:
             scenario = input_text.strip()
 
-    return country, scenario
+    return country, scenario, cultural_context
 
 
 def extract_answer(text):

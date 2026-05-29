@@ -155,14 +155,22 @@ def run_debate_only(args):
         dataset = dataset[:args.max_samples]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
 
-    # --- Pre-parse country & scenario ---
+    # --- Pre-parse country, scenario & cultural context ---
     parsed = []
     for item in dataset:
-        country, scenario = parse_input(item["input"])
+        country, scenario, cultural_context = parse_input(item["input"])
+        # Compose story: include cultural context + scenario for the model
+        if cultural_context:
+            story = (
+                f"Cultural Background:\n{cultural_context}\n\n"
+                f"Scenario: {scenario}"
+            )
+        else:
+            story = scenario
         parsed.append({
             **item,
             "country": country,
-            "scenario": scenario,
+            "scenario": story,
         })
 
     n = len(parsed)
