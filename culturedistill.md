@@ -65,12 +65,10 @@ Step 2: Phase 1 — Guardian 独立生成（低温，权威分析）
   输出：确认具体文化事实，解释为何选该选项，纠正潜在误解
 
 Step 3: Phase 2 — Auditors 生成（看到 Guardian 的分析后）
-  输出：从各自文化视角提供对比/审视，同意则解释跨文化相似性，
-       不同意则给出具体反驳证据（同时承认 Guardian 的主场权威）
+  输出：从各自文化视角提供对比/审视，同意则解释跨文化相似性，不同意则给出具体反驳证据（同时承认 Guardian 的主场权威）
 
 Step 4: Judge — 带权威权重裁决
-  规则：Guardian 有一票否决权（当 Guardian 提供具体证据时，
-       即使其他 5 个 Auditor 持不同意见，仍优先采信 Guardian）
+  规则：Guardian 有一票否决权（当 Guardian 提供具体证据时，即使其他 5 个 Auditor 持不同意见，仍优先采信 Guardian）
 
 输出：Solution 1-6 [GUARDIAN/AUDITOR] + Solution 7 [JUDGE]
 ```
@@ -109,8 +107,6 @@ Step 4: Judge — 带权威权重裁决
 选项4（绿包/green packet）属于东南亚部分伊斯兰文化圈（如马来西亚/新加坡穆斯林社区）的 Hari Raya 节日习俗，在中国文化中并不存在。两者存在明确的文化地理边界差异。"
 ```
 
-**蒸馏收益**：单体模型通过 SFT 学习这种结构化对比数据后，不仅学会"中国过年选1"，还能学会"为什么不能选4"——即学到了文化逻辑的边界感（Cultural Boundary Awareness）。
-
 ### 2.5 输出数据格式
 
 ```json
@@ -128,31 +124,6 @@ Step 4: Judge — 带权威权重裁决
 - Solution 标题包含 `[GUARDIAN]`/`[AUDITOR]`/`[JUDGE]` 角色标签
 - 额外输出 `guardian_idx` 和 `guardian_name` 字段，便于下游蒸馏管线使用
 - Guardian 的推理路径包含权威确认语言，Auditor 包含对比/不确定性表达
-
-### 2.6 与蒸馏管线的衔接
-
-HF-CAC 生成的数据直接服务于后续三阶段蒸馏：
-
-**Stage 1（主场权威加权 SFT）**：利用 `[GUARDIAN]`/`[AUDITOR]` 角色标签，对 Guardian Token 加权、对 Auditor 早期混淆 Token 掩码。数据中的角色标签是 Token 级加权的直接依据。
-
-**Stage 2（开卷式步骤标注）**：对 Guardian 和 Auditor 的推理路径分别进行步骤切分和打标。Guardian 路径预期获得更多 0.9（确权步）标签，Auditor 路径中可能包含更多 0.1（混淆步）标签。
-
-**Stage 3（GRPO）**：不直接依赖 MAS 数据内容——GRPO 使用 prompt 池在线生成。但 PRM 的训练数据来源于 Stage 2 对 HF-CAC 数据的标注。
-
-### 2.7 LLM 调用量估算
-
-```
-设 N = 样本数（如 NormAD 2633 条）
-
-Phase 1（Guardian）：N × 1 = N 次
-Phase 2（Auditor）：N × 5 = 5N 次
-Phase 3（Judge）：  N × 1 = N 次
-总计：7N 次（比原 RECONCILE 的 6N 略增，但推理质量显著提升）
-
-注意：Phase 1 和 Phase 2 是串行的（Phase 2 依赖 Phase 1 的输出），
-但 Phase 1 内部和 Phase 2 内部都是全并行 batch 推理。
-总计算量与原 RECONCILE 基本一致。
-```
 
 ### 2.8 运行命令
 
@@ -195,8 +166,6 @@ shutdown
 | `--model_name` | — | `llama`/`qwen`/完整路径 |
 | `--max_samples` | 0 | 0=全量 |
 | `--config_path` | None | 手动指定配置文件路径。不指定时根据数据集自动检测 |
-
-**数据集自动检测逻辑：** 脚本会检查输入数据的 instruction 字段和 output 分布，自动判断是 NormAD（三分类 1/2/3）还是 CultureAtlas（二分类比较 1/2），并选择对应的配置文件。也可通过 `--config_path` 手动覆盖。
 
 ### 2.9 代码结构
 
@@ -467,11 +436,9 @@ python OG/og_mar.py \
     --input_file /autodl-fs/data/normad_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
+    --batch_size 256 \
     --max_samples 0 \
-    --temperature 0.0 \
-    --max_tokens 768 \
-    --num_personas 5 \
-    --num_triples 5
+    --temperature 0.0
 
 # 快速测试（5 条样本）
 python OG/og_mar.py \

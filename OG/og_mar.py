@@ -255,27 +255,26 @@ def run_og_mar(args):
 
     # ================================================================
     # Stage 2: Multi-Value Persona Agent Simulation
+    # (Optimized: all K×N prompts in a single batch for maximum GPU
+    #  utilization via vLLM continuous batching)
     # ================================================================
     print(f"\n{'='*60}")
-    print(f"Stage 2: Persona Agent Simulation (K={K})")
+    print(f"Stage 2: Persona Agent Simulation (K={K}, N={n})")
+    print(f"  Total prompts: {K * n} (all personas batched together)")
     print(f"{'='*60}")
 
-    # persona_outputs[sample_idx][persona_idx] = raw output text
-    persona_outputs = [[None] * K for _ in range(n)]
-
-    for k in range(K):
-        print(f"\n  Persona Agent {k+1}/{K}...")
-
-        # Build prompts for this persona across all samples
-        prompts = []
-        for idx, p in enumerate(parsed):
-            hyper_nodes_text = "\n".join(all_triples[idx])
-            question = (
-                f"In the cultural context of {p['country'].replace('_', ' ').title()}, "
-                f"evaluate the following scenario:\n{p['scenario']}\n\n"
-                f"Is the described behavior socially acceptable in this culture?"
-            )
-
+    # Build ALL persona prompts at once: flat list of K*N prompts
+    # Layout: [sample_0_persona_0, sample_0_persona_1, ..., sample_0_persona_{K-1},
+    #          sample_1_persona_0, ..., sample_{N-1}_persona_{K-1}]
+    all_persona_prompts = []
+    for idx, p in enumerate(parsed):
+        hyper_nodes_text = "\n".join(all_triples[idx])
+        question = (
+            f"In the cultural context of {p['country'].replace('_', ' ').title()}, "
+            f"evaluate the following scenario:\n{p['scenario']}\n\n"
+            f"Is the described behavior socially acceptable in this culture?"
+        )
+        for k in range(K):
             user_content = PERSONA_AGENT_PROMPT.format(
                 persona_id=k + 1,
                 demographics_text=all_demographics[idx][k],
@@ -284,21 +283,26 @@ def run_og_mar(args):
                 options_text=OPTIONS_TEXT,
                 question=question,
             )
-            prompts.append(apply_chat(tokenizer, user_content))
+            all_persona_prompts.append(apply_chat(tokenizer, user_content))
 
-        # Batch inference
-        all_outputs = []
-        for i in tqdm(range(0, n, batch_size),
-                      desc=f"  Persona-{k+1}", leave=False):
-            batch_end = min(i + batch_size, n)
-            batch_prompts = prompts[i:batch_end]
-            outputs = llm.generate(batch_prompts, sampling, use_tqdm=False)
-            for out in outputs:
-                all_outputs.append(out.outputs[0].text.strip())
+    total_prompts = len(all_persona_prompts)
+    print(f"  Built {total_prompts} prompts, starting batch inference...")
 
-        # Store outputs
-        for idx, resp in enumerate(all_outputs):
-            persona_outputs[idx][k] = resp
+    # Single-pass batch inference over all K*N prompts
+    all_persona_raw = []
+    for i in tqdm(range(0, total_prompts, batch_size),
+                  desc="  Stage2-AllPersonas"):
+        batch_end = min(i + batch_size, total_prompts)
+        batch_prompts = all_persona_prompts[i:batch_end]
+        outputs = llm.generate(batch_prompts, sampling, use_tqdm=False)
+        for out in outputs:
+            all_persona_raw.append(out.outputs[0].text.strip())
+
+    # Reshape flat list back to [sample_idx][persona_idx]
+    persona_outputs = [[None] * K for _ in range(n)]
+    for idx in range(n):
+        for k in range(K):
+            persona_outputs[idx][k] = all_persona_raw[idx * K + k]
 
     # ================================================================
     # Stage 3: Ontology-Guided Final Judgment via Constrained
