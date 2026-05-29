@@ -500,8 +500,17 @@ def validate(model, tokenizer, val_samples: list[dict], device,
              max_samples: int = 200) -> float:
     """Compute accuracy on validation set (from pkl data)."""
     model.eval()
-    # Disable gradient checkpointing during generation (incompatible with use_cache)
-    model.gradient_checkpointing_disable()
+
+    # Disable gradient checkpointing during generation — must reach the
+    # underlying base model through PEFT wrapper, otherwise generate() hangs
+    # because gradient checkpointing is incompatible with use_cache=True.
+    if hasattr(model, "base_model"):
+        # PEFT model: model.base_model.model is the actual HF model
+        underlying = model.base_model.model if hasattr(model.base_model, "model") else model.base_model
+    else:
+        underlying = model
+    underlying.gradient_checkpointing_disable()
+    print("    [Eval] gradient_checkpointing disabled", flush=True)
 
     correct, total = 0, 0
 
@@ -530,6 +539,7 @@ def validate(model, tokenizer, val_samples: list[dict], device,
             top_p=None,
             temperature=None,
             pad_token_id=tokenizer.pad_token_id,
+            use_cache=True,
         )
         prompt_len = enc["input_ids"].shape[1]
         response = tokenizer.decode(outs[0][prompt_len:], skip_special_tokens=True)
@@ -552,8 +562,10 @@ def validate(model, tokenizer, val_samples: list[dict], device,
                   f"(acc so far: {correct/total:.3f})", flush=True)
 
     # Re-enable gradient checkpointing for training
-    model.gradient_checkpointing_enable()
+    underlying.gradient_checkpointing_enable()
     model.train()
+    print(f"    [Eval] Done. accuracy={correct/total:.4f}" if total > 0
+          else "    [Eval] No samples evaluated", flush=True)
     return correct / total if total > 0 else 0.0
 
 
