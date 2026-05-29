@@ -346,11 +346,16 @@ def generate_responses(
 # Log-prob computation
 # ---------------------------------------------------------------------------
 
-def compute_logprobs(model, tokenizer, prompt: str, response: str, device):
+def compute_logprobs(model, tokenizer, prompt: str, response: str, device,
+                     require_grad: bool = False):
     """Return mean log-prob of response tokens given prompt.
 
     Memory-optimized: uses gather before log_softmax to avoid materializing
     the full (seq_len, vocab_size) log-prob tensor.
+
+    Args:
+        require_grad: If True, compute with gradients (for policy loss).
+                      If False, compute under torch.no_grad() (for reference).
     """
     full_text = prompt + response
     enc = tokenizer(
@@ -363,8 +368,11 @@ def compute_logprobs(model, tokenizer, prompt: str, response: str, device):
     )
     prompt_len = prompt_enc["input_ids"].shape[1]
 
-    with torch.no_grad() if not model.training else torch.enable_grad():
+    if require_grad:
         logits = model(**enc).logits  # (1, seq_len, vocab_size)
+    else:
+        with torch.no_grad():
+            logits = model(**enc).logits
 
     # Only compute log-probs for response tokens (memory efficient)
     # logits at position [prompt_len-1 : -1] predict tokens at [prompt_len:]
@@ -372,7 +380,7 @@ def compute_logprobs(model, tokenizer, prompt: str, response: str, device):
     resp_logits = logits[0, prompt_len - 1: -1, :]  # (resp_len, vocab_size)
 
     if resp_logits.shape[0] == 0 or target_ids.shape[0] == 0:
-        return torch.tensor(0.0, device=device)
+        return torch.tensor(0.0, device=device, requires_grad=require_grad)
 
     n = min(resp_logits.shape[0], target_ids.shape[0])
     resp_logits = resp_logits[:n]
@@ -552,6 +560,7 @@ def train(args):
 
             # 2. Generate n_samples responses per prompt (policy in eval mode)
             policy.eval()
+            policy.gradient_checkpointing_disable()  # Allow use_cache during generation
             all_responses = generate_responses(
                 policy, tokenizer, prompts,
                 n_samples=args.n_samples,
@@ -559,6 +568,7 @@ def train(args):
                 temperature=args.temperature,
                 device=policy_device,
             )
+            policy.gradient_checkpointing_enable()
             policy.train()
 
             # Free generation KV cache before policy gradient computation
@@ -569,6 +579,7 @@ def train(args):
 
             # 3. Compute rewards
             rewards = torch.zeros(n_prompts, args.n_samples, device=policy_device)
+            scoring_count = 0
 
             for pi, (responses, gold, query, country) in enumerate(
                 zip(all_responses, golds, queries, countries)
@@ -583,6 +594,9 @@ def train(args):
                     r_process = prm.score_reasoning(
                         prm_input, prm_tokenizer, prm_device
                     )
+                    scoring_count += 1
+                    if scoring_count % 10 == 0:
+                        print(f"    Scored {scoring_count}/{n_prompts * args.n_samples}", flush=True)
 
                     # R_total = alpha * R_outcome + (1-alpha) * Mean(R_process)
                     r_total = args.alpha * r_outcome + (1 - args.alpha) * r_process
@@ -598,40 +612,63 @@ def train(args):
             advantages = rloo_advantages(rewards)
 
             # 5. Policy gradient with KL penalty
-            # Use per-sample forward+backward to avoid OOM from accumulating
-            # 40 computation graphs (4 prompts × 10 samples) in memory.
+            # Two-phase approach:
+            #   Phase A: compute all reference log-probs (eval mode, no grad)
+            #   Phase B: per-sample policy forward+backward (train mode, with grad)
+            total_samples = n_prompts * args.n_samples
+
+            # Phase A: Reference log-probs (batch, no grad, no gradient checkpointing)
+            policy.eval()
+            ref_logprobs = {}  # (pi, si) -> float
+            with torch.no_grad():
+                with policy.disable_adapter():
+                    for pi, (prompt, responses) in enumerate(zip(prompts, all_responses)):
+                        for si, resp in enumerate(responses):
+                            adv = advantages[pi, si].item()
+                            if abs(adv) < 1e-8:
+                                continue
+                            lp_ref = compute_logprobs(
+                                policy, tokenizer, prompt, resp, policy_device,
+                                require_grad=False,
+                            )
+                            ref_logprobs[(pi, si)] = lp_ref.item()
+
+            if batch_idx % 5 == 0:
+                print(f"    Ref log-probs done ({len(ref_logprobs)} samples)", flush=True)
+
+            # Phase B: Policy forward+backward (train mode, per-sample grad accumulation)
+            policy.train()
             optimizer.zero_grad()
             loss_count = 0
             accumulated_loss = 0.0
-            total_samples = n_prompts * args.n_samples
 
             for pi, (prompt, responses) in enumerate(zip(prompts, all_responses)):
                 for si, resp in enumerate(responses):
-                    adv = advantages[pi, si].item()
-                    if abs(adv) < 1e-8:
-                        # Skip zero-advantage samples (no gradient signal)
+                    if (pi, si) not in ref_logprobs:
                         continue
 
-                    # Reference log-prob (no grad needed)
-                    with torch.no_grad():
-                        with policy.disable_adapter():
-                            lp_ref = compute_logprobs(
-                                policy, tokenizer, prompt, resp, policy_device
-                            )
+                    adv = advantages[pi, si].item()
+                    lp_ref_val = ref_logprobs[(pi, si)]
 
                     # Policy log-prob (with grad for backward)
                     lp_policy = compute_logprobs(
-                        policy, tokenizer, prompt, resp, policy_device
+                        policy, tokenizer, prompt, resp, policy_device,
+                        require_grad=True,
                     )
 
                     # KL penalty
-                    kl = (lp_policy - lp_ref.detach()).clamp(min=-10, max=10)
+                    lp_ref_t = torch.tensor(lp_ref_val, device=policy_device)
+                    kl = (lp_policy - lp_ref_t).clamp(min=-10, max=10)
                     pg_loss = -(adv * lp_policy - KL_COEF * kl) / total_samples
 
                     # Backward immediately to free computation graph
                     pg_loss.backward()
                     accumulated_loss += pg_loss.item()
                     loss_count += 1
+
+                    # Periodically log progress
+                    if loss_count % 10 == 0:
+                        print(f"    PG step {loss_count}/{len(ref_logprobs)}", flush=True)
 
             if loss_count > 0:
                 torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
