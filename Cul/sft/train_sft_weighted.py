@@ -510,7 +510,10 @@ def validate(model, tokenizer, val_samples: list[dict], device,
     else:
         underlying = model
     underlying.gradient_checkpointing_disable()
-    print("    [Eval] gradient_checkpointing disabled", flush=True)
+    # CRITICAL: gradient_checkpointing_enable() sets config.use_cache=False,
+    # but gradient_checkpointing_disable() does NOT restore it. Must set manually.
+    underlying.config.use_cache = True
+    print(f"    [Eval] gradient_checkpointing disabled, use_cache={underlying.config.use_cache}", flush=True)
 
     correct, total = 0, 0
 
@@ -530,6 +533,10 @@ def validate(model, tokenizer, val_samples: list[dict], device,
             prompt, return_tensors="pt",
             max_length=MAX_SEQ_LEN, truncation=True
         ).to(device)
+
+        if total == 0:
+            print(f"    [Eval] First sample prompt length: {enc['input_ids'].shape[1]} tokens, "
+                  f"generating...", flush=True)
 
         outs = model.generate(
             **enc,
@@ -562,6 +569,7 @@ def validate(model, tokenizer, val_samples: list[dict], device,
                   f"(acc so far: {correct/total:.3f})", flush=True)
 
     # Re-enable gradient checkpointing for training
+    underlying.config.use_cache = False  # Must disable before re-enabling checkpointing
     underlying.gradient_checkpointing_enable()
     model.train()
     print(f"    [Eval] Done. accuracy={correct/total:.4f}" if total > 0
