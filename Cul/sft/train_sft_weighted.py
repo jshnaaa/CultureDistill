@@ -58,7 +58,8 @@ from transformers import (
     get_cosine_schedule_with_warmup,
 )
 from peft import LoraConfig, get_peft_model, TaskType
-from accelerate import Accelerator
+from datetime import timedelta
+from accelerate import Accelerator, InitProcessGroupKwargs
 from accelerate.utils import set_seed
 
 
@@ -602,9 +603,13 @@ def validate(model, tokenizer, val_samples: list[dict], accelerator: Accelerator
 
 def train(args):
     # Initialize Accelerator for DDP
+    # Set a generous NCCL timeout (30 min) to accommodate validation generate()
+    # which runs only on rank 0 and can take 10+ minutes for 200 samples.
+    ddp_kwargs = InitProcessGroupKwargs(timeout=timedelta(minutes=30))
     accelerator = Accelerator(
         gradient_accumulation_steps=args.grad_accum_steps,
         mixed_precision="bf16",
+        kwargs_handlers=[ddp_kwargs],
     )
     set_seed(42)
 
