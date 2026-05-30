@@ -186,7 +186,6 @@ python Cul/generate_culture_data.py \
 | `--include_judge` | 是否包含 Judge 裁决（`true`/`false`）|
 | `--batch_size` | vLLM 批次大小（默认 8）|
 
-
 #### 2.6.1 MAD 
 
 **方法简介**：MAD 是 Ki et al. (2024) 提出的多智能体辩论框架，通过两个 LLM Agent 对文化场景进行辩论来达成更准确的文化对齐判断。论文提出了两种变体：
