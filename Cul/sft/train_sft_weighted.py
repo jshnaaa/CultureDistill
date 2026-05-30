@@ -12,13 +12,27 @@ Training data: HF-CAC multi-agent dialogue data with [GUARDIAN]/[AUDITOR] role t
 Input format:  [{country}]\\n{question}
 Output format: [GUARDIAN] Reasoning: ... Answer: X\\n[AUDITOR-1] Reasoning: ... Answer: X\\n...
 
-Usage:
+Supports multi-GPU DDP training via HuggingFace Accelerate.
+
+Usage (single GPU):
     python Cul/sft/train_sft_weighted.py \\
         --model_name  qwen \\
         --data_pkl    /path/to/normad_splits.pkl \\
         --output_dir  /path/to/models/camad_sft_qwen \\
         --alpha       2.0 \\
         --epochs      3 \\
+        --batch_size  4 \\
+        --lr          2e-4 \\
+        --lora_r      32 \\
+        --eval_every_n_epochs 1
+
+Usage (multi-GPU DDP via accelerate):
+    accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \\
+        --model_name  qwen \\
+        --data_pkl    /path/to/normad_splits.pkl \\
+        --output_dir  /path/to/models/camad_sft_qwen \\
+        --alpha       2.0 \\
+        --epochs      5 \\
         --batch_size  4 \\
         --lr          2e-4 \\
         --lora_r      32 \\
@@ -44,6 +58,8 @@ from transformers import (
     get_cosine_schedule_with_warmup,
 )
 from peft import LoraConfig, get_peft_model, TaskType
+from accelerate import Accelerator
+from accelerate.utils import set_seed
 
 
 MODEL_ALIASES = {
@@ -492,29 +508,31 @@ def compute_weighted_loss(logits: torch.Tensor, labels: torch.Tensor,
 
 
 # ---------------------------------------------------------------------------
-# Validation
+# Validation (only runs on main process)
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def validate(model, tokenizer, val_samples: list[dict], device,
+def validate(model, tokenizer, val_samples: list[dict], accelerator: Accelerator,
              max_samples: int = 200) -> float:
-    """Compute accuracy on validation set (from pkl data)."""
-    model.eval()
+    """Compute accuracy on validation set (from pkl data). Only on main process."""
+    # Unwrap the model for generation (get the underlying PEFT model)
+    unwrapped_model = accelerator.unwrap_model(model)
+    unwrapped_model.eval()
 
     # Disable gradient checkpointing during generation — must reach the
     # underlying base model through PEFT wrapper, otherwise generate() hangs
     # because gradient checkpointing is incompatible with use_cache=True.
-    if hasattr(model, "base_model"):
-        # PEFT model: model.base_model.model is the actual HF model
-        underlying = model.base_model.model if hasattr(model.base_model, "model") else model.base_model
+    if hasattr(unwrapped_model, "base_model"):
+        underlying = unwrapped_model.base_model.model if hasattr(unwrapped_model.base_model, "model") else unwrapped_model.base_model
     else:
-        underlying = model
+        underlying = unwrapped_model
     underlying.gradient_checkpointing_disable()
     # CRITICAL: gradient_checkpointing_enable() sets config.use_cache=False,
     # but gradient_checkpointing_disable() does NOT restore it. Must set manually.
     underlying.config.use_cache = True
-    print(f"    [Eval] gradient_checkpointing disabled, use_cache={underlying.config.use_cache}", flush=True)
+    accelerator.print(f"    [Eval] gradient_checkpointing disabled, use_cache={underlying.config.use_cache}")
 
+    device = accelerator.device
     correct, total = 0, 0
 
     for obj in val_samples:
@@ -535,10 +553,10 @@ def validate(model, tokenizer, val_samples: list[dict], device,
         ).to(device)
 
         if total == 0:
-            print(f"    [Eval] First sample prompt length: {enc['input_ids'].shape[1]} tokens, "
-                  f"generating...", flush=True)
+            accelerator.print(f"    [Eval] First sample prompt length: {enc['input_ids'].shape[1]} tokens, "
+                              f"generating...")
 
-        outs = model.generate(
+        outs = unwrapped_model.generate(
             **enc,
             max_new_tokens=128,  # Multiple-choice: short answer suffices
             do_sample=False,
@@ -565,40 +583,49 @@ def validate(model, tokenizer, val_samples: list[dict], device,
         total += 1
 
         if total % 50 == 0:
-            print(f"    Eval progress: {total}/{max_samples} "
-                  f"(acc so far: {correct/total:.3f})", flush=True)
+            accelerator.print(f"    Eval progress: {total}/{max_samples} "
+                              f"(acc so far: {correct/total:.3f})")
 
     # Re-enable gradient checkpointing for training
     underlying.config.use_cache = False  # Must disable before re-enabling checkpointing
     underlying.gradient_checkpointing_enable()
-    model.train()
-    print(f"    [Eval] Done. accuracy={correct/total:.4f}" if total > 0
-          else "    [Eval] No samples evaluated", flush=True)
-    return correct / total if total > 0 else 0.0
+    unwrapped_model.train()
+    acc = correct / total if total > 0 else 0.0
+    accelerator.print(f"    [Eval] Done. accuracy={acc:.4f}" if total > 0
+                      else "    [Eval] No samples evaluated")
+    return acc
 
 
 # ---------------------------------------------------------------------------
-# Training (LoRA)
+# Training (LoRA + Accelerate DDP)
 # ---------------------------------------------------------------------------
 
 def train(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
-    print(f"Alpha (Guardian weight): {args.alpha}")
-    print(f"LoRA rank: {args.lora_r}, LoRA alpha: {args.lora_alpha}")
-    print(f"Eval every {args.eval_every_n_epochs} epoch(s)")
+    # Initialize Accelerator for DDP
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.grad_accum_steps,
+        mixed_precision="bf16",
+    )
+    set_seed(42)
+
+    accelerator.print(f"Number of processes: {accelerator.num_processes}")
+    accelerator.print(f"Device: {accelerator.device}")
+    accelerator.print(f"Alpha (Guardian weight): {args.alpha}")
+    accelerator.print(f"LoRA rank: {args.lora_r}, LoRA alpha: {args.lora_alpha}")
+    accelerator.print(f"Eval every {args.eval_every_n_epochs} epoch(s)")
+    accelerator.print(f"Gradient accumulation steps: {args.grad_accum_steps}")
 
     model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
-    print(f"Base model: {model_path}")
+    accelerator.print(f"Base model: {model_path}")
 
     # Load data from pkl
-    print(f"Loading data splits from: {args.data_pkl}")
+    accelerator.print(f"Loading data splits from: {args.data_pkl}")
     with open(args.data_pkl, "rb") as f:
         splits = pickle.load(f)
     train_raw = splits["train"]
     val_raw = splits["val"]
-    print(f"  Raw data: train={len(train_raw)}, val={len(val_raw)}, "
-          f"test={len(splits['test'])}")
+    accelerator.print(f"  Raw data: train={len(train_raw)}, val={len(val_raw)}, "
+                      f"test={len(splits['test'])}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -608,7 +635,7 @@ def train(args):
     # Load base model
     base_model = AutoModelForCausalLM.from_pretrained(
         model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
-    ).to(device)
+    )
 
     # Apply LoRA
     lora_config = LoraConfig(
@@ -621,7 +648,8 @@ def train(args):
         bias="none",
     )
     model = get_peft_model(base_model, lora_config)
-    model.print_trainable_parameters()
+    if accelerator.is_main_process:
+        model.print_trainable_parameters()
 
     # Enable gradient checkpointing for memory efficiency
     model.enable_input_require_grads()
@@ -635,9 +663,9 @@ def train(args):
     # Limit training samples if --max_samples is specified
     if args.max_samples > 0:
         train_samples = train_samples[:args.max_samples]
-        print(f"Using first {args.max_samples} training samples (out of {len(train_raw)} raw)")
+        accelerator.print(f"Using first {args.max_samples} training samples (out of {len(train_raw)} raw)")
     else:
-        print(f"Using all {len(train_samples)} training samples")
+        accelerator.print(f"Using all {len(train_samples)} training samples")
 
     train_ds = WeightedSFTDataset(train_samples, tokenizer, alpha=args.alpha)
     loader = DataLoader(
@@ -646,18 +674,24 @@ def train(args):
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=2,
+        pin_memory=True,
     )
-    print(f"Training batches per epoch: {len(loader)}")
+    accelerator.print(f"Training batches per epoch (per device): {len(loader)}")
 
     # Optimizer only for trainable (LoRA) parameters
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
         trainable_params, lr=args.lr, weight_decay=0.01
     )
-    total_steps = len(loader) * args.epochs
+    total_steps = (len(loader) * args.epochs) // args.grad_accum_steps
     warmup_steps = max(1, int(total_steps * 0.05))
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, warmup_steps, total_steps
+    )
+
+    # Prepare with accelerator (handles DDP wrapping, device placement, etc.)
+    model, optimizer, loader, scheduler = accelerator.prepare(
+        model, optimizer, loader, scheduler
     )
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
@@ -666,63 +700,73 @@ def train(args):
     for epoch in range(1, args.epochs + 1):
         model.train()
         total_loss = 0.0
+        num_steps = 0
 
         for step, batch in enumerate(loader, 1):
-            input_ids = batch["input_ids"].to(device)
-            attn_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
-            loss_mask = batch["loss_mask"].to(device)
-            loss_weight = batch["loss_weight"].to(device)
+            with accelerator.accumulate(model):
+                input_ids = batch["input_ids"]
+                attn_mask = batch["attention_mask"]
+                labels = batch["labels"]
+                loss_mask = batch["loss_mask"]
+                loss_weight = batch["loss_weight"]
 
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attn_mask,
-            )
-            logits = outputs.logits
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attn_mask,
+                )
+                logits = outputs.logits
 
-            # Compute weighted loss
-            loss = compute_weighted_loss(logits, labels, loss_mask, loss_weight)
+                # Compute weighted loss
+                loss = compute_weighted_loss(logits, labels, loss_mask, loss_weight)
 
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
-            optimizer.step()
-            scheduler.step()
+                accelerator.backward(loss)
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(trainable_params, 1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
 
             total_loss += loss.item()
+            num_steps += 1
             if step % 20 == 0:
-                print(f"  Epoch {epoch} step {step}/{len(loader)} "
-                      f"loss={loss.item():.4f}")
+                accelerator.print(f"  Epoch {epoch} step {step}/{len(loader)} "
+                                  f"loss={loss.item():.4f}")
 
-        avg_loss = total_loss / len(loader)
-        print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
+        avg_loss = total_loss / max(num_steps, 1)
+        accelerator.print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
 
-        # Validate every N epochs
+        # Validate every N epochs (only on main process)
         if epoch % args.eval_every_n_epochs == 0:
-            print(f"  [Eval] Starting validation (max 200 samples)...", flush=True)
-            val_acc = validate(model, tokenizer, val_raw, device)
-            print(f"  [Eval] Epoch {epoch} | val_accuracy={val_acc:.4f}")
+            if accelerator.is_main_process:
+                accelerator.print(f"  [Eval] Starting validation (max 200 samples)...")
+                val_acc = validate(model, tokenizer, val_raw, accelerator)
+                accelerator.print(f"  [Eval] Epoch {epoch} | val_accuracy={val_acc:.4f}")
 
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                ckpt = Path(args.output_dir) / "best"
-                # Save only LoRA adapter (not full model)
-                model.save_pretrained(str(ckpt))
-                tokenizer.save_pretrained(str(ckpt))
-                print(f"  ✓ Saved best LoRA adapter "
-                      f"(val_acc={best_val_acc:.4f}) → {ckpt}")
-            else:
-                print(f"  No improvement (best={best_val_acc:.4f})")
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    ckpt = Path(args.output_dir) / "best"
+                    # Save only LoRA adapter (not full model)
+                    unwrapped = accelerator.unwrap_model(model)
+                    unwrapped.save_pretrained(str(ckpt))
+                    tokenizer.save_pretrained(str(ckpt))
+                    accelerator.print(f"  ✓ Saved best LoRA adapter "
+                                      f"(val_acc={best_val_acc:.4f}) → {ckpt}")
+                else:
+                    accelerator.print(f"  No improvement (best={best_val_acc:.4f})")
+
+            # Synchronize all processes after validation
+            accelerator.wait_for_everyone()
 
     # If no eval was done (e.g., eval_every > epochs), save final model
-    if best_val_acc == 0.0:
+    if best_val_acc == 0.0 and accelerator.is_main_process:
         ckpt = Path(args.output_dir) / "best"
-        model.save_pretrained(str(ckpt))
+        unwrapped = accelerator.unwrap_model(model)
+        unwrapped.save_pretrained(str(ckpt))
         tokenizer.save_pretrained(str(ckpt))
-        print(f"  Saved final LoRA adapter (no eval performed) → {ckpt}")
+        accelerator.print(f"  Saved final LoRA adapter (no eval performed) → {ckpt}")
 
-    print(f"\nTraining complete. Best val_accuracy: {best_val_acc:.4f}")
-    print(f"Best LoRA adapter: {args.output_dir}/best")
+    accelerator.print(f"\nTraining complete. Best val_accuracy: {best_val_acc:.4f}")
+    accelerator.print(f"Best LoRA adapter: {args.output_dir}/best")
 
 
 # ---------------------------------------------------------------------------
@@ -731,7 +775,7 @@ def train(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CAMA-D Stage 1: Token-level Weighted SFT (LoRA)"
+        description="CAMA-D Stage 1: Token-level Weighted SFT (LoRA) — Accelerate DDP"
     )
     parser.add_argument("--model_name", type=str, required=True,
                         help="'llama', 'qwen', or full model path")
@@ -744,7 +788,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=3,
                         help="Number of training epochs (default: 3)")
     parser.add_argument("--batch_size", type=int, default=4,
-                        help="Batch size (default: 4)")
+                        help="Per-device batch size (default: 4)")
     parser.add_argument("--lr", type=float, default=2e-4,
                         help="Learning rate for LoRA (default: 2e-4)")
     parser.add_argument("--lora_r", type=int, default=32,
@@ -755,6 +799,8 @@ def main():
                         help="Evaluate on val set every N epochs (default: 1)")
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Max training samples to use. 0 = all (default: 0)")
+    parser.add_argument("--grad_accum_steps", type=int, default=1,
+                        help="Gradient accumulation steps (default: 1)")
     args = parser.parse_args()
     train(args)
 
