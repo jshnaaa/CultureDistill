@@ -735,8 +735,14 @@ def train(args):
         avg_loss = total_loss / max(num_steps, 1)
         accelerator.print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
 
-        # Validate every N epochs (only on main process)
+        # Validate every N epochs
+        # IMPORTANT: All processes must synchronize before and after validation.
+        # Only rank 0 does the actual generate() calls (using unwrapped model
+        # to avoid DDP collective ops that would deadlock other ranks).
         if epoch % args.eval_every_n_epochs == 0:
+            accelerator.wait_for_everyone()  # Sync before eval
+
+            val_acc = 0.0
             if accelerator.is_main_process:
                 accelerator.print(f"  [Eval] Starting validation (max 200 samples)...")
                 val_acc = validate(model, tokenizer, val_raw, accelerator)
@@ -754,8 +760,7 @@ def train(args):
                 else:
                     accelerator.print(f"  No improvement (best={best_val_acc:.4f})")
 
-            # Synchronize all processes after validation
-            accelerator.wait_for_everyone()
+            accelerator.wait_for_everyone()  # Sync after eval
 
     # If no eval was done (e.g., eval_every > epochs), save final model
     if best_val_acc == 0.0 and accelerator.is_main_process:

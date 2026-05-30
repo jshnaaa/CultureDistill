@@ -87,14 +87,17 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Guardian: lower temperature for authoritative, precise responses
+        # CulturalBench uses even lower temp (0.3) for factual knowledge QA
+        guardian_temp = 0.3 if self.task_type == "culturalbench" else 0.5
         self.guardian_sampling = SamplingParams(
-            temperature=0.5,
+            temperature=guardian_temp,
             max_tokens=self.max_tokens,
             stop=stop_tokens,
         )
-        # Auditor: higher temperature for diverse contrastive perspectives
+        # Auditor: moderate temperature for CulturalBench (factual), higher for others
+        auditor_temp = 0.6 if self.task_type == "culturalbench" else 0.9
         self.auditor_sampling = SamplingParams(
-            temperature=0.9,
+            temperature=auditor_temp,
             max_tokens=self.max_tokens,
             stop=stop_tokens,
         )
@@ -162,16 +165,15 @@ class HF_CAC_MAS:
                 f"Answer: <1 or 2>"
             )
         elif self.task_type == "culturalbench":
-            # CulturalBench: multiple-choice cultural knowledge QA (4-way 1/2/3/4)
+            # CulturalBench: factual cultural knowledge QA — direct, concise approach
             user = (
-                f"TARGET CULTURE: {target_country}\n\n"
+                f"QUESTION ABOUT: {target_country}\n\n"
                 f"{question}\n\n"
-                f"As the Host-Culture Guardian for {target_country}, use your deep "
-                f"cultural expertise to identify the CORRECT answer. Analyze each option "
-                f"carefully: explain why the correct option is right and why the others "
-                f"are wrong, citing specific cultural practices, traditions, or norms.\n\n"
+                f"Select the correct answer. Read the question carefully — pay attention "
+                f"to exactly what is being asked (e.g., 'uncommon', 'common', 'not typical', "
+                f"'traditional'). Pick the most factually accurate option.\n\n"
                 f"You MUST select exactly one option: 1, 2, 3, or 4.\n\n"
-                f"Reasoning: <your authoritative cultural analysis of each option>\n"
+                f"Reasoning: <brief, factual reasoning>\n"
                 f"Answer: <1, 2, 3, or 4>"
             )
         else:
@@ -233,17 +235,19 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 user = (
-                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"QUESTION ABOUT: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
-                    f"authoritative analysis:\n"
+                    f"Another expert [{guardian_name}] answered:\n"
                     f"---\n{guardian_response}\n---\n\n"
-                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
-                    f"1. Analyze the question and options from your cross-cultural perspective.\n"
-                    f"2. If you agree with the Guardian's answer, explain WHY from your cultural lens.\n"
-                    f"3. If you disagree, provide specific reasoning — but acknowledge "
-                    f"that the Guardian has primary authority on {target_country}.\n\n"
-                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Now provide YOUR independent answer. Think step by step:\n"
+                    f"1. What exactly is the question asking? (Watch for 'uncommon', "
+                    f"'not typical', double negatives)\n"
+                    f"2. What do you know about this cultural topic?\n"
+                    f"3. Do you agree or disagree with the other expert? If you disagree, "
+                    f"explain WHY with specific cultural facts.\n\n"
+                    f"IMPORTANT: Do NOT blindly agree. If the other expert's reasoning "
+                    f"contains errors or misreads the question, CORRECT them.\n\n"
+                    f"Reasoning: <your independent analysis>\n"
                     f"Answer: {answer_hint}"
                 )
             else:
@@ -279,14 +283,12 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 user = (
-                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"QUESTION ABOUT: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
-                    f"analyze this cultural knowledge question about {target_country}. "
-                    f"Use your cross-cultural perspective to identify the correct answer, "
-                    f"and acknowledge uncertainty where the target culture differs "
-                    f"from your expertise.\n\n"
-                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Select the correct answer. Read the question carefully — pay attention "
+                    f"to exactly what is being asked (e.g., 'uncommon', 'common', 'not typical'). "
+                    f"Pick the most factually accurate option based on your knowledge.\n\n"
+                    f"Reasoning: <your independent analysis>\n"
                     f"Answer: {answer_hint}"
                 )
             else:
@@ -340,20 +342,19 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             user = (
-                f"TARGET CULTURE: {target_country}\n\n"
+                f"QUESTION ABOUT: {target_country}\n\n"
                 f"{question}\n\n"
-                f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
-                f"expertise most closely matches {target_country}.\n\n"
-                f"Agent responses:\n{responses_text}\n"
-                f"Determine the CORRECT answer to this cultural knowledge question. "
-                f"Remember:\n"
-                f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
-                f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
-                f"- Cross-Cultural Auditors provide valuable comparative context\n"
-                f"- Base your final decision on verifiable cultural facts\n"
-                f"- Look for consensus among agents, especially agreement with the Guardian\n\n"
+                f"Expert analyses:\n{responses_text}\n"
+                f"Determine the CORRECT answer based on evidence quality:\n"
+                f"1. Which agents provide SPECIFIC, VERIFIABLE cultural facts?\n"
+                f"2. Did any agent MISREAD the question (e.g., confuse 'uncommon' with 'common')?\n"
+                f"3. If agents disagree, which side has stronger factual support?\n"
+                f"4. If most agents agree with good reasoning, that strengthens the case.\n\n"
+                f"WARNING: Do not trust any single agent blindly. If the majority expert's "
+                f"reasoning contains factual errors or misreads the question, prefer the "
+                f"minority answer if it has better evidence.\n\n"
                 f"IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.\n\n"
-                f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
+                f"Reasoning: <evaluate reasoning quality of each agent>\n"
                 f"Answer: <1, 2, 3, or 4>"
             )
         else:
