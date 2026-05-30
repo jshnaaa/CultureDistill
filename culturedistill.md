@@ -1353,15 +1353,7 @@ R_total = alpha * R_outcome + (1 - alpha) * Mean(R_process)
 | bf16 | True | |
 | ZeRO stage | 3 | 2卡必须 |
 
-### 6.4 PRM 推理效率
-
-GRPO 每轮需对 `prompt_count × G × avg_steps` 个 Step 打分。优化策略：
-
-- PRM 冻结参数，纯推理模式（`torch.no_grad()`）
-- 所有 Step 拼接为一个大 batch，单次前向传播完成
-- PRM 使用 LoRA adapter，推理时合并权重（`merge_and_unload()`），无额外开销
-
-### 6.5 运行命令
+### 6.4 运行命令
 
 **GRPO 强化学习（SFT+RL 模式，LoRA，无 DeepSpeed）**
 ```bash
