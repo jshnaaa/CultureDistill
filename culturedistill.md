@@ -1465,39 +1465,40 @@ Cul/
 ├── run_camad_pipeline.py           # ★ 完整 Pipeline 入口脚本（一键运行全流程）
 ├── split_data.py                   # ★ 数据划分脚本（8:1:1 → pkl）
 ├── evaluate.py                     # ★ 评估脚本（支持 sft/rl/sft_rl 三种模式）
-├── generate_hf_cac_data.py        # Phase 0: HF-CAC 多智能体数据生成
-├── generate_culture_data.py        # Phase 0 备选: RECONCILE 多智能体数据生成（baseline 对比）
-├── hf_cac_mas.py                  # HF-CAC 多智能体系统核心实现
-├── reconcile_mas.py                # RECONCILE 多智能体系统核心实现（baseline 对比）
+├── generate_hf_cac_data.py        # Phase 0: HF-CAC 多智能体数据生成（自动检测数据集类型）
+├── resume_hf_cac.py               # Phase 0: HF-CAC 断点续跑工具
+├── hf_cac_mas.py                  # HF-CAC 多智能体系统核心实现（支持 NormAD/CultureAtlas/CulturalBench）
 ├── scripts/
-│   └── convert_normad.py           # ★ 数据格式转换：normad.jsonl → normad_mas.json
+│   ├── convert_normad.py           # ★ 数据格式转换：normad.jsonl → normad_mas.json
+│   ├── convert_culturalbench.py    # ★ 数据格式转换：CulturalBench CSV → culturalBench_mas.json
+│   └── analyze_inference.py        # 推理结果分析工具（按国家/区域统计准确率）
 ├── configs/
-│   ├── hf_cac_config.yaml         # HF-CAC Agent 提示词配置（6 Guardian + 6 Auditor + Judge）
-│   └── reconcile_config.yaml       # RECONCILE Agent 提示词配置（5 文化 Agent + Judge）
+│   ├── hf_cac_config.yaml         # HF-CAC 配置 — NormAD（三分类：可接受/不可接受/中立）
+│   ├── hf_cac_config_cultureatlas.yaml  # HF-CAC 配置 — CultureAtlas（二分类比较）
+│   ├── hf_cac_config_culturalbench.yaml # HF-CAC 配置 — CulturalBench
+│   └── reconcile_config.yaml       # RECONCILE Agent 提示词配置（baseline 对比）
 ├── sft/
-│   ├── train_sft_weighted.py       # ★ Stage 1: Token 级加权 SFT（CAMA-D 新）
-│   └── train_sft.py                # 旧管线: 传统 SFT（baseline 对比用）
+│   └── train_sft_weighted.py       # ★ Stage 1: Token 级加权 SFT（Guardian 权威加权）
 ├── step_label/
 │   ├── split_steps.py              # ★ Stage 2a: 启发式规则切分推理步骤
 │   ├── label_steps.py              # ★ Stage 2b: 审计器开卷式打标（vLLM batch）
+│   ├── split_step_labels.py        # ★ Stage 2: 步骤标签数据划分（train/val）
 │   └── validate_labels.py          # ★ Stage 2c: 标注一致性校验与分布报告
 ├── prm/
 │   ├── train_prm_mse.py            # ★ Stage 3-PRM: 类别加权 MSE 训练
-│   ├── eval_prm.py                 # ★ PRM 验证（三分类准确率、Spearman）
-│   ├── split_dataset.py            # ★ 数据集切分（PRM train/val/GRPO train，5:2:3）
-│   ├── train_prm.py                # 旧管线: Bradley-Terry PRM（baseline）
-│   └── label_data.py               # 旧管线: 构建 pairwise 偏好对
+│   └── eval_prm.py                 # ★ PRM 验证（三分类准确率、Spearman）
 ├── grpo/
-│   ├── train_grpo_v3.py            # ★ Stage 3-GRPO: Mean(R_process) reward
-│   └── train_grpo.py               # ★ DeepSpeed ZeRO-3 GRPO（适配 train_prm_mse.py 的 PRM）
+│   └── train_grpo_v3.py            # ★ Stage 3-GRPO: Mean(R_process) reward + LoRA
 └── data/                           # 数据存放目录
-    ├── normad.jsonl                # 原始 NormAD 数据集（JSONL 格式）
-    ├── normad_mas.json             # 转换后数据集（JSON 数组，instruction/input/output/country）
-    ├── splits/                     # 数据集切分结果
-    └── prm/                        # PRM 训练数据
+    ├── normad.jsonl                # 原始 NormAD 数据集
+    ├── normad_mas.json             # NormAD 转换后（instruction/input/output/country）
+    ├── cultureAtlas.json           # 原始 CultureAtlas 数据集
+    ├── cultureAtlas_mas.json       # CultureAtlas 转换后
+    ├── culturalBench_mas.json      # CulturalBench 转换后
+    └── CulturalBench-Easy.csv      # 原始 CulturalBench 数据集
 ```
 
-标注 ★ 的文件为 CAMA-D 新管线代码，无标注的为旧管线保留的 baseline。
+标注 ★ 的文件为 CAMAD 管线核心代码。
 
 ### 7.2 Pipeline 入口与工具
 
