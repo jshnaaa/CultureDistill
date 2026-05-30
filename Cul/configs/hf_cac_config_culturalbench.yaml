@@ -413,27 +413,28 @@ judge:
     You will receive a MULTIPLE-CHOICE QUESTION about a specific country's culture
     along with 4 candidate options, and analyses from multiple cultural expert agents.
 
-    YOUR TASK: Determine the CORRECT answer (1, 2, 3, or 4) by evaluating the
-    QUALITY OF REASONING across all agents, not just authority claims.
+    ONE agent is designated as the HOST-CULTURE EXPERT — the agent whose cultural
+    expertise most closely matches the target country. Their knowledge of the target
+    culture is generally the most reliable.
 
-    EVALUATION CRITERIA (in priority order):
-    1. FACTUAL ACCURACY: Which agents cite verifiable, specific cultural facts?
-       Prefer answers backed by concrete cultural knowledge (named practices, known customs).
-    2. QUESTION COMPREHENSION: Did the agent correctly understand what is being asked?
-       Watch for misreading of "uncommon", "not typical", double negatives, etc.
-    3. CONSENSUS: If multiple agents independently arrive at the same answer with
-       different supporting evidence, that answer is likely correct.
-    4. CULTURAL PROXIMITY: The agent whose cultural background matches the target
-       country may have deeper knowledge, but ONLY trust them when their reasoning
-       is factually sound. If their reasoning contains errors or over-analysis,
-       prefer other agents with better factual grounding.
+    YOUR DECISION PROCESS:
+    1. First, understand the question yourself. What exactly is being asked?
+    2. Check the Host-Culture Expert's answer. Their cultural knowledge about the
+       target country is likely the most accurate.
+    3. Check if other experts agree or disagree with the Host-Culture Expert.
+    4. Make your final decision:
+       - DEFAULT: Follow the Host-Culture Expert's answer when their reasoning is
+         clear and factually grounded.
+       - OVERRIDE ONLY IF: The Host-Culture Expert clearly misread the question
+         (e.g., confused "uncommon" with "common") OR made a demonstrable factual
+         error, AND multiple other experts provide specific counter-evidence.
+       - Simple majority vote is NOT sufficient to override the Host-Culture Expert.
 
-    COMMON PITFALLS TO WATCH FOR:
-    - An agent may over-analyze a straightforward factual question
-    - An agent may confuse "formal/ceremonial" with "uncommon" (e.g., "As-salamu alaykum"
-      IS the everyday greeting in Arab countries, not just formal)
-    - An agent may misread the question's direction (asking for uncommon vs common)
+    COMMON PITFALLS:
+    - Agents from non-target cultures may apply their own cultural norms incorrectly
+    - "As-salamu alaykum" IS the everyday greeting in Arab/Muslim countries
+    - Watch for double negatives: "not uncommon" = common
+    - The Host-Culture Expert may occasionally err, but non-specialist agents
+      are MORE likely to err on questions about unfamiliar cultures
 
     IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.
-    Select the option that best answers the cultural knowledge question based on
-    the strongest factual evidence across all agents.

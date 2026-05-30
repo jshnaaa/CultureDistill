@@ -83,30 +83,31 @@ SYSTEM_PROMPT = (
 PROMPT_ROUND1_NORMAD = (
     "{persona}\n\n"
     "You are currently participating in a debate, and there is round 1 of the debate.\n\n"
-    "Question: Is the action in the following story socially acceptable in {country}?\n\n"
-    "Story: {story}\n\n"
-    "Directly answer the question according to your cultural knowledge about {country}. "
-    "Respond with an answer - Yes, No or Neither. Explain your answer in less than "
-    "three sentences.\n"
-    "Answer (Yes, No or Neither):"
+    "Question: Is the action in the following scenario socially acceptable in {country}?\n\n"
+    "Cultural background of {country}:\n{cultural_bg}\n\n"
+    "Scenario: {scenario}\n\n"
+    "Based on the cultural background above, determine whether the action is "
+    "acceptable (Yes), unacceptable (No), or context-dependent/ambiguous (Neither) "
+    "in {country}. Answer 'Neither' if the action could be acceptable or unacceptable "
+    "depending on specific circumstances.\n"
+    "Explain your reasoning in one to two sentences.\n"
+    "Answer (Yes/No/Neither):"
 )
 
 # Round 2: Debate with SCGRD (Appendix A - Meta prompt for round 2+)
 PROMPT_ROUND2_NORMAD = (
     "{persona}\n\n"
     "You are currently participating in a debate, and there is round 2 of the debate.\n\n"
-    "Question: Is the action in the following story socially acceptable in {country}?\n\n"
-    "Story: {story}\n\n"
+    "Question: Is the action in the following scenario socially acceptable in {country}?\n\n"
+    "Cultural background of {country}:\n{cultural_bg}\n\n"
+    "Scenario: {scenario}\n\n"
     "Previous responses of people from other culture background:\n"
     "{other_responses}\n\n"
-    "Based on other perspectives and **{scgrd}** strategy, refine your answer to "
-    "the question. You must summarize the common actions and examples with other "
-    "cultures at the end of your refined answer. Don't over-analyze, such as what "
-    "these cultural actions indicate or mean. You just discuss the original question.\n\n"
-    "Remember: evaluate acceptability specifically in {country}'s cultural context.\n"
-    "Respond with an answer - Yes, No or Neither. Explain your answer in less than "
-    "three sentences.\n"
-    "Answer (Yes, No or Neither):"
+    "Based on other perspectives and **{scgrd}** strategy, refine your answer. "
+    "Consider the cultural background information carefully. "
+    "Answer 'Neither' if the evidence is mixed or context-dependent.\n"
+    "Explain your reasoning in one to two sentences.\n"
+    "Answer (Yes/No/Neither):"
 )
 
 # Summary prompt - NormAD
@@ -115,12 +116,14 @@ PROMPT_SUMMARY_NORMAD = (
     "from agents representing different cultural perspectives on whether an action "
     "is socially acceptable in {country}:\n\n"
     "{agent_responses}\n\n"
-    "Story: {story}\n\n"
-    "Based on the debate above, determine whether the action is socially acceptable "
-    "specifically in {country}. Consider the majority consensus among the agents "
-    "and prioritize perspectives most relevant to {country}'s cultural norms.\n\n"
-    "Respond with a final answer - Yes, No or Neither.\n"
-    "Answer (Yes, No or Neither):"
+    "Cultural background of {country}:\n{cultural_bg}\n\n"
+    "Scenario: {scenario}\n\n"
+    "Based on the cultural background and the debate above, determine whether "
+    "the action is socially acceptable in {country}.\n"
+    "- Answer 'Yes' if clearly acceptable\n"
+    "- Answer 'No' if clearly unacceptable\n"
+    "- Answer 'Neither' if ambiguous or context-dependent\n\n"
+    "Answer (Yes/No/Neither):"
 )
 
 
@@ -274,26 +277,30 @@ def run_macd(args):
         PROMPT_R2 = PROMPT_ROUND2_NORMAD
         PROMPT_SUM = PROMPT_SUMMARY_NORMAD
         extract_fn = extract_answer
-        story_key = "story"
     else:
         PROMPT_R1 = PROMPT_ROUND1_CB
         PROMPT_R2 = PROMPT_ROUND2_CB
         PROMPT_SUM = PROMPT_SUMMARY_CB
         extract_fn = extract_answer_culturalbench
-        story_key = "question"
 
     # --- Pre-parse country & scenario/question ---
     parsed = []
     for item in dataset:
         if dataset_type == DATASET_NORMAD:
-            country, content = parse_input(item["input"])
+            country, cultural_bg, scenario = parse_input(item["input"])
+            parsed.append({
+                **item,
+                "country": country,
+                "cultural_bg": cultural_bg,
+                "scenario": scenario,
+            })
         else:
-            country, content = parse_input_culturalbench(item)
-        parsed.append({
-            **item,
-            "country": country,
-            "content": content,  # "story" for NormAD, "question" for CB
-        })
+            country, question = parse_input_culturalbench(item)
+            parsed.append({
+                **item,
+                "country": country,
+                "question": question,
+            })
 
     n = len(parsed)
     print(f"Number of cultural agents: {NUM_AGENTS}")
@@ -344,11 +351,19 @@ def run_macd(args):
     for culture_name in CULTURE_NAMES:
         persona = CULTURAL_PERSONAS[culture_name]
         for p in parsed:
-            user_content = PROMPT_R1.format(
-                persona=persona,
-                country=p["country"],
-                **{story_key: p["content"]},
-            )
+            if dataset_type == DATASET_NORMAD:
+                user_content = PROMPT_R1.format(
+                    persona=persona,
+                    country=p["country"],
+                    cultural_bg=p["cultural_bg"],
+                    scenario=p["scenario"],
+                )
+            else:
+                user_content = PROMPT_R1.format(
+                    persona=persona,
+                    country=p["country"],
+                    question=p["question"],
+                )
             r1_prompts.append(apply_chat(tokenizer, user_content))
 
     # Single vLLM call for all Round 1 prompts
@@ -380,13 +395,23 @@ def run_macd(args):
             other_resp_text = format_other_responses(
                 round1_responses[sample_idx], culture_name
             )
-            user_content = PROMPT_R2.format(
-                persona=persona,
-                country=p["country"],
-                other_responses=other_resp_text,
-                scgrd=SCGRD_PROMPT,
-                **{story_key: p["content"]},
-            )
+            if dataset_type == DATASET_NORMAD:
+                user_content = PROMPT_R2.format(
+                    persona=persona,
+                    country=p["country"],
+                    cultural_bg=p["cultural_bg"],
+                    scenario=p["scenario"],
+                    other_responses=other_resp_text,
+                    scgrd=SCGRD_PROMPT,
+                )
+            else:
+                user_content = PROMPT_R2.format(
+                    persona=persona,
+                    country=p["country"],
+                    question=p["question"],
+                    other_responses=other_resp_text,
+                    scgrd=SCGRD_PROMPT,
+                )
             r2_prompts.append(apply_chat(tokenizer, user_content))
 
     # Single vLLM call for all Round 2 prompts
@@ -424,11 +449,19 @@ def run_macd(args):
         agent_resp_text = format_agent_responses_for_summary(
             round2_responses[idx], all_r2_answers[idx], dataset_type
         )
-        user_content = PROMPT_SUM.format(
-            country=p["country"],
-            agent_responses=agent_resp_text,
-            **{story_key: p["content"]},
-        )
+        if dataset_type == DATASET_NORMAD:
+            user_content = PROMPT_SUM.format(
+                country=p["country"],
+                agent_responses=agent_resp_text,
+                cultural_bg=p["cultural_bg"],
+                scenario=p["scenario"],
+            )
+        else:
+            user_content = PROMPT_SUM.format(
+                country=p["country"],
+                agent_responses=agent_resp_text,
+                question=p["question"],
+            )
         summary_prompts.append(apply_chat(tokenizer, user_content))
 
     # Single vLLM call for summary
@@ -464,13 +497,14 @@ def run_macd(args):
         summary_resp = summary_outputs[idx]
         summary_ans = extract_fn(summary_resp)
 
-        # Decision: summary primary, vote fallback
-        if summary_ans is not None:
-            final_ans = summary_ans
-            summary_used_count += 1
-        elif vote_ans is not None:
+        # Decision: vote primary, summary fallback
+        # (vote is more stable as it aggregates 5 agents directly)
+        if vote_ans is not None:
             final_ans = vote_ans
             vote_used_count += 1
+        elif summary_ans is not None:
+            final_ans = summary_ans
+            summary_used_count += 1
         else:
             final_ans = ""
 
@@ -482,7 +516,7 @@ def run_macd(args):
             "input": p.get("input", ""),
             "output": gt,
             "country": p["country"],
-            "content": p["content"],
+            "scenario": p.get("scenario", p.get("question", "")),
             "round1_responses": round1_responses[idx],
             "round1_answers": r1_answers,
             "round2_responses": round2_responses[idx],

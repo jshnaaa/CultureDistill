@@ -131,25 +131,34 @@ def load_dataset(path):
 
 def parse_input(input_text):
     """
-    Parse the 'input' field to extract Country and Scenario.
-    Strips Cultural Background section (rule-of-thumb equivalent).
+    Parse the 'input' field to extract Country, Cultural Background, and Scenario.
 
-    Returns: (country: str, scenario: str)
+    Returns: (country: str, cultural_background: str, scenario: str)
     """
     m = re.search(r'Country:\s*(.+?)(?:\n|$)', input_text, re.IGNORECASE)
     country = m.group(1).strip() if m else ""
 
+    # Extract Cultural Background section
+    cultural_bg = ""
+    bg_match = re.search(
+        r'Cultural Background:\s*\n(.+?)(?=\nScenario:|\Z)',
+        input_text, re.DOTALL
+    )
+    if bg_match:
+        cultural_bg = bg_match.group(1).strip()
+
+    # Extract Scenario
     m = re.search(r'Scenario:\s*\n(.+)$', input_text, re.DOTALL)
     if m:
         scenario = m.group(1).strip()
     else:
         si = input_text.rfind("Scenario:")
         if si >= 0:
-            scenario = input_text[si:].strip()
+            scenario = input_text[si + len("Scenario:"):].strip()
         else:
             scenario = input_text.strip()
 
-    return country, scenario
+    return country, cultural_bg, scenario
 
 
 def parse_input_culturalbench(item: dict) -> tuple:
@@ -171,22 +180,32 @@ def extract_answer(text):
     """
     tl = text.strip().lower()
 
-    # Pattern 1: "answer: yes/no/neither" or "answer (yes/no/neither)"
-    for pat in [
-        r'answer\s*[:\(]\s*(yes|no|neither)',
-        r'^\s*(yes|no|neither)\s*$',
-        r'\b(yes|no|neither)\s*\.?\s*$',
-    ]:
-        m = re.search(pat, tl, re.MULTILINE)
-        if m:
-            return ANSWER_MAP.get(m.group(1))
+    # Pattern 1: "Answer (Yes, No or Neither): No" - match after the closing paren + colon
+    m = re.search(r'answer\s*\([^)]*\)\s*:\s*(yes|no|neither)', tl)
+    if m:
+        return ANSWER_MAP.get(m.group(1))
 
-    # Pattern 2: starts with "yes/no/neither" (e.g., "No. Based on the...")
+    # Pattern 2: "answer: yes/no/neither" or "answer is yes/no/neither"
+    m = re.search(r'answer\s*(?:is|:)\s*(yes|no|neither)', tl)
+    if m:
+        return ANSWER_MAP.get(m.group(1))
+
+    # Pattern 3: standalone line with just "yes/no/neither"
+    m = re.search(r'^\s*(yes|no|neither)\s*\.?\s*$', tl, re.MULTILINE)
+    if m:
+        return ANSWER_MAP.get(m.group(1))
+
+    # Pattern 4: line ending with "yes/no/neither"
+    m = re.search(r'\b(yes|no|neither)\s*\.?\s*$', tl, re.MULTILINE)
+    if m:
+        return ANSWER_MAP.get(m.group(1))
+
+    # Pattern 5: starts with "yes/no/neither" (e.g., "No. Based on the...")
     m = re.match(r'\s*(yes|no|neither)\b', tl)
     if m:
         return ANSWER_MAP.get(m.group(1))
 
-    # Pattern 3: find standalone word boundary matches (search all occurrences)
+    # Pattern 6: find first word boundary match, priority: neither > no > yes
     for word in ["neither", "no", "yes"]:
         pattern = r'\b' + word + r'\b'
         matches = list(re.finditer(pattern, tl))

@@ -319,12 +319,12 @@ def main():
             batch = dataset[start: start + args.batch_size]
             results = mas.inference_batch(batch)
             for sample, result in zip(batch, results):
-                output = {**sample, **result}
+                output = {**sample, **result, "task_type": mas.task_type}
                 write_to_jsonl(lock, args.output_file, output)
     else:
         for sample in tqdm(dataset, desc="Samples"):
             result = mas.inference(sample)
-            output = {**sample, **result}
+            output = {**sample, **result, "task_type": mas.task_type}
             write_to_jsonl(lock, args.output_file, output)
 
     print(f"\nDone. Results saved to: {args.output_file}")
@@ -351,7 +351,32 @@ def main():
 # ---------------------------------------------------------------------------
 
 def detect_task_type_from_output(data: list) -> str:
-    """Detect task type from inference output data (for accuracy computation)."""
+    """Detect task type from inference output data (for accuracy computation).
+
+    Detection priority:
+      1. If any record has 'task_type' field, use it directly.
+      2. Check query structure: if queries contain 4 numbered options ("\n1. "..."\n4. "),
+         it's culturalbench (even if sampled GT doesn't include "4").
+      3. Fallback to GT distribution analysis.
+    """
+    # Priority 1: explicit task_type field in output records
+    for d in data[:10]:
+        if d.get("task_type"):
+            return d["task_type"]
+
+    # Priority 2: check query structure for 4-option multiple choice
+    sample = data[:min(20, len(data))]
+    four_option_count = 0
+    for d in sample:
+        query = d.get("query", "")
+        if "\n1. " in query and "\n2. " in query and "\n3. " in query and "\n4. " in query:
+            four_option_count += 1
+        elif "\n1." in query and "\n2." in query and "\n3." in query and "\n4." in query:
+            four_option_count += 1
+    if four_option_count >= len(sample) * 0.5:
+        return "culturalbench"
+
+    # Priority 3: GT distribution analysis
     outputs = set(d.get("gt", "").strip() for d in data[:100] if d.get("gt"))
     if "4" in outputs:
         return "culturalbench"
