@@ -161,6 +161,19 @@ class HF_CAC_MAS:
                 f"Reasoning: <your authoritative analysis of cultural depth>\n"
                 f"Answer: <1 or 2>"
             )
+        elif self.task_type == "culturalbench":
+            # CulturalBench: multiple-choice cultural knowledge QA (4-way 1/2/3/4)
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"As the Host-Culture Guardian for {target_country}, use your deep "
+                f"cultural expertise to identify the CORRECT answer. Analyze each option "
+                f"carefully: explain why the correct option is right and why the others "
+                f"are wrong, citing specific cultural practices, traditions, or norms.\n\n"
+                f"You MUST select exactly one option: 1, 2, 3, or 4.\n\n"
+                f"Reasoning: <your authoritative cultural analysis of each option>\n"
+                f"Answer: <1, 2, 3, or 4>"
+            )
         else:
             # NormAD: behavior acceptability (3-way 1/2/3)
             user = (
@@ -193,7 +206,12 @@ class HF_CAC_MAS:
         system = self.culture_roles[agent_idx]["auditor_prompt"].strip()
         agent_name = self.culture_roles[agent_idx]["name"]
 
-        answer_hint = "<1 or 2>" if self.task_type == "cultureatlas" else "<number>"
+        if self.task_type == "cultureatlas":
+            answer_hint = "<1 or 2>"
+        elif self.task_type == "culturalbench":
+            answer_hint = "<1, 2, 3, or 4>"
+        else:
+            answer_hint = "<number>"
 
         if guardian_response:
             # Phase 2: Auditor sees Guardian's response
@@ -208,6 +226,21 @@ class HF_CAC_MAS:
                     f"1. Assess which response shows deeper cultural knowledge from "
                     f"your cross-cultural perspective.\n"
                     f"2. If you agree with the Guardian, explain WHY from your cultural lens.\n"
+                    f"3. If you disagree, provide specific reasoning — but acknowledge "
+                    f"that the Guardian has primary authority on {target_country}.\n\n"
+                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Answer: {answer_hint}"
+                )
+            elif self.task_type == "culturalbench":
+                user = (
+                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"{question}\n\n"
+                    f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
+                    f"authoritative analysis:\n"
+                    f"---\n{guardian_response}\n---\n\n"
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
+                    f"1. Analyze the question and options from your cross-cultural perspective.\n"
+                    f"2. If you agree with the Guardian's answer, explain WHY from your cultural lens.\n"
                     f"3. If you disagree, provide specific reasoning — but acknowledge "
                     f"that the Guardian has primary authority on {target_country}.\n\n"
                     f"Reasoning: <your cross-cultural comparative analysis>\n"
@@ -239,6 +272,18 @@ class HF_CAC_MAS:
                     f"assess which response demonstrates more culturally specific "
                     f"knowledge about {target_country}. Note what appears generic vs. "
                     f"genuinely culture-specific from your cross-cultural perspective, "
+                    f"and acknowledge uncertainty where the target culture differs "
+                    f"from your expertise.\n\n"
+                    f"Reasoning: <your cross-cultural comparative analysis>\n"
+                    f"Answer: {answer_hint}"
+                )
+            elif self.task_type == "culturalbench":
+                user = (
+                    f"TARGET CULTURE: {target_country}\n\n"
+                    f"{question}\n\n"
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
+                    f"analyze this cultural knowledge question about {target_country}. "
+                    f"Use your cross-cultural perspective to identify the correct answer, "
                     f"and acknowledge uncertainty where the target culture differs "
                     f"from your expertise.\n\n"
                     f"Reasoning: <your cross-cultural comparative analysis>\n"
@@ -293,6 +338,24 @@ class HF_CAC_MAS:
                 f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
                 f"Answer: <1 or 2>"
             )
+        elif self.task_type == "culturalbench":
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
+                f"expertise most closely matches {target_country}.\n\n"
+                f"Agent responses:\n{responses_text}\n"
+                f"Determine the CORRECT answer to this cultural knowledge question. "
+                f"Remember:\n"
+                f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
+                f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
+                f"- Cross-Cultural Auditors provide valuable comparative context\n"
+                f"- Base your final decision on verifiable cultural facts\n"
+                f"- Look for consensus among agents, especially agreement with the Guardian\n\n"
+                f"IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.\n\n"
+                f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
+                f"Answer: <1, 2, 3, or 4>"
+            )
         else:
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
@@ -321,7 +384,12 @@ class HF_CAC_MAS:
 
     def _extract_answer(self, text: str) -> str | None:
         """Extract answer from response text. Respects task_type for valid range."""
-        max_choice = 2 if self.task_type == "cultureatlas" else 4
+        if self.task_type == "cultureatlas":
+            max_choice = 2
+        elif self.task_type == "culturalbench":
+            max_choice = 4
+        else:
+            max_choice = 3
         pattern = f"[1-{max_choice}]"
 
         m = re.search(rf"Answer\s*:\s*({pattern})", text, re.IGNORECASE)
@@ -432,6 +500,12 @@ class HF_CAC_MAS:
                 f"One response is always more culturally specific than the other.\n\n"
                 f"Reasoning: <your reasoning, referencing affinity-weighted evidence>\n"
                 f"Answer: <1 or 2>"
+            )
+        elif self.task_type == "culturalbench":
+            user += (
+                f"IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.\n\n"
+                f"Reasoning: <your reasoning, referencing affinity-weighted evidence>\n"
+                f"Answer: <1, 2, 3, or 4>"
             )
         else:
             user += (

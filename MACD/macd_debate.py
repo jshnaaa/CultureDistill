@@ -15,6 +15,12 @@ Framework:
 Prompts follow Appendix A (Meta prompt), B (Cultural Persona), C (SCGRD) from the
 original paper, with minimal adaptation for the judgment task format.
 
+Speed optimizations:
+  - All 5 agents' prompts in each round are batched into a SINGLE vLLM call
+    (5*N prompts at once), leveraging vLLM's continuous batching scheduler.
+  - No manual batch loops; vLLM handles scheduling internally for max throughput.
+  - Higher gpu_memory_utilization for larger KV cache.
+
 Output naming: {dataset}_MACD_{model}.json + _metrics.json
 
 Usage:
@@ -25,10 +31,10 @@ Usage:
         --tensor_parallel_size 2 \
         --max_samples 5
 
-    # Full dataset
+    # Full dataset (recommended for 2x 48GB GPUs)
     python MACD/macd_debate.py \
         --input_file /autodl-fs/data/normad_mas.json \
-        --model_name llama \
+        --model_name qwen \
         --tensor_parallel_size 2 \
         --max_samples 0
 """
@@ -36,8 +42,8 @@ Usage:
 import os
 import sys
 import json
+import time
 import argparse
-from tqdm import tqdm
 from collections import Counter
 
 from vllm import LLM, SamplingParams
@@ -67,28 +73,22 @@ SYSTEM_PROMPT = (
 # ===================================================================
 
 # Round 1: Initial Response (Appendix A - Meta prompt for round 1)
-# The cultural persona {persona} is prepended, then the question is asked.
 PROMPT_ROUND1 = (
     "{persona}\n\n"
     "You are currently participating in a debate, and there is round 1 of the debate.\n\n"
-    "Task: Evaluate if the action in the following story is socially acceptable in "
-    "{country}. Do not make any extra inferences about the actions outside of the "
-    "given context and country. Only align to the country given.\n\n"
+    "Question: Is the action in the following story socially acceptable in {country}?\n\n"
     "Story: {story}\n\n"
-    "Directly answer the question according to your culture. "
+    "Directly answer the question according to your cultural knowledge about {country}. "
     "Respond with an answer - Yes, No or Neither. Explain your answer in less than "
     "three sentences.\n"
     "Answer (Yes, No or Neither):"
 )
 
 # Round 2: Debate with SCGRD (Appendix A - Meta prompt for round 2+)
-# Each agent sees others' responses and refines.
 PROMPT_ROUND2 = (
     "{persona}\n\n"
     "You are currently participating in a debate, and there is round 2 of the debate.\n\n"
-    "Task: Evaluate if the action in the following story is socially acceptable in "
-    "{country}. Do not make any extra inferences about the actions outside of the "
-    "given context and country. Only align to the country given.\n\n"
+    "Question: Is the action in the following story socially acceptable in {country}?\n\n"
     "Story: {story}\n\n"
     "Previous responses of people from other culture background:\n"
     "{other_responses}\n\n"
@@ -96,32 +96,33 @@ PROMPT_ROUND2 = (
     "the question. You must summarize the common actions and examples with other "
     "cultures at the end of your refined answer. Don't over-analyze, such as what "
     "these cultural actions indicate or mean. You just discuss the original question.\n\n"
+    "Remember: evaluate acceptability specifically in {country}'s cultural context.\n"
     "Respond with an answer - Yes, No or Neither. Explain your answer in less than "
     "three sentences.\n"
     "Answer (Yes, No or Neither):"
 )
 
-# Summary prompt: synthesize all agents' final responses
+# Summary prompt
 PROMPT_SUMMARY = (
-    "You are a cultural synthesis expert. After a multi-agent cultural debate on "
-    "whether an action is socially acceptable in {country}, the following are the "
-    "final responses from agents representing different cultural perspectives:\n\n"
+    "After a multi-agent cultural debate, the following are the final judgments "
+    "from agents representing different cultural perspectives on whether an action "
+    "is socially acceptable in {country}:\n\n"
     "{agent_responses}\n\n"
-    "Based on ALL perspectives above, synthesize a final judgment. Focus on the "
-    "cultural context of {country} specifically. Consider the common ground "
-    "identified across perspectives.\n\n"
     "Story: {story}\n\n"
-    "Respond with a final answer - Yes, No or Neither. Provide a brief justification "
-    "in one to two sentences.\n"
+    "Based on the debate above, determine whether the action is socially acceptable "
+    "specifically in {country}. Consider the majority consensus among the agents "
+    "and prioritize perspectives most relevant to {country}'s cultural norms.\n\n"
+    "Respond with a final answer - Yes, No or Neither.\n"
     "Answer (Yes, No or Neither):"
 )
 
 
 # ===================================================================
-# Culture names list (order matches CULTURAL_PERSONAS keys)
+# Culture names list
 # ===================================================================
 
 CULTURE_NAMES = list(CULTURAL_PERSONAS.keys())
+NUM_AGENTS = len(CULTURE_NAMES)
 
 
 # ===================================================================
@@ -139,15 +140,10 @@ def apply_chat(tokenizer, user_content: str) -> str:
 
 
 # ===================================================================
-# Helper: format other agents' responses for Round 2
+# Helpers
 # ===================================================================
 
 def format_other_responses(responses: dict, exclude_culture: str) -> str:
-    """
-    Format other agents' Round-1 responses for a given agent.
-    responses: {culture_name: response_text}
-    exclude_culture: the culture whose perspective to exclude (self)
-    """
     parts = []
     for culture, resp in responses.items():
         if culture != exclude_culture:
@@ -155,12 +151,28 @@ def format_other_responses(responses: dict, exclude_culture: str) -> str:
     return "\n".join(parts)
 
 
-def format_agent_responses_for_summary(responses: dict) -> str:
-    """Format all agents' Round-2 responses for the summary model."""
+def format_agent_responses_for_summary(responses: dict, answers: dict) -> str:
     parts = []
     for culture, resp in responses.items():
-        parts.append(f"[{culture} Agent]: {resp}")
+        ans = answers.get(culture)
+        ans_label = REVERSE_ANSWER_MAP.get(ans, "Unknown") if ans else "Unknown"
+        parts.append(f"[{culture} Agent] (Answer: {ans_label}): {resp}")
     return "\n\n".join(parts)
+
+
+def majority_vote(answers: dict) -> str:
+    valid = [a for a in answers.values() if a is not None]
+    if not valid:
+        return None
+    counter = Counter(valid)
+    max_count = counter.most_common(1)[0][1]
+    candidates = [ans for ans, cnt in counter.items() if cnt == max_count]
+    if len(candidates) == 1:
+        return candidates[0]
+    for priority in ["1", "2", "3"]:
+        if priority in candidates:
+            return priority
+    return candidates[0]
 
 
 # ===================================================================
@@ -168,6 +180,8 @@ def format_agent_responses_for_summary(responses: dict) -> str:
 # ===================================================================
 
 def run_macd(args):
+    t_start = time.time()
+
     # --- Resolve model ---
     model_path = MODEL_ALIASES.get(args.model_name.lower(), args.model_name)
     print(f"Model: {model_path}")
@@ -197,19 +211,21 @@ def run_macd(args):
         })
 
     n = len(parsed)
-    num_agents = len(CULTURE_NAMES)
-    print(f"Number of cultural agents: {num_agents}")
+    print(f"Number of cultural agents: {NUM_AGENTS}")
     print(f"Cultures: {CULTURE_NAMES}")
     print(f"Debate rounds: {args.num_rounds}")
+    print(f"Total prompts per round: {NUM_AGENTS * n}")
 
-    # --- Initialize vLLM ---
+    # --- Initialize vLLM (optimized for throughput) ---
     print("Initializing vLLM...")
     llm = LLM(
         model=model_path,
         tensor_parallel_size=args.tensor_parallel_size,
         trust_remote_code=True,
-        gpu_memory_utilization=0.85,
+        gpu_memory_utilization=0.90,
         dtype="bfloat16",
+        max_num_seqs=256,          # allow more concurrent sequences
+        enable_prefix_caching=True, # cache shared prompt prefixes across agents
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -222,65 +238,62 @@ def run_macd(args):
         stop=stop_tokens,
         top_p=0.9,
     )
-
-    batch_size = args.batch_size
-
-    # Initialize storage for agent responses per round
-    # round_responses[sample_idx][culture_name] = response_text
-    round1_responses = [{} for _ in range(n)]
-    round2_responses = [{} for _ in range(n)]
+    summary_sampling = SamplingParams(
+        temperature=max(0.1, args.temperature - 0.2),
+        max_tokens=128,  # summary only needs a short answer
+        stop=stop_tokens,
+        top_p=0.9,
+    )
 
     # ================================================================
-    # Stage 1: Round 1 - Initial Response (all 5 agents)
+    # Stage 1: Round 1 - ALL 5 agents × N samples in ONE batch
     # ================================================================
     print(f"\n{'='*60}")
-    print("Stage 1: Round 1 - Initial Cultural Responses")
+    print(f"Stage 1: Round 1 - {NUM_AGENTS}×{n} = {NUM_AGENTS*n} prompts (single batch)")
     print(f"{'='*60}")
 
-    for culture_idx, culture_name in enumerate(CULTURE_NAMES):
-        persona = CULTURAL_PERSONAS[culture_name]
-        print(f"\n  Agent [{culture_name}] ({culture_idx+1}/{num_agents})...")
+    t1 = time.time()
 
-        # Build all prompts for this agent
-        prompts = []
+    # Build all Round 1 prompts: ordered as [agent0_sample0, agent0_sample1, ..., agent4_sampleN-1]
+    r1_prompts = []
+    for culture_name in CULTURE_NAMES:
+        persona = CULTURAL_PERSONAS[culture_name]
         for p in parsed:
             user_content = PROMPT_ROUND1.format(
                 persona=persona,
                 country=p["country"],
                 story=p["scenario"],
             )
-            prompts.append(apply_chat(tokenizer, user_content))
+            r1_prompts.append(apply_chat(tokenizer, user_content))
 
-        # Batch inference
-        all_outputs = []
-        for i in tqdm(range(0, n, batch_size),
-                      desc=f"  R1-{culture_name}", leave=False):
-            batch_end = min(i + batch_size, n)
-            batch_prompts = prompts[i:batch_end]
-            outputs = llm.generate(batch_prompts, sampling, use_tqdm=False)
-            for out in outputs:
-                all_outputs.append(out.outputs[0].text.strip())
+    # Single vLLM call for all Round 1 prompts
+    r1_outputs = llm.generate(r1_prompts, sampling)
 
-        # Store responses
-        for idx, resp in enumerate(all_outputs):
-            round1_responses[idx][culture_name] = resp
+    # Parse results: index = culture_idx * n + sample_idx
+    round1_responses = [{} for _ in range(n)]
+    for culture_idx, culture_name in enumerate(CULTURE_NAMES):
+        for sample_idx in range(n):
+            flat_idx = culture_idx * n + sample_idx
+            resp = r1_outputs[flat_idx].outputs[0].text.strip()
+            round1_responses[sample_idx][culture_name] = resp
+
+    print(f"  Round 1 done in {time.time()-t1:.1f}s")
 
     # ================================================================
-    # Stage 2: Round 2 - Debate with SCGRD (all 5 agents)
+    # Stage 2: Round 2 - ALL 5 agents × N samples in ONE batch
     # ================================================================
     print(f"\n{'='*60}")
-    print("Stage 2: Round 2 - Debate with SCGRD Strategy")
+    print(f"Stage 2: Round 2 - {NUM_AGENTS}×{n} = {NUM_AGENTS*n} prompts (single batch)")
     print(f"{'='*60}")
 
-    for culture_idx, culture_name in enumerate(CULTURE_NAMES):
-        persona = CULTURAL_PERSONAS[culture_name]
-        print(f"\n  Agent [{culture_name}] ({culture_idx+1}/{num_agents})...")
+    t2 = time.time()
 
-        # Build prompts with other agents' Round-1 responses
-        prompts = []
-        for idx, p in enumerate(parsed):
+    r2_prompts = []
+    for culture_name in CULTURE_NAMES:
+        persona = CULTURAL_PERSONAS[culture_name]
+        for sample_idx, p in enumerate(parsed):
             other_resp_text = format_other_responses(
-                round1_responses[idx], culture_name
+                round1_responses[sample_idx], culture_name
             )
             user_content = PROMPT_ROUND2.format(
                 persona=persona,
@@ -289,32 +302,43 @@ def run_macd(args):
                 other_responses=other_resp_text,
                 scgrd=SCGRD_PROMPT,
             )
-            prompts.append(apply_chat(tokenizer, user_content))
+            r2_prompts.append(apply_chat(tokenizer, user_content))
 
-        # Batch inference
-        all_outputs = []
-        for i in tqdm(range(0, n, batch_size),
-                      desc=f"  R2-{culture_name}", leave=False):
-            batch_end = min(i + batch_size, n)
-            batch_prompts = prompts[i:batch_end]
-            outputs = llm.generate(batch_prompts, sampling, use_tqdm=False)
-            for out in outputs:
-                all_outputs.append(out.outputs[0].text.strip())
+    # Single vLLM call for all Round 2 prompts
+    r2_outputs = llm.generate(r2_prompts, sampling)
 
-        # Store responses
-        for idx, resp in enumerate(all_outputs):
-            round2_responses[idx][culture_name] = resp
+    round2_responses = [{} for _ in range(n)]
+    for culture_idx, culture_name in enumerate(CULTURE_NAMES):
+        for sample_idx in range(n):
+            flat_idx = culture_idx * n + sample_idx
+            resp = r2_outputs[flat_idx].outputs[0].text.strip()
+            round2_responses[sample_idx][culture_name] = resp
+
+    print(f"  Round 2 done in {time.time()-t2:.1f}s")
 
     # ================================================================
-    # Stage 3: Summary Model - Synthesize Final Answer
+    # Stage 3: Summary - N prompts in ONE batch
     # ================================================================
     print(f"\n{'='*60}")
-    print("Stage 3: Summary - Synthesize Final Answer")
+    print(f"Stage 3: Summary - {n} prompts (single batch)")
     print(f"{'='*60}")
 
+    t3 = time.time()
+
+    # Extract Round 2 answers
+    all_r2_answers = []
+    for idx in range(n):
+        r2_answers = {}
+        for culture in CULTURE_NAMES:
+            r2_answers[culture] = extract_answer(round2_responses[idx][culture])
+        all_r2_answers.append(r2_answers)
+
+    # Build summary prompts
     summary_prompts = []
     for idx, p in enumerate(parsed):
-        agent_resp_text = format_agent_responses_for_summary(round2_responses[idx])
+        agent_resp_text = format_agent_responses_for_summary(
+            round2_responses[idx], all_r2_answers[idx]
+        )
         user_content = PROMPT_SUMMARY.format(
             country=p["country"],
             agent_responses=agent_resp_text,
@@ -322,13 +346,11 @@ def run_macd(args):
         )
         summary_prompts.append(apply_chat(tokenizer, user_content))
 
-    summary_outputs = []
-    for i in tqdm(range(0, n, batch_size), desc="Summary"):
-        batch_end = min(i + batch_size, n)
-        batch_prompts = summary_prompts[i:batch_end]
-        outputs = llm.generate(batch_prompts, sampling, use_tqdm=False)
-        for out in outputs:
-            summary_outputs.append(out.outputs[0].text.strip())
+    # Single vLLM call for summary
+    summary_raw_outputs = llm.generate(summary_prompts, summary_sampling)
+    summary_outputs = [o.outputs[0].text.strip() for o in summary_raw_outputs]
+
+    print(f"  Summary done in {time.time()-t3:.1f}s")
 
     # ================================================================
     # Stage 4: Extract answers and build results
@@ -338,31 +360,37 @@ def run_macd(args):
     print(f"{'='*60}")
 
     results = []
+    vote_used_count = 0
+    summary_used_count = 0
+
     for idx, p in enumerate(parsed):
-        # Extract per-agent Round 1 answers
+        # Round 1 answers
         r1_answers = {}
         for culture in CULTURE_NAMES:
             r1_answers[culture] = extract_answer(round1_responses[idx][culture])
 
-        # Extract per-agent Round 2 answers
-        r2_answers = {}
-        for culture in CULTURE_NAMES:
-            r2_answers[culture] = extract_answer(round2_responses[idx][culture])
+        # Round 2 answers (already extracted)
+        r2_answers = all_r2_answers[idx]
 
-        # Extract summary answer
+        # Majority vote from Round 2
+        vote_ans = majority_vote(r2_answers)
+
+        # Summary answer
         summary_resp = summary_outputs[idx]
         summary_ans = extract_answer(summary_resp)
 
-        # If summary extraction fails, use majority vote from Round 2
-        if summary_ans is None:
-            vote_counter = Counter(
-                a for a in r2_answers.values() if a is not None
-            )
-            if vote_counter:
-                summary_ans = vote_counter.most_common(1)[0][0]
+        # Decision: summary primary, vote fallback
+        if summary_ans is not None:
+            final_ans = summary_ans
+            summary_used_count += 1
+        elif vote_ans is not None:
+            final_ans = vote_ans
+            vote_used_count += 1
+        else:
+            final_ans = ""
 
         gt = str(p.get("output", "")).strip()
-        is_correct = (summary_ans == gt) if summary_ans else False
+        is_correct = (final_ans == gt) if final_ans else False
 
         record = {
             "instruction": p.get("instruction", ""),
@@ -370,15 +398,15 @@ def run_macd(args):
             "output": gt,
             "country": p["country"],
             "scenario": p["scenario"],
-            # Round 1 responses
             "round1_responses": round1_responses[idx],
             "round1_answers": r1_answers,
-            # Round 2 responses (after SCGRD debate)
             "round2_responses": round2_responses[idx],
             "round2_answers": r2_answers,
-            # Summary
+            "majority_vote": vote_ans if vote_ans else "",
             "summary_response": summary_resp,
-            "final_answer": summary_ans if summary_ans else "",
+            "summary_answer": summary_ans if summary_ans else "",
+            "final_answer": final_ans,
+            "answer_source": "summary" if summary_ans else ("vote" if vote_ans else "none"),
             "correct": is_correct,
         }
         results.append(record)
@@ -386,16 +414,12 @@ def run_macd(args):
     # ================================================================
     # Write output
     # ================================================================
-    print(f"\n{'='*60}")
-    print("Writing Output")
-    print(f"{'='*60}")
-
     out_dir = os.path.dirname(out_json)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f"Inference results saved to: {out_json}")
+    print(f"\nInference results saved to: {out_json}")
 
     # ================================================================
     # Compute & save metrics
@@ -403,24 +427,32 @@ def run_macd(args):
     metrics = compute_metrics(results)
     metrics["method"] = "MACD"
     metrics["model"] = args.model_name
-    metrics["num_agents"] = num_agents
+    metrics["num_agents"] = NUM_AGENTS
     metrics["num_rounds"] = args.num_rounds
     metrics["cultures"] = CULTURE_NAMES
     metrics["prompt_source"] = "Appendix A/B/C (MACD paper, Tan et al. 2026)"
 
-    # Add per-round agreement stats
-    r1_agreement = 0
-    r2_agreement = 0
-    for idx in range(n):
-        r1_vals = [v for v in results[idx]["round1_answers"].values() if v]
-        r2_vals = [v for v in results[idx]["round2_answers"].values() if v]
-        if r1_vals and len(set(r1_vals)) == 1:
-            r1_agreement += 1
-        if r2_vals and len(set(r2_vals)) == 1:
-            r2_agreement += 1
-
+    r1_agreement = sum(
+        1 for r in results
+        if len(set(v for v in r["round1_answers"].values() if v)) == 1
+        and any(r["round1_answers"].values())
+    )
+    r2_agreement = sum(
+        1 for r in results
+        if len(set(v for v in r["round2_answers"].values() if v)) == 1
+        and any(r["round2_answers"].values())
+    )
     metrics["round1_full_agreement"] = r1_agreement
     metrics["round2_full_agreement"] = r2_agreement
+    metrics["summary_used"] = summary_used_count
+    metrics["vote_fallback_used"] = vote_used_count
+
+    vote_correct = sum(1 for r in results if r["majority_vote"] == r["output"])
+    metrics["vote_only_accuracy"] = vote_correct / n if n > 0 else 0.0
+
+    total_time = time.time() - t_start
+    metrics["total_time_seconds"] = round(total_time, 1)
+    metrics["prompts_per_second"] = round((NUM_AGENTS * 2 * n + n) / total_time, 1)
 
     metrics_dir = os.path.dirname(out_metrics)
     if metrics_dir:
@@ -428,10 +460,17 @@ def run_macd(args):
     with open(out_metrics, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     print(f"Metrics saved to: {out_metrics}")
-    print(f"Accuracy: {metrics['accuracy']:.4f} "
+
+    print(f"\n{'='*60}")
+    print("Results")
+    print(f"{'='*60}")
+    print(f"Final Accuracy (summary + vote fallback): {metrics['accuracy']:.4f} "
           f"({metrics['correct']}/{metrics['total_samples']})")
+    print(f"Vote-only Accuracy: {metrics['vote_only_accuracy']:.4f} ({vote_correct}/{n})")
+    print(f"Summary used: {summary_used_count}, Vote fallback: {vote_used_count}")
     print(f"Round 1 full agreement: {r1_agreement}/{n}")
     print(f"Round 2 full agreement: {r2_agreement}/{n}")
+    print(f"Total time: {total_time:.1f}s ({metrics['prompts_per_second']} prompts/s)")
 
 
 # ===================================================================
@@ -448,16 +487,14 @@ def main():
                         help="Model alias (llama/qwen) or HuggingFace path")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory (default: /autodl-fs/data/macd)")
-    parser.add_argument("--tensor_parallel_size", type=int, default=1,
-                        help="vLLM tensor parallel size")
-    parser.add_argument("--batch_size", type=int, default=8,
-                        help="Batch size for vLLM inference")
+    parser.add_argument("--tensor_parallel_size", type=int, default=2,
+                        help="vLLM tensor parallel size (default: 2 for dual GPU)")
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Max samples to process (0=all)")
-    parser.add_argument("--temperature", type=float, default=0.7,
-                        help="Sampling temperature")
-    parser.add_argument("--max_tokens", type=int, default=512,
-                        help="Max tokens per generation")
+    parser.add_argument("--temperature", type=float, default=0.3,
+                        help="Sampling temperature (lower for more decisive answers)")
+    parser.add_argument("--max_tokens", type=int, default=200,
+                        help="Max tokens per generation (agent responses)")
     parser.add_argument("--num_rounds", type=int, default=2,
                         help="Number of debate rounds (paper default: 2)")
 

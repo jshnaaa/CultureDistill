@@ -7,9 +7,10 @@ HF-CAC (Home-Field Culture-Activated Collaboration):
   - Cross-Cultural Auditors provide contrastive perspectives
   - Judge weights Guardian's claims with veto mechanism
 
-Supports two dataset types (auto-detected from data format):
+Supports three dataset types (auto-detected from data format):
   - NormAD: behavior acceptability judgment (1/2/3) — uses hf_cac_config.yaml
   - CultureAtlas: comparative cultural depth (1/2) — uses hf_cac_config_cultureatlas.yaml
+  - CulturalBench: multiple-choice cultural knowledge QA (1/2/3/4) — uses hf_cac_config_culturalbench.yaml
 
 Output format mirrors AgentArk LLM Debate so that the existing
 label.py / split_solutions pipeline can be reused directly.
@@ -28,6 +29,15 @@ Usage:
     python Cul/generate_hf_cac_data.py \\
         --input_file /autodl-fs/data/cultureAtlas_mas.json \\
         --output_file /autodl-fs/data/qwen/cultureatlas_hf_cac_inference.jsonl \\
+        --model_name qwen \\
+        --use_vllm --tensor_parallel_size 2 \\
+        --max_samples 5 --negotiation_rounds 1 \\
+        --include_judge true
+
+    # CulturalBench dataset (auto-detected)
+    python Cul/generate_hf_cac_data.py \\
+        --input_file /autodl-fs/data/culturalBench_mas.json \\
+        --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_inference.jsonl \\
         --model_name qwen \\
         --use_vllm --tensor_parallel_size 2 \\
         --max_samples 5 --negotiation_rounds 1 \\
@@ -76,13 +86,17 @@ def detect_dataset_type(data: list) -> str:
 
     Returns:
         "cultureatlas" if data matches CultureAtlas format (comparative, binary 1/2)
+        "culturalbench" if data matches CulturalBench format (4-way knowledge QA, 1/2/3/4)
         "normad" otherwise (behavior acceptability, 3-way 1/2/3)
 
     Detection heuristics (in priority order):
       1. Instruction content: CultureAtlas mentions "more culturally specific" or
-         "Response 1"/"Response 2"; NormAD mentions "acceptable"/"unacceptable"
-      2. Input field: CultureAtlas has "Response 1:" and "Response 2:" patterns
-      3. Output distribution (full dataset): CultureAtlas only has 1/2, NormAD has 1/2/3
+         "Response 1"/"Response 2"; NormAD mentions "acceptable"/"unacceptable";
+         CulturalBench mentions "cultural knowledge question" or "correct option number"
+      2. Input field: CultureAtlas has "Response 1:" and "Response 2:" patterns;
+         CulturalBench has numbered options ("1. "/"2. "/"3. "/"4. ")
+      3. Output distribution (full dataset): CultureAtlas only has 1/2, NormAD has 1/2/3,
+         CulturalBench has 1/2/3/4
     """
     if not data:
         return "normad"
@@ -94,6 +108,11 @@ def detect_dataset_type(data: list) -> str:
     for item in sample:
         instruction = item.get("instruction", "")
         instr_lower = instruction.lower()
+        # CulturalBench markers
+        if "cultural knowledge question" in instr_lower:
+            return "culturalbench"
+        if "correct option number" in instr_lower:
+            return "culturalbench"
         # CultureAtlas markers
         if "more culturally specific" in instr_lower:
             return "cultureatlas"
@@ -105,18 +124,26 @@ def detect_dataset_type(data: list) -> str:
         if "determine whether the behavior" in instr_lower:
             return "normad"
 
-    # Check if input contains "Response 1" / "Response 2" pattern
+    # Check if input contains "Response 1" / "Response 2" pattern (CultureAtlas)
     for item in sample:
         inp = item.get("input", "")
         if "Response 1:" in inp and "Response 2:" in inp:
             return "cultureatlas"
+
+    # Check if input contains numbered options pattern (CulturalBench)
+    for item in sample:
+        inp = item.get("input", "")
+        if "\n1. " in inp and "\n2. " in inp and "\n3. " in inp and "\n4. " in inp:
+            return "culturalbench"
 
     # Fallback: check output distribution across a larger sample
     # Use up to 100 samples to avoid false positives from small samples
     check_size = min(100, len(data))
     outputs = set(str(item.get("output", "")).strip()
                   for item in data[:check_size])
-    if "3" in outputs:
+    if "4" in outputs:
+        return "culturalbench"
+    if "3" in outputs and "4" not in outputs:
         return "normad"
     if outputs and outputs <= {"1", "2"}:
         return "cultureatlas"
@@ -246,6 +273,8 @@ def main():
         config_dir = os.path.join(os.path.dirname(__file__), "configs")
         if dataset_type == "cultureatlas":
             args.config_path = os.path.join(config_dir, "hf_cac_config_cultureatlas.yaml")
+        elif dataset_type == "culturalbench":
+            args.config_path = os.path.join(config_dir, "hf_cac_config_culturalbench.yaml")
         else:
             args.config_path = os.path.join(config_dir, "hf_cac_config.yaml")
         print(f"Auto-selected config: {args.config_path}")
@@ -323,7 +352,9 @@ def main():
 
 def detect_task_type_from_output(data: list) -> str:
     """Detect task type from inference output data (for accuracy computation)."""
-    outputs = set(d.get("gt", "").strip() for d in data[:20] if d.get("gt"))
+    outputs = set(d.get("gt", "").strip() for d in data[:100] if d.get("gt"))
+    if "4" in outputs:
+        return "culturalbench"
     if outputs and outputs <= {"1", "2"}:
         return "cultureatlas"
     return "normad"
@@ -378,7 +409,12 @@ def compute_accuracy(output_file: str) -> dict:
 
     # Auto-detect task type for answer extraction
     task_type = detect_task_type_from_output(data)
-    max_choice = 2 if task_type == "cultureatlas" else 3
+    if task_type == "cultureatlas":
+        max_choice = 2
+    elif task_type == "culturalbench":
+        max_choice = 4
+    else:
+        max_choice = 3
     print(f"Accuracy evaluation — detected task type: {task_type} (max_choice={max_choice})")
 
     judge_correct = 0
