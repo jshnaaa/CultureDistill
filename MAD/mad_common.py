@@ -178,17 +178,20 @@ def infer_output_path(input_file: str, method: str, variant: str, model_name: st
                       output_dir: str = None) -> tuple:
     """
     Infer output file paths following naming convention:
-      {dataset}_{method}_{variant}_{model}.json
-      {dataset}_{method}_{variant}_{model}_metrics.json
+      {dataset}_{method}_{variant}_{model}_{timestamp}.json
+      {dataset}_{method}_{variant}_{model}_{timestamp}_metrics.json
 
     Returns: (output_json_path, metrics_json_path)
     """
+    from datetime import datetime
+
     dataset_name = os.path.splitext(os.path.basename(input_file))[0]
     # Strip trailing _mas if present
     if dataset_name.endswith("_mas"):
         dataset_name = dataset_name[:-4]
 
-    base_name = f"{dataset_name}_{method}_{variant}_{model_name}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = f"{dataset_name}_{method}_{variant}_{model_name}_{timestamp}"
 
     if output_dir is None:
         output_dir = "/autodl-fs/data/mad"
