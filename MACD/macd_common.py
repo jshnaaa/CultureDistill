@@ -1,11 +1,13 @@
-"""
+"""  
 MACD (Multi-Agent Cultural Debate) - Shared utilities.
 
 Prompt templates from:
   "Mitigating Cultural Bias in LLMs via Multi-Agent Cultural Debate" (Tan et al., 2026)
   Appendix A (Meta prompt), B (Cultural Persona), C (SCGRD strategy)
 
-Adapted for NormAD cultural acceptability judgment task.
+Supports:
+  - NormAD: cultural acceptability judgment (Yes/No/Neither → 1/2/3)
+  - CulturalBench: cultural knowledge multiple-choice (4 options → 1/2/3/4)
 """
 
 import os
@@ -21,8 +23,33 @@ MODEL_ALIASES = {
     "qwen":  "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
 }
 
+# NormAD answer mapping (Yes/No/Neither → 1/2/3)
 ANSWER_MAP = {"yes": "1", "no": "2", "neither": "3"}
 REVERSE_ANSWER_MAP = {"1": "Yes", "2": "No", "3": "Neither"}
+
+# CulturalBench answer mapping (option 1/2/3/4)
+CB_VALID_ANSWERS = {"1", "2", "3", "4"}
+CB_REVERSE_MAP = {"1": "Option 1", "2": "Option 2", "3": "Option 3", "4": "Option 4"}
+
+
+# ---------------------------------------------------------------------------
+# Dataset type detection
+# ---------------------------------------------------------------------------
+
+DATASET_NORMAD = "normad"
+DATASET_CULTURALBENCH = "culturalbench"
+
+
+def detect_dataset_type(input_file: str) -> str:
+    """
+    Auto-detect dataset type from input file name.
+    - 'normad' in filename -> NormAD
+    - 'culturalBench' (case-insensitive) in filename -> CulturalBench
+    """
+    basename = os.path.basename(input_file).lower()
+    if "culturalbench" in basename:
+        return DATASET_CULTURALBENCH
+    return DATASET_NORMAD
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +152,21 @@ def parse_input(input_text):
     return country, scenario
 
 
+def parse_input_culturalbench(item: dict) -> tuple:
+    """
+    Parse CulturalBench item. Country is a top-level field;
+    the full input (question + options) is used as-is.
+
+    Returns: (country: str, question_with_options: str)
+    """
+    country = item.get("country", "")
+    question = item.get("input", "").strip()
+    return country, question
+
+
 def extract_answer(text):
     """
-    Extract final answer from model output.
+    Extract final answer from model output (NormAD: Yes/No/Neither).
     Returns: "1" (Yes), "2" (No), "3" (Neither), or None.
     """
     tl = text.strip().lower()
@@ -153,6 +192,37 @@ def extract_answer(text):
         matches = list(re.finditer(pattern, tl))
         if matches:
             return ANSWER_MAP[word]
+
+    return None
+
+
+def extract_answer_culturalbench(text):
+    """
+    Extract final answer from model output (CulturalBench: option 1/2/3/4).
+    Returns: "1", "2", "3", "4", or None.
+    """
+    tl = text.strip()
+
+    # Pattern 1: "answer: 3" or "Answer: 3" or "answer is 3"
+    m = re.search(r'(?:answer|option)\s*(?:is|:)?\s*([1-4])\b', tl, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # Pattern 2: standalone digit on a line (possibly with period)
+    m = re.search(r'^\s*([1-4])\s*[\.\)]?\s*$', tl, re.MULTILINE)
+    if m:
+        return m.group(1)
+
+    # Pattern 3: starts with a digit (e.g., "3. Tipping generously")
+    m = re.match(r'\s*([1-4])\b', tl)
+    if m:
+        return m.group(1)
+
+    # Pattern 4: last digit 1-4 mentioned in the text (conservative)
+    matches = re.findall(r'\b([1-4])\b', tl)
+    if matches:
+        # prefer the last one (usually the final answer)
+        return matches[-1]
 
     return None
 

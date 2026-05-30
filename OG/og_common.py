@@ -454,13 +454,13 @@ def extract_answer(text: str) -> str:
     if num_match:
         return num_match.group(1)
 
-    # Check for yes/no/neither keywords
-    if re.search(r'\b(yes|acceptable)\b', text_lower[:200]):
-        return "1"
-    if re.search(r'\b(no|unacceptable)\b', text_lower[:200]):
-        return "2"
+    # Check for yes/no/neither keywords (order: neither > unacceptable > acceptable)
     if re.search(r'\b(neither|neutral|indeterminate)\b', text_lower[:200]):
         return "3"
+    if re.search(r'\b(unacceptable)\b', text_lower[:200]):
+        return "2"
+    if re.search(r'\b(yes|acceptable)\b', text_lower[:200]):
+        return "1"
 
     # Last resort: look for any digit 1-3
     first_digit = re.search(r'[123]', text[:50])
@@ -611,6 +611,8 @@ def infer_output_path(input_file: str, model_name: str, output_dir: str = None):
     # Simplify dataset name
     if "normad" in base_name.lower():
         dataset_tag = "normad"
+    elif "culturalbench" in base_name.lower() or "cultural_bench" in base_name.lower():
+        dataset_tag = "culturalBench"
     else:
         dataset_tag = base_name
 

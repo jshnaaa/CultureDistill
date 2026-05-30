@@ -167,10 +167,10 @@ MAD/
 
 **输出文件命名规范**：`{dataset}_{方法}_{变体}_{基座}.json`
 
-**运行命令**（文件名自动生成，无需指定 `--output_file`）：
+**运行命令**（文件名自动生成，无需指定 `--output_file`；脚本自动检测数据集类型）：
 
 ```bash
-# Debate-Only Baseline（Qwen 基座）
+# Debate-Only Baseline - NorMAD（Qwen 基座）
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/normad_mas.json \
     --model_name qwen \
@@ -179,9 +179,27 @@ python MAD/debate_only.py \
     --temperature 0.7 \
     --max_tokens 512
 
-# Self-Reflect+Debate Baseline（Qwen 基座）
+# Debate-Only Baseline - CulturalBench（Qwen 基座）
+python MAD/debate_only.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+
+# Self-Reflect+Debate Baseline - NorMAD（Qwen 基座）
 python MAD/self_reflect_debate.py \
     --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.7 \
+    --max_tokens 512
+
+# Self-Reflect+Debate Baseline - CulturalBench（Qwen 基座）
+python MAD/self_reflect_debate.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0 \
@@ -193,6 +211,7 @@ python MAD/self_reflect_debate.py \
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
+| `--input_file` | 数据集路径（自动检测 normad/culturalBench） | 必填 |
 | `--output_dir` | 输出目录（默认 /autodl-fs/data/mad） | None |
 | `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
 | `--batch_size` | 每批处理样本数 | 8 |
@@ -200,7 +219,11 @@ python MAD/self_reflect_debate.py \
 | `--temperature` | 采样温度 | 0.7 |
 | `--max_tokens` | 最大生成 token 数 | 512 |
 
-**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，移除 `Rule: {rule-of-thumb}` 相关行，但将数据集中的 Cultural Background 信息作为 story 的一部分传入模型（格式：`Cultural Background:\n{context}\n\nScenario: {scenario}`）。提示词模板本身不做修改。
+**数据集自动检测**：脚本根据数据样本的 `output` 字段值范围自动判断数据集类型：
+- NorMAD：输出为 "1"/"2"/"3"（Yes/No/Neither），提示词使用论文原始模板
+- CulturalBench：输出为 "1"/"2"/"3"/"4"（4 选 1 MCQ），提示词为论文模板的最小化改写（将 "story" → "question"，"Yes, No or Neither" → "1, 2, 3, or 4"）
+
+**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，移除 `Rule: {rule-of-thumb}` 相关行。对于 NorMAD 数据集，将 Cultural Background 信息作为 story 的一部分传入模型（格式：`Cultural Background:\n{context}\n\nScenario: {scenario}`）。对于 CulturalBench 数据集，直接使用顶层 `country` 字段和 `input` 字段（已包含完整问题和选项）。提示词模板本身仅做最小格式适配。
 
 **推理阶段**（Debate-Only 共 4 阶段，Self-Reflect+Debate 共 5 阶段）：
 
@@ -368,12 +391,12 @@ python OG/og_mar.py \
     --max_samples 0 \
     --temperature 0.0
 
-# 快速测试（5 条样本）
-python OG/og_mar.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 5
+# CulturalBench
+python OG/og_mar.py 
+    --input_file /autodl-fs/data/culturalBench_mas.json 
+    --model_name qwen 
+    --tensor_parallel_size 2 
+    --batch_size 256
 ```
 
 **参数说明**：
@@ -473,15 +496,10 @@ You are the HOST-CULTURE GUARDIAN for this question.
 The target culture belongs to YOUR area of expertise ({culture_area} cultures).
 Your cognitive foundation: {cognitive_foundation_description}
 Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
-You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name,
-explain WHY certain options are correct/incorrect based on deep cultural knowledge.
-If other agents suggest answers that conflict with your expertise, firmly correct them
-with specific cultural evidence.
+You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, explain WHY certain options are correct/incorrect based on deep cultural knowledge.
+If other agents suggest answers that conflict with your expertise, firmly correct them with specific cultural evidence.
 IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture.
-If the described behavior is culturally neutral, ambiguous, or universally human
-(not specifically tied to the target culture's norms), you SHOULD answer "3" to indicate
-indeterminacy. Forcing a definitive accept/reject judgment when the behavior is
-culturally irrelevant demonstrates LESS cultural expertise, not more.
+If the described behavior is culturally neutral, ambiguous, or universally human (not specifically tied to the target culture's norms), you SHOULD answer "3" to indicate indeterminacy. Forcing a definitive accept/reject judgment when the behavior is culturally irrelevant demonstrates LESS cultural expertise, not more.
 Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
 ```
 
@@ -552,15 +570,10 @@ Your task is to synthesize all available information — the question itself, ea
 
 When evaluating:
 1. Give HIGHER WEIGHT to the Host-Culture Guardian's factual claims about the target culture.
-2. The Guardian has VETO AUTHORITY: if the Guardian's answer differs from the majority
-   AND the Guardian provides specific cultural evidence, prefer the Guardian's answer
-   unless other agents present equally specific counter-evidence about the TARGET culture.
-3. Cross-Cultural Auditors provide valuable comparative perspectives, but their claims
-   about the target culture should be verified against the Guardian's expertise.
-4. Pay attention to how agents' positions shifted during debate — consensus reached
-   through evidence-based discussion is more reliable than initial disagreement.
-5. Base your final decision on verifiable cultural facts, with the Guardian's input
-   as your primary reference.
+2. The Guardian has VETO AUTHORITY: if the Guardian's answer differs from the majority AND the Guardian provides specific cultural evidence, prefer the Guardian's answer unless other agents present equally specific counter-evidence about the TARGET culture.
+3. Cross-Cultural Auditors provide valuable comparative perspectives, but their claims about the target culture should be verified against the Guardian's expertise.
+4. Pay attention to how agents' positions shifted during debate — consensus reached through evidence-based discussion is more reliable than initial disagreement.
+5. Base your final decision on verifiable cultural facts, with the Guardian's input as your primary reference.
 6. CRITICAL — Three-way classification:
    - Answer "1" ONLY if there is specific evidence the behavior IS culturally acceptable
    - Answer "2" ONLY if there is specific evidence the behavior IS culturally unacceptable
@@ -568,11 +581,9 @@ When evaluating:
      OR (b) cultural norms on this vary within the target country,
      OR (c) agents provide conflicting claims without decisive evidence,
      OR (d) the behavior simply has no cultural valence in the target context
-   - When in doubt between a forced judgment and "neutral", prefer "3" —
-     a calibrated "I'm not sure" is more valuable than a confident wrong answer.
+   - When in doubt between a forced judgment and "neutral", prefer "3" — a calibrated "I'm not sure" is more valuable than a confident wrong answer.
 7. GUARDIAN FAILURE PROTOCOL — Cultural Affinity Arbitration:
-   If the Host-Culture Guardian has FAILED to provide a valid answer (format collapse,
-   empty reasoning, or explicit uncertainty), do NOT fall back to simple majority voting.
+   If the Host-Culture Guardian has FAILED to provide a valid answer (format collapse, empty reasoning, or explicit uncertainty), do NOT fall back to simple majority voting.
    Instead, activate cross-cultural affinity-weighted arbitration:
    - You will be provided with CULTURAL AFFINITY SCORES indicating how culturally proximate each Auditor's background is to the target culture.
    - Give HIGHER WEIGHT to Auditors with higher affinity scores — their cultural proximity to the target culture makes their reasoning more reliable.
@@ -618,8 +629,7 @@ TARGET CULTURE: {target_country}
 {question}
 
 As the Host-Culture Guardian for {target_country}, provide your AUTHORITATIVE analysis.
-Cite specific cultural practices, traditions, or norms by name. Explain why certain
-options align or conflict with the target culture's values.
+Cite specific cultural practices, traditions, or norms by name. Explain why certain options align or conflict with the target culture's values.
 
 Answer choices:
 1 = The behavior is clearly ACCEPTABLE in {target_country}'s culture
@@ -730,8 +740,7 @@ TARGET CULTURE: {target_country}
 
 {question}
 
-The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural expertise
-most closely matches {target_country}.
+The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural expertise most closely matches {target_country}.
 
 Agent responses:
 
@@ -772,9 +781,7 @@ TARGET CULTURE: {target_country}
 
 {question}
 
-⚠️ GUARDIAN FAILURE: The HOST-CULTURE GUARDIAN [{guardian_name}] has FAILED
-to provide a valid answer for this question. Activate Cultural Affinity
-Arbitration protocol.
+⚠️ GUARDIAN FAILURE: The HOST-CULTURE GUARDIAN [{guardian_name}] has FAILED to provide a valid answer for this question. Activate Cultural Affinity Arbitration protocol.
 
 CULTURAL AFFINITY SCORES (proximity to {target_country}'s culture):
   - [{auditor_1_name}]: {affinity_score_1}
@@ -799,15 +806,11 @@ Agent responses:
 As the final arbitrator under Guardian Failure Protocol:
 - Do NOT use simple majority voting.
 - Give HIGHER WEIGHT to Auditors with higher affinity scores.
-- If the highest-affinity Auditor provides specific cultural evidence,
-  prefer their answer even if outnumbered.
+- If the highest-affinity Auditor provides specific cultural evidence, prefer their answer even if outnumbered.
 - Evaluate each Auditor's reasoning for concrete cultural references.
 
-CALIBRATION REMINDER: Approximately 28% of questions in this dataset have
-"neutral/indeterminate (3)" as the correct answer. If you find yourself
-never outputting "3", you are likely over-committing to binary judgments.
-Cultural expertise includes knowing when a behavior has NO specific
-cultural significance in the target culture.
+CALIBRATION REMINDER: Approximately 28% of questions in this dataset have "neutral/indeterminate (3)" as the correct answer. If you find yourself never outputting "3", you are likely over-committing to binary judgments.
+Cultural expertise includes knowing when a behavior has NO specific cultural significance in the target culture.
 
 Reasoning: <your reasoning, referencing affinity-weighted evidence>
 Answer: <number>

@@ -2,7 +2,11 @@
 MACD Baseline: Multi-Agent Cultural Debate
 
 Reproduction of "Mitigating Cultural Bias in LLMs via Multi-Agent Cultural Debate"
-(Tan et al., 2026) adapted for the NormAD cultural acceptability judgment task.
+(Tan et al., 2026) adapted for cultural reasoning tasks.
+
+Supports two dataset formats (auto-detected):
+  - NormAD: cultural acceptability judgment (Yes/No/Neither)
+  - CulturalBench: cultural knowledge multiple-choice (4 options)
 
 Framework:
   1. Round 1 - Initial Response: 5 cultural agents (Western, East Asian, African,
@@ -24,19 +28,19 @@ Speed optimizations:
 Output naming: {dataset}_MACD_{model}.json + _metrics.json
 
 Usage:
-    # Quick test (5 samples)
+    # NormAD dataset
     python MACD/macd_debate.py \
         --input_file /autodl-fs/data/normad_mas.json \
         --model_name qwen \
         --tensor_parallel_size 2 \
         --max_samples 5
 
-    # Full dataset (recommended for 2x 48GB GPUs)
+    # CulturalBench dataset (auto-detected)
     python MACD/macd_debate.py \
-        --input_file /autodl-fs/data/normad_mas.json \
+        --input_file /autodl-fs/data/culturalBench_mas.json \
         --model_name qwen \
         --tensor_parallel_size 2 \
-        --max_samples 0
+        --max_samples 5
 """
 
 import os
@@ -53,7 +57,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from MACD.macd_common import (
     MODEL_ALIASES, CULTURAL_PERSONAS, CULTURAL_VALUES, SCGRD_PROMPT,
     ANSWER_MAP, REVERSE_ANSWER_MAP,
-    load_dataset, parse_input, extract_answer,
+    CB_VALID_ANSWERS, CB_REVERSE_MAP,
+    DATASET_NORMAD, DATASET_CULTURALBENCH, detect_dataset_type,
+    load_dataset, parse_input, parse_input_culturalbench,
+    extract_answer, extract_answer_culturalbench,
     infer_output_path, compute_metrics,
 )
 
@@ -69,11 +76,11 @@ SYSTEM_PROMPT = (
 
 
 # ===================================================================
-# Prompt Templates (following Appendix A, B, C of MACD paper)
+# Prompt Templates - NormAD (following Appendix A, B, C of MACD paper)
 # ===================================================================
 
 # Round 1: Initial Response (Appendix A - Meta prompt for round 1)
-PROMPT_ROUND1 = (
+PROMPT_ROUND1_NORMAD = (
     "{persona}\n\n"
     "You are currently participating in a debate, and there is round 1 of the debate.\n\n"
     "Question: Is the action in the following story socially acceptable in {country}?\n\n"
@@ -85,7 +92,7 @@ PROMPT_ROUND1 = (
 )
 
 # Round 2: Debate with SCGRD (Appendix A - Meta prompt for round 2+)
-PROMPT_ROUND2 = (
+PROMPT_ROUND2_NORMAD = (
     "{persona}\n\n"
     "You are currently participating in a debate, and there is round 2 of the debate.\n\n"
     "Question: Is the action in the following story socially acceptable in {country}?\n\n"
@@ -102,8 +109,8 @@ PROMPT_ROUND2 = (
     "Answer (Yes, No or Neither):"
 )
 
-# Summary prompt
-PROMPT_SUMMARY = (
+# Summary prompt - NormAD
+PROMPT_SUMMARY_NORMAD = (
     "After a multi-agent cultural debate, the following are the final judgments "
     "from agents representing different cultural perspectives on whether an action "
     "is socially acceptable in {country}:\n\n"
@@ -114,6 +121,55 @@ PROMPT_SUMMARY = (
     "and prioritize perspectives most relevant to {country}'s cultural norms.\n\n"
     "Respond with a final answer - Yes, No or Neither.\n"
     "Answer (Yes, No or Neither):"
+)
+
+
+# ===================================================================
+# Prompt Templates - CulturalBench (adapted from MACD paper prompts)
+# ===================================================================
+
+# Round 1: Initial Response
+PROMPT_ROUND1_CB = (
+    "{persona}\n\n"
+    "You are currently participating in a debate, and there is round 1 of the debate.\n\n"
+    "Answer the following cultural knowledge question about {country}.\n\n"
+    "{question}\n\n"
+    "Directly answer the question according to your cultural knowledge about {country}. "
+    "Select the correct option number and explain your reasoning in less than "
+    "three sentences.\n"
+    "Answer (option number):"
+)
+
+# Round 2: Debate with SCGRD
+PROMPT_ROUND2_CB = (
+    "{persona}\n\n"
+    "You are currently participating in a debate, and there is round 2 of the debate.\n\n"
+    "Answer the following cultural knowledge question about {country}.\n\n"
+    "{question}\n\n"
+    "Previous responses of people from other culture background:\n"
+    "{other_responses}\n\n"
+    "Based on other perspectives and **{scgrd}** strategy, refine your answer to "
+    "the question. You must summarize the common reasoning with other "
+    "cultures at the end of your refined answer. Don't over-analyze, such as what "
+    "these cultural perspectives indicate or mean. You just discuss the original question.\n\n"
+    "Remember: answer specifically based on {country}'s cultural context.\n"
+    "Select the correct option number and explain your reasoning in less than "
+    "three sentences.\n"
+    "Answer (option number):"
+)
+
+# Summary prompt - CulturalBench
+PROMPT_SUMMARY_CB = (
+    "After a multi-agent cultural debate, the following are the final answers "
+    "from agents representing different cultural perspectives on a cultural "
+    "knowledge question about {country}:\n\n"
+    "{agent_responses}\n\n"
+    "Question: {question}\n\n"
+    "Based on the debate above, determine the correct answer to this cultural "
+    "knowledge question about {country}. Consider the majority consensus among "
+    "the agents and prioritize perspectives most relevant to {country}.\n\n"
+    "Respond with the correct option number only.\n"
+    "Answer (option number):"
 )
 
 
@@ -151,16 +207,19 @@ def format_other_responses(responses: dict, exclude_culture: str) -> str:
     return "\n".join(parts)
 
 
-def format_agent_responses_for_summary(responses: dict, answers: dict) -> str:
+def format_agent_responses_for_summary(
+    responses: dict, answers: dict, dataset_type: str
+) -> str:
     parts = []
+    reverse_map = REVERSE_ANSWER_MAP if dataset_type == DATASET_NORMAD else CB_REVERSE_MAP
     for culture, resp in responses.items():
         ans = answers.get(culture)
-        ans_label = REVERSE_ANSWER_MAP.get(ans, "Unknown") if ans else "Unknown"
+        ans_label = reverse_map.get(ans, "Unknown") if ans else "Unknown"
         parts.append(f"[{culture} Agent] (Answer: {ans_label}): {resp}")
     return "\n\n".join(parts)
 
 
-def majority_vote(answers: dict) -> str:
+def majority_vote(answers: dict, dataset_type: str) -> str:
     valid = [a for a in answers.values() if a is not None]
     if not valid:
         return None
@@ -169,9 +228,14 @@ def majority_vote(answers: dict) -> str:
     candidates = [ans for ans, cnt in counter.items() if cnt == max_count]
     if len(candidates) == 1:
         return candidates[0]
-    for priority in ["1", "2", "3"]:
-        if priority in candidates:
-            return priority
+    # Tie-breaking: prefer lower-numbered option
+    if dataset_type == DATASET_NORMAD:
+        priority = ["1", "2", "3"]
+    else:
+        priority = ["1", "2", "3", "4"]
+    for p in priority:
+        if p in candidates:
+            return p
     return candidates[0]
 
 
@@ -200,14 +264,35 @@ def run_macd(args):
         dataset = dataset[:args.max_samples]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
 
-    # --- Pre-parse country & scenario ---
+    # --- Detect dataset type (by filename) ---
+    dataset_type = detect_dataset_type(args.input_file)
+    print(f"Dataset type: {dataset_type}")
+
+    # --- Select prompt templates and extract function ---
+    if dataset_type == DATASET_NORMAD:
+        PROMPT_R1 = PROMPT_ROUND1_NORMAD
+        PROMPT_R2 = PROMPT_ROUND2_NORMAD
+        PROMPT_SUM = PROMPT_SUMMARY_NORMAD
+        extract_fn = extract_answer
+        story_key = "story"
+    else:
+        PROMPT_R1 = PROMPT_ROUND1_CB
+        PROMPT_R2 = PROMPT_ROUND2_CB
+        PROMPT_SUM = PROMPT_SUMMARY_CB
+        extract_fn = extract_answer_culturalbench
+        story_key = "question"
+
+    # --- Pre-parse country & scenario/question ---
     parsed = []
     for item in dataset:
-        country, scenario = parse_input(item["input"])
+        if dataset_type == DATASET_NORMAD:
+            country, content = parse_input(item["input"])
+        else:
+            country, content = parse_input_culturalbench(item)
         parsed.append({
             **item,
             "country": country,
-            "scenario": scenario,
+            "content": content,  # "story" for NormAD, "question" for CB
         })
 
     n = len(parsed)
@@ -254,15 +339,15 @@ def run_macd(args):
 
     t1 = time.time()
 
-    # Build all Round 1 prompts: ordered as [agent0_sample0, agent0_sample1, ..., agent4_sampleN-1]
+    # Build all Round 1 prompts
     r1_prompts = []
     for culture_name in CULTURE_NAMES:
         persona = CULTURAL_PERSONAS[culture_name]
         for p in parsed:
-            user_content = PROMPT_ROUND1.format(
+            user_content = PROMPT_R1.format(
                 persona=persona,
                 country=p["country"],
-                story=p["scenario"],
+                **{story_key: p["content"]},
             )
             r1_prompts.append(apply_chat(tokenizer, user_content))
 
@@ -295,12 +380,12 @@ def run_macd(args):
             other_resp_text = format_other_responses(
                 round1_responses[sample_idx], culture_name
             )
-            user_content = PROMPT_ROUND2.format(
+            user_content = PROMPT_R2.format(
                 persona=persona,
                 country=p["country"],
-                story=p["scenario"],
                 other_responses=other_resp_text,
                 scgrd=SCGRD_PROMPT,
+                **{story_key: p["content"]},
             )
             r2_prompts.append(apply_chat(tokenizer, user_content))
 
@@ -330,19 +415,19 @@ def run_macd(args):
     for idx in range(n):
         r2_answers = {}
         for culture in CULTURE_NAMES:
-            r2_answers[culture] = extract_answer(round2_responses[idx][culture])
+            r2_answers[culture] = extract_fn(round2_responses[idx][culture])
         all_r2_answers.append(r2_answers)
 
     # Build summary prompts
     summary_prompts = []
     for idx, p in enumerate(parsed):
         agent_resp_text = format_agent_responses_for_summary(
-            round2_responses[idx], all_r2_answers[idx]
+            round2_responses[idx], all_r2_answers[idx], dataset_type
         )
-        user_content = PROMPT_SUMMARY.format(
+        user_content = PROMPT_SUM.format(
             country=p["country"],
             agent_responses=agent_resp_text,
-            story=p["scenario"],
+            **{story_key: p["content"]},
         )
         summary_prompts.append(apply_chat(tokenizer, user_content))
 
@@ -367,17 +452,17 @@ def run_macd(args):
         # Round 1 answers
         r1_answers = {}
         for culture in CULTURE_NAMES:
-            r1_answers[culture] = extract_answer(round1_responses[idx][culture])
+            r1_answers[culture] = extract_fn(round1_responses[idx][culture])
 
         # Round 2 answers (already extracted)
         r2_answers = all_r2_answers[idx]
 
         # Majority vote from Round 2
-        vote_ans = majority_vote(r2_answers)
+        vote_ans = majority_vote(r2_answers, dataset_type)
 
         # Summary answer
         summary_resp = summary_outputs[idx]
-        summary_ans = extract_answer(summary_resp)
+        summary_ans = extract_fn(summary_resp)
 
         # Decision: summary primary, vote fallback
         if summary_ans is not None:
@@ -397,7 +482,7 @@ def run_macd(args):
             "input": p.get("input", ""),
             "output": gt,
             "country": p["country"],
-            "scenario": p["scenario"],
+            "content": p["content"],
             "round1_responses": round1_responses[idx],
             "round1_answers": r1_answers,
             "round2_responses": round2_responses[idx],
@@ -427,6 +512,7 @@ def run_macd(args):
     metrics = compute_metrics(results)
     metrics["method"] = "MACD"
     metrics["model"] = args.model_name
+    metrics["dataset_type"] = dataset_type
     metrics["num_agents"] = NUM_AGENTS
     metrics["num_rounds"] = args.num_rounds
     metrics["cultures"] = CULTURE_NAMES
@@ -464,6 +550,7 @@ def run_macd(args):
     print(f"\n{'='*60}")
     print("Results")
     print(f"{'='*60}")
+    print(f"Dataset type: {dataset_type}")
     print(f"Final Accuracy (summary + vote fallback): {metrics['accuracy']:.4f} "
           f"({metrics['correct']}/{metrics['total_samples']})")
     print(f"Vote-only Accuracy: {metrics['vote_only_accuracy']:.4f} ({vote_correct}/{n})")
@@ -482,7 +569,7 @@ def main():
         description="MACD Baseline: Multi-Agent Cultural Debate (Tan et al., 2026)"
     )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to normad_mas.json")
+                        help="Path to input dataset (normad_mas.json or culturalBench_mas.json)")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama/qwen) or HuggingFace path")
     parser.add_argument("--output_dir", type=str, default=None,

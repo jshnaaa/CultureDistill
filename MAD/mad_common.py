@@ -24,6 +24,10 @@ MODEL_ALIASES = {
 ANSWER_MAP = {"yes": "1", "no": "2", "neither": "3"}
 REVERSE_ANSWER_MAP = {"1": "Yes", "2": "No", "3": "Neither"}
 
+# Dataset types
+DATASET_NORMAD = "normad"      # Yes/No/Neither social acceptability
+DATASET_MCQ = "mcq"            # Multiple-choice (1/2/3/4) cultural knowledge
+
 
 # ---------------------------------------------------------------------------
 # Data helpers
@@ -35,6 +39,18 @@ def load_dataset(path):
     if isinstance(data, dict):
         data = list(data.values())[0]
     return data
+
+
+def detect_dataset_type(input_file: str):
+    """
+    Auto-detect dataset type from input file name.
+
+    Returns: DATASET_NORMAD or DATASET_MCQ
+    """
+    basename = os.path.basename(input_file).lower()
+    if "culturalbench" in basename:
+        return DATASET_MCQ
+    return DATASET_NORMAD
 
 
 def parse_input(input_text):
@@ -67,6 +83,41 @@ def parse_input(input_text):
             scenario = input_text.strip()
 
     return country, scenario, cultural_context
+
+
+def extract_answer_mcq(text):
+    """
+    Extract answer for MCQ (multiple-choice) questions.
+    Returns: "1", "2", "3", "4", or None.
+    """
+    tl = text.strip()
+
+    # Pattern 1: "answer: 3" or "Answer: 2" or "answer is 1"
+    m = re.search(r'answer\s*(?:is|:)\s*([1-4])\b', tl, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # Pattern 2: standalone single digit at end (e.g., "...so the answer is 3.")
+    m = re.search(r'\b([1-4])\s*\.?\s*$', tl)
+    if m:
+        return m.group(1)
+
+    # Pattern 3: starts with a digit answer (e.g., "3. Because...")
+    m = re.match(r'\s*([1-4])\b', tl)
+    if m:
+        return m.group(1)
+
+    # Pattern 4: "option X" or "Option X"
+    m = re.search(r'option\s*([1-4])\b', tl, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # Pattern 5: last occurrence of a digit 1-4 in the text
+    matches = re.findall(r'\b([1-4])\b', tl)
+    if matches:
+        return matches[-1]
+
+    return None
 
 
 def extract_answer(text):

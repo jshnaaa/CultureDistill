@@ -40,8 +40,9 @@ from transformers import AutoTokenizer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from MAD.mad_common import (
     MODEL_ALIASES, ANSWER_MAP, REVERSE_ANSWER_MAP,
-    load_dataset, parse_input, extract_answer, extract_choice,
-    infer_output_path, compute_metrics,
+    DATASET_NORMAD, DATASET_MCQ,
+    load_dataset, parse_input, extract_answer, extract_answer_mcq,
+    extract_choice, detect_dataset_type, infer_output_path, compute_metrics,
 )
 
 
@@ -53,6 +54,8 @@ SYSTEM_PROMPT = (
     "You are a helpful assistant with expertise in cross-cultural "
     "social norms and etiquette."
 )
+
+# ---------- NorMAD prompts (Yes/No/Neither) ----------
 
 # A.4.1: Making Initial Decision (identical to A.3.1, no rule)
 PROMPT_A41_INITIAL = (
@@ -150,14 +153,104 @@ PROMPT_A46_JUDGE = (
     "Final decision:"
 )
 
+# ---------- CulturalBench MCQ prompts (option 1/2/3/4) ----------
+
+SYSTEM_PROMPT_MCQ = (
+    "You are a helpful assistant with expertise in cross-cultural "
+    "knowledge and practices."
+)
+
+PROMPT_MCQ_INITIAL = (
+    "Task: You will be given a cultural knowledge question about "
+    "{country}. Select the correct option number. Do not make any "
+    "extra inferences outside of the given context and country. "
+    "Only align to the country given. Respond with the correct "
+    "option number (1, 2, 3, or 4). Explain your answer in less "
+    "than three sentences.\n\n"
+    "Question:\n{story}\n"
+    "Answer (1, 2, 3, or 4):"
+)
+
+PROMPT_MCQ_CHOOSE = (
+    "Task: You are currently discussing the following cultural "
+    "knowledge question about {country} with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n\n"
+    "You can choose to (A) reflect on your response or (B) "
+    "respond to the discussant by providing any relevant feed-"
+    "back. Respond with your choice - (A) reflect or (B) "
+    "respond to the discussant. Only respond your choice as "
+    "(A) or (B).\n"
+    "Response:"
+)
+
+PROMPT_MCQ_REFLECT = (
+    "Task: You are currently discussing the following cultural "
+    "knowledge question about {country} with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n\n"
+    "You chose to reflect on your response. Respond in less "
+    "than three sentences.\n"
+    "Response:"
+)
+
+PROMPT_MCQ_DEBATE = (
+    "Task: You are currently discussing the following cultural "
+    "knowledge question about {country} with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n\n"
+    "You chose to respond to the discussant by providing any "
+    "relevant feedback. Respond in less than three sentences.\n"
+    "Response:"
+)
+
+PROMPT_MCQ_FINAL = (
+    "Task: You are currently discussing the following cultural "
+    "knowledge question about {country} with the other discussant. "
+    "You chose to {your_action}. Your discussant chose "
+    "to {other_action}.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n"
+    "Your feedback: {your_feedback}\n"
+    "Discussant feedback: {other_feedback}\n\n"
+    "Based on the above discussion, critically think and make "
+    "your final decision. Respond with the correct option number "
+    "(1, 2, 3, or 4).\n"
+    "Answer (1, 2, 3, or 4):"
+)
+
+PROMPT_MCQ_JUDGE = (
+    "Task: You are a judge responsible for making a "
+    "final decision based on the debate history between "
+    "Model1 and Model2. They have debated the following "
+    "cultural knowledge question about {country}.\n"
+    "Do NOT make any independent "
+    "judgments; base your final decision solely on the de-"
+    "bate. Respond with a final decision - the correct option "
+    "number (1, 2, 3, or 4).\n\n"
+    "Question:\n{story}\n\n"
+    "*** Debate starts ***\n"
+    "Model1 opinion: {model1_response}\n"
+    "Model2 opinion: {model2_response}\n"
+    "Model1 feedback: {model1_feedback}\n"
+    "Model2 feedback: {model2_feedback}\n"
+    "Model1 final decision: {model1_decision}\n"
+    "Model2 final decision: {model2_decision}\n"
+    "*** Debate ends ***\n\n"
+    "Final decision:"
+)
+
 
 # ===================================================================
 # Chat template helper
 # ===================================================================
 
-def apply_chat(tokenizer, user_content: str) -> str:
+def apply_chat(tokenizer, user_content: str, system_prompt: str = None) -> str:
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
     return tokenizer.apply_chat_template(
@@ -188,18 +281,48 @@ def run_self_reflect_debate(args):
         dataset = dataset[:args.max_samples]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
 
+    # --- Detect dataset type ---
+    ds_type = detect_dataset_type(args.input_file)
+    is_mcq = (ds_type == DATASET_MCQ)
+    print(f"Dataset type: {ds_type} ({'MCQ 4-choice' if is_mcq else 'Yes/No/Neither'})")
+
+    # Select prompt templates based on dataset type
+    if is_mcq:
+        tpl_initial = PROMPT_MCQ_INITIAL
+        tpl_choose = PROMPT_MCQ_CHOOSE
+        tpl_reflect = PROMPT_MCQ_REFLECT
+        tpl_debate = PROMPT_MCQ_DEBATE
+        tpl_final = PROMPT_MCQ_FINAL
+        tpl_judge = PROMPT_MCQ_JUDGE
+        sys_prompt = SYSTEM_PROMPT_MCQ
+        answer_extractor = extract_answer_mcq
+    else:
+        tpl_initial = PROMPT_A41_INITIAL
+        tpl_choose = PROMPT_A42_CHOOSE
+        tpl_reflect = PROMPT_A43_REFLECT
+        tpl_debate = PROMPT_A44_DEBATE
+        tpl_final = PROMPT_A45_FINAL
+        tpl_judge = PROMPT_A46_JUDGE
+        sys_prompt = SYSTEM_PROMPT
+        answer_extractor = extract_answer
+
     # --- Pre-parse country, scenario & cultural context ---
     parsed = []
     for item in dataset:
-        country, scenario, cultural_context = parse_input(item["input"])
-        # Compose story: include cultural context + scenario for the model
-        if cultural_context:
-            story = (
-                f"Cultural Background:\n{cultural_context}\n\n"
-                f"Scenario: {scenario}"
-            )
+        if is_mcq:
+            # CulturalBench: country is a top-level field, input is the question
+            country = item.get("country", "")
+            story = item["input"]
         else:
-            story = scenario
+            # NorMAD: parse country/cultural_context/scenario from input
+            country, scenario, cultural_context = parse_input(item["input"])
+            if cultural_context:
+                story = (
+                    f"Cultural Background:\n{cultural_context}\n\n"
+                    f"Scenario: {scenario}"
+                )
+            else:
+                story = scenario
         parsed.append({
             **item,
             "country": country,
@@ -237,8 +360,8 @@ def run_self_reflect_debate(args):
     prompts_a2 = []
     for p in parsed:
         kw = {"country": p["country"], "story": p["scenario"]}
-        prompts_a1.append(apply_chat(tokenizer, PROMPT_A41_INITIAL.format(**kw)))
-        prompts_a2.append(apply_chat(tokenizer, PROMPT_A41_INITIAL.format(**kw)))
+        prompts_a1.append(apply_chat(tokenizer, tpl_initial.format(**kw), sys_prompt))
+        prompts_a2.append(apply_chat(tokenizer, tpl_initial.format(**kw), sys_prompt))
 
     for i in tqdm(range(0, n, batch_size), desc="Stage1-Init"):
         batch_end = min(i + batch_size, n)
@@ -253,9 +376,9 @@ def run_self_reflect_debate(args):
             r1 = out1[j].outputs[0].text.strip()
             r2 = out2[j].outputs[0].text.strip()
             parsed[idx]["model1_initial"] = r1
-            parsed[idx]["model1_initial_ans"] = extract_answer(r1)
+            parsed[idx]["model1_initial_ans"] = answer_extractor(r1)
             parsed[idx]["model2_initial"] = r2
-            parsed[idx]["model2_initial_ans"] = extract_answer(r2)
+            parsed[idx]["model2_initial_ans"] = answer_extractor(r2)
 
     # -------- Stage 2: Choose self-reflect or debate --------
     print("\n=== Stage 2: Choose Self-Reflect or Debate ===")
@@ -272,8 +395,8 @@ def run_self_reflect_debate(args):
             "your_response": p["model2_initial"],
             "other_response": p["model1_initial"],
         }
-        prompts_choose1.append(apply_chat(tokenizer, PROMPT_A42_CHOOSE.format(**kw1)))
-        prompts_choose2.append(apply_chat(tokenizer, PROMPT_A42_CHOOSE.format(**kw2)))
+        prompts_choose1.append(apply_chat(tokenizer, tpl_choose.format(**kw1), sys_prompt))
+        prompts_choose2.append(apply_chat(tokenizer, tpl_choose.format(**kw2), sys_prompt))
 
     for i in tqdm(range(0, n, batch_size), desc="Stage2-Choose"):
         batch_end = min(i + batch_size, n)
@@ -303,25 +426,25 @@ def run_self_reflect_debate(args):
         if c1 == "A":
             kw1 = {"country": p["country"], "story": p["scenario"],
                    "your_response": p["model1_initial"]}
-            action_prompts1.append(apply_chat(tokenizer, PROMPT_A43_REFLECT.format(**kw1)))
+            action_prompts1.append(apply_chat(tokenizer, tpl_reflect.format(**kw1), sys_prompt))
             action_types1.append("reflect")
         else:
             kw1 = {"country": p["country"], "story": p["scenario"],
                    "your_response": p["model1_initial"],
                    "other_response": p["model2_initial"]}
-            action_prompts1.append(apply_chat(tokenizer, PROMPT_A44_DEBATE.format(**kw1)))
+            action_prompts1.append(apply_chat(tokenizer, tpl_debate.format(**kw1), sys_prompt))
             action_types1.append("debate")
 
         if c2 == "A":
             kw2 = {"country": p["country"], "story": p["scenario"],
                    "your_response": p["model2_initial"]}
-            action_prompts2.append(apply_chat(tokenizer, PROMPT_A43_REFLECT.format(**kw2)))
+            action_prompts2.append(apply_chat(tokenizer, tpl_reflect.format(**kw2), sys_prompt))
             action_types2.append("reflect")
         else:
             kw2 = {"country": p["country"], "story": p["scenario"],
                    "your_response": p["model2_initial"],
                    "other_response": p["model1_initial"]}
-            action_prompts2.append(apply_chat(tokenizer, PROMPT_A44_DEBATE.format(**kw2)))
+            action_prompts2.append(apply_chat(tokenizer, tpl_debate.format(**kw2), sys_prompt))
             action_types2.append("debate")
 
     for i in tqdm(range(0, n, batch_size), desc="Stage3-Action"):
@@ -367,8 +490,8 @@ def run_self_reflect_debate(args):
             "your_feedback": p["model2_action_response"],
             "other_feedback": p["model1_action_response"],
         }
-        prompts_final1.append(apply_chat(tokenizer, PROMPT_A45_FINAL.format(**kw1)))
-        prompts_final2.append(apply_chat(tokenizer, PROMPT_A45_FINAL.format(**kw2)))
+        prompts_final1.append(apply_chat(tokenizer, tpl_final.format(**kw1), sys_prompt))
+        prompts_final2.append(apply_chat(tokenizer, tpl_final.format(**kw2), sys_prompt))
 
     for i in tqdm(range(0, n, batch_size), desc="Stage4-Final"):
         batch_end = min(i + batch_size, n)
@@ -380,9 +503,9 @@ def run_self_reflect_debate(args):
             rf1 = f1[j].outputs[0].text.strip()
             rf2 = f2[j].outputs[0].text.strip()
             parsed[idx]["model1_final"] = rf1
-            parsed[idx]["model1_final_ans"] = extract_answer(rf1)
+            parsed[idx]["model1_final_ans"] = answer_extractor(rf1)
             parsed[idx]["model2_final"] = rf2
-            parsed[idx]["model2_final_ans"] = extract_answer(rf2)
+            parsed[idx]["model2_final_ans"] = answer_extractor(rf2)
 
     # -------- Stage 5: Judge for disagreements --------
     print("\n=== Stage 5: Judge Resolution ===")
@@ -414,7 +537,7 @@ def run_self_reflect_debate(args):
                 "model1_decision": p["model1_final"],
                 "model2_decision": p["model2_final"],
             }
-            judge_prompts.append(apply_chat(tokenizer, PROMPT_A46_JUDGE.format(**kw)))
+            judge_prompts.append(apply_chat(tokenizer, tpl_judge.format(**kw), sys_prompt))
 
         for i in tqdm(range(0, len(disagree_indices), batch_size), desc="Stage5-Judge"):
             batch_end = min(i + batch_size, len(disagree_indices))
@@ -423,7 +546,7 @@ def run_self_reflect_debate(args):
             for j, (didx, jo) in enumerate(zip(disagree_indices[i:batch_end], j_out)):
                 resp = jo.outputs[0].text.strip()
                 parsed[didx]["judge_response"] = resp
-                parsed[didx]["judge_ans"] = extract_answer(resp)
+                parsed[didx]["judge_ans"] = answer_extractor(resp)
 
     # -------- Build output records --------
     print("\n=== Writing output ===")
@@ -537,7 +660,7 @@ def main():
         description="MAD Baseline: Self-Reflect+Debate (A.4, no-rule variant)"
     )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to normad_mas.json")
+                        help="Path to dataset JSON (normad_mas.json or culturalBench_mas.json)")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama/qwen) or HF path")
     parser.add_argument("--output_dir", type=str, default=None,

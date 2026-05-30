@@ -39,8 +39,9 @@ from transformers import AutoTokenizer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from MAD.mad_common import (
     MODEL_ALIASES, ANSWER_MAP, REVERSE_ANSWER_MAP,
-    load_dataset, parse_input, extract_answer,
-    infer_output_path, compute_metrics,
+    DATASET_NORMAD, DATASET_MCQ,
+    load_dataset, parse_input, extract_answer, extract_answer_mcq,
+    detect_dataset_type, infer_output_path, compute_metrics,
 )
 
 
@@ -52,6 +53,8 @@ SYSTEM_PROMPT = (
     "You are a helpful assistant with expertise in cross-cultural "
     "social norms and etiquette."
 )
+
+# ---------- NorMAD prompts (Yes/No/Neither) ----------
 
 # A.3.1: Making Initial Decision (no rule)
 PROMPT_A31_INITIAL = (
@@ -117,14 +120,79 @@ PROMPT_A34_JUDGE = (
     "Final decision:"
 )
 
+# ---------- CulturalBench MCQ prompts (option 1/2/3/4) ----------
+# Minimal adaptation of A.3: replace "story" with "question", answer format -> option number
+
+SYSTEM_PROMPT_MCQ = (
+    "You are a helpful assistant with expertise in cross-cultural "
+    "knowledge and practices."
+)
+
+PROMPT_MCQ_INITIAL = (
+    "Task: You will be given a cultural knowledge question about "
+    "{country}. Select the correct option number. Do not make any "
+    "extra inferences outside of the given context and country. "
+    "Only align to the country given. Respond with the correct "
+    "option number (1, 2, 3, or 4). Explain your answer in less "
+    "than three sentences.\n\n"
+    "Question:\n{story}\n"
+    "Answer (1, 2, 3, or 4):"
+)
+
+PROMPT_MCQ_FEEDBACK = (
+    "Task: You are currently discussing the following cultural "
+    "knowledge question about {country} with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n\n"
+    "Respond to the discussant by providing any relevant "
+    "feedback. Respond in less than three sentences.\n"
+    "Response:"
+)
+
+PROMPT_MCQ_FINAL = (
+    "Task: You are currently discussing the following cultural "
+    "knowledge question about {country} with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n"
+    "Your feedback: {your_feedback}\n"
+    "Discussant feedback: {other_feedback}\n\n"
+    "Based on the above discussion, critically think and make "
+    "your final decision. Respond with the correct option number "
+    "(1, 2, 3, or 4).\n"
+    "Answer (1, 2, 3, or 4):"
+)
+
+PROMPT_MCQ_JUDGE = (
+    "Task: You are a judge responsible for making a "
+    "final decision based on the debate history between "
+    "Model1 and Model2. They have debated the following "
+    "cultural knowledge question about {country}.\n"
+    "Do NOT make any independent "
+    "judgments; base your final decision solely on the de-"
+    "bate. Respond with a final decision - the correct option "
+    "number (1, 2, 3, or 4).\n\n"
+    "Question:\n{story}\n\n"
+    "*** Debate starts ***\n"
+    "Model1 opinion: {model1_response}\n"
+    "Model2 opinion: {model2_response}\n"
+    "Model1 feedback: {model1_feedback}\n"
+    "Model2 feedback: {model2_feedback}\n"
+    "Model1 final decision: {model1_decision}\n"
+    "Model2 final decision: {model2_decision}\n"
+    "*** Debate ends ***\n\n"
+    "Final decision:"
+)
+
 
 # ===================================================================
 # Chat template helper
 # ===================================================================
 
-def apply_chat(tokenizer, user_content: str) -> str:
+def apply_chat(tokenizer, user_content: str, system_prompt: str = None) -> str:
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
     return tokenizer.apply_chat_template(
@@ -155,18 +223,44 @@ def run_debate_only(args):
         dataset = dataset[:args.max_samples]
     print(f"Loaded {len(dataset)} samples from {args.input_file}")
 
+    # --- Detect dataset type ---
+    ds_type = detect_dataset_type(args.input_file)
+    is_mcq = (ds_type == DATASET_MCQ)
+    print(f"Dataset type: {ds_type} ({'MCQ 4-choice' if is_mcq else 'Yes/No/Neither'})")
+
+    # Select prompt templates based on dataset type
+    if is_mcq:
+        tpl_initial = PROMPT_MCQ_INITIAL
+        tpl_feedback = PROMPT_MCQ_FEEDBACK
+        tpl_final = PROMPT_MCQ_FINAL
+        tpl_judge = PROMPT_MCQ_JUDGE
+        sys_prompt = SYSTEM_PROMPT_MCQ
+        answer_extractor = extract_answer_mcq
+    else:
+        tpl_initial = PROMPT_A31_INITIAL
+        tpl_feedback = PROMPT_A32_FEEDBACK
+        tpl_final = PROMPT_A33_FINAL
+        tpl_judge = PROMPT_A34_JUDGE
+        sys_prompt = SYSTEM_PROMPT
+        answer_extractor = extract_answer
+
     # --- Pre-parse country, scenario & cultural context ---
     parsed = []
     for item in dataset:
-        country, scenario, cultural_context = parse_input(item["input"])
-        # Compose story: include cultural context + scenario for the model
-        if cultural_context:
-            story = (
-                f"Cultural Background:\n{cultural_context}\n\n"
-                f"Scenario: {scenario}"
-            )
+        if is_mcq:
+            # CulturalBench: country is a top-level field, input is the question
+            country = item.get("country", "")
+            story = item["input"]
         else:
-            story = scenario
+            # NorMAD: parse country/cultural_context/scenario from input
+            country, scenario, cultural_context = parse_input(item["input"])
+            if cultural_context:
+                story = (
+                    f"Cultural Background:\n{cultural_context}\n\n"
+                    f"Scenario: {scenario}"
+                )
+            else:
+                story = scenario
         parsed.append({
             **item,
             "country": country,
@@ -204,8 +298,8 @@ def run_debate_only(args):
     prompts_a2 = []
     for p in parsed:
         kw = {"country": p["country"], "story": p["scenario"]}
-        prompts_a1.append(apply_chat(tokenizer, PROMPT_A31_INITIAL.format(**kw)))
-        prompts_a2.append(apply_chat(tokenizer, PROMPT_A31_INITIAL.format(**kw)))
+        prompts_a1.append(apply_chat(tokenizer, tpl_initial.format(**kw), sys_prompt))
+        prompts_a2.append(apply_chat(tokenizer, tpl_initial.format(**kw), sys_prompt))
 
     for i in tqdm(range(0, n, batch_size), desc="Stage1-Init"):
         batch_end = min(i + batch_size, n)
@@ -220,9 +314,9 @@ def run_debate_only(args):
             r1 = out1[j].outputs[0].text.strip()
             r2 = out2[j].outputs[0].text.strip()
             parsed[idx]["model1_initial"] = r1
-            parsed[idx]["model1_initial_ans"] = extract_answer(r1)
+            parsed[idx]["model1_initial_ans"] = answer_extractor(r1)
             parsed[idx]["model2_initial"] = r2
-            parsed[idx]["model2_initial_ans"] = extract_answer(r2)
+            parsed[idx]["model2_initial_ans"] = answer_extractor(r2)
 
     # -------- Stage 2: Generate feedback --------
     print("\n=== Stage 2: Generate Feedback ===")
@@ -239,8 +333,8 @@ def run_debate_only(args):
             "your_response": p["model2_initial"],
             "other_response": p["model1_initial"],
         }
-        prompts_fb1.append(apply_chat(tokenizer, PROMPT_A32_FEEDBACK.format(**kw1)))
-        prompts_fb2.append(apply_chat(tokenizer, PROMPT_A32_FEEDBACK.format(**kw2)))
+        prompts_fb1.append(apply_chat(tokenizer, tpl_feedback.format(**kw1), sys_prompt))
+        prompts_fb2.append(apply_chat(tokenizer, tpl_feedback.format(**kw2), sys_prompt))
 
     for i in tqdm(range(0, n, batch_size), desc="Stage2-Feedback"):
         batch_end = min(i + batch_size, n)
@@ -270,8 +364,8 @@ def run_debate_only(args):
             "your_feedback": p["model2_feedback"],
             "other_feedback": p["model1_feedback"],
         }
-        prompts_final1.append(apply_chat(tokenizer, PROMPT_A33_FINAL.format(**kw1)))
-        prompts_final2.append(apply_chat(tokenizer, PROMPT_A33_FINAL.format(**kw2)))
+        prompts_final1.append(apply_chat(tokenizer, tpl_final.format(**kw1), sys_prompt))
+        prompts_final2.append(apply_chat(tokenizer, tpl_final.format(**kw2), sys_prompt))
 
     for i in tqdm(range(0, n, batch_size), desc="Stage3-Final"):
         batch_end = min(i + batch_size, n)
@@ -283,9 +377,9 @@ def run_debate_only(args):
             rf1 = f1[j].outputs[0].text.strip()
             rf2 = f2[j].outputs[0].text.strip()
             parsed[idx]["model1_final"] = rf1
-            parsed[idx]["model1_final_ans"] = extract_answer(rf1)
+            parsed[idx]["model1_final_ans"] = answer_extractor(rf1)
             parsed[idx]["model2_final"] = rf2
-            parsed[idx]["model2_final_ans"] = extract_answer(rf2)
+            parsed[idx]["model2_final_ans"] = answer_extractor(rf2)
 
     # -------- Stage 4: Judge for disagreements --------
     print("\n=== Stage 4: Judge Resolution ===")
@@ -317,7 +411,7 @@ def run_debate_only(args):
                 "model1_decision": p["model1_final"],
                 "model2_decision": p["model2_final"],
             }
-            judge_prompts.append(apply_chat(tokenizer, PROMPT_A34_JUDGE.format(**kw)))
+            judge_prompts.append(apply_chat(tokenizer, tpl_judge.format(**kw), sys_prompt))
 
         for i in tqdm(range(0, len(disagree_indices), batch_size), desc="Stage4-Judge"):
             batch_end = min(i + batch_size, len(disagree_indices))
@@ -326,7 +420,7 @@ def run_debate_only(args):
             for j, (didx, jo) in enumerate(zip(disagree_indices[i:batch_end], j_out)):
                 resp = jo.outputs[0].text.strip()
                 parsed[didx]["judge_response"] = resp
-                parsed[didx]["judge_ans"] = extract_answer(resp)
+                parsed[didx]["judge_ans"] = answer_extractor(resp)
 
     # -------- Build results & write final output --------
     print("\n=== Writing output ===")
@@ -396,7 +490,7 @@ def main():
         description="MAD Baseline: Debate-Only (A.3, no-rule variant)"
     )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to normad_mas.json")
+                        help="Path to dataset JSON (normad_mas.json or culturalBench_mas.json)")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama/qwen) or HF path")
     parser.add_argument("--output_dir", type=str, default=None,
