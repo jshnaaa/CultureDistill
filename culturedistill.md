@@ -1498,8 +1498,6 @@ Cul/
     └── CulturalBench-Easy.csv      # 原始 CulturalBench 数据集
 ```
 
-标注 ★ 的文件为 CAMAD 管线核心代码。
-
 ### 7.2 Pipeline 入口与工具
 
 | 文件 | 功能 |
@@ -1548,7 +1546,7 @@ python Cul/run_camad_pipeline.py \
 
 ## 8. 消融实验设计
 
-### 8.1 核心蒸馏方案对比
+### 8.1 蒸馏方案对比
 
 | 实验组 | 训练方式 | 预期排序 |
 |--------|---------|---------|
@@ -1558,14 +1556,4 @@ python Cul/run_camad_pipeline.py \
 | RL-only | GRPO from base | 中高 |
 | SFT + RL (CAMA-D full) | Stage 1 → Stage 3 | 最高 |
 | MAS Oracle | 多智能体系统直接推理 | 上界 |
-
-### 8.2 评估指标
-
-| 指标 | 说明 |
-|------|------|
-| val_accuracy | 预测答案与 gold label 匹配率 |
-| Cultural Sensitivity Score | 同一问题不同文化下答案分布 KL 散度均值 |
-| Reasoning Coherence | LLM Judge 评估推理路径与答案的一致性 |
-| Cultural Grounding | 推理路径中目标文化具体价值观关键词出现率 |
-| Cultural Boundary Awareness | 模型是否能正确区分相邻文化（如越南 vs 中国） |
 
