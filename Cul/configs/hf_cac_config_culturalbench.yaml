@@ -93,12 +93,12 @@ culture_roles:
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Western & Anglo-Saxon cultural background.
       The target culture does NOT belong to your primary expertise area.
-      YOUR TASK: Provide your OWN INDEPENDENT answer based on your knowledge.
-      LOGIC STEP: First restate what the question is asking. If the question contains negations
-      ("unusual", "NOT", "never", "least"), identify the OUTLIER that does not fit.
-      You may consider the Guardian's perspective, but if your reasoning leads to a different
-      answer, STATE YOUR OWN ANSWER with confidence. Do not simply defer.
-      Evaluate ALL four options. Do NOT default to any position.
+      The HOST-CULTURE GUARDIAN has primary authority on the target culture.
+      YOUR TASK: Verify the Guardian's answer by checking question structure.
+      LOGIC STEP: If the question contains negations ("unusual", "NOT", "never", "least"),
+      verify the Guardian selected the OUTLIER that does not fit the culture.
+      If the Guardian's answer is logically consistent with what the question asks, AGREE.
+      Only provide a different answer if the Guardian clearly misread the question structure.
       Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "Latin American Culture"
@@ -136,12 +136,12 @@ culture_roles:
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Latin American cultural background.
       The target culture does NOT belong to your primary expertise area.
-      YOUR TASK: Provide your OWN INDEPENDENT answer based on your knowledge.
-      LOGIC STEP: First restate what the question is asking. If the question contains negations
-      ("unusual", "NOT", "never", "least"), identify the OUTLIER that does not fit.
-      You may consider the Guardian's perspective, but if your reasoning leads to a different
-      answer, STATE YOUR OWN ANSWER with confidence. Do not simply defer.
-      Evaluate ALL four options. Do NOT default to any position.
+      The HOST-CULTURE GUARDIAN has primary authority on the target culture.
+      YOUR TASK: Verify the Guardian's answer by checking question structure.
+      LOGIC STEP: If the question contains negations ("unusual", "NOT", "never", "least"),
+      verify the Guardian selected the OUTLIER that does not fit the culture.
+      If the Guardian's answer is logically consistent with what the question asks, AGREE.
+      Only provide a different answer if the Guardian clearly misread the question structure.
       Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "Sub-Saharan African Culture"
@@ -186,12 +186,12 @@ culture_roles:
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Sub-Saharan African cultural background.
       The target culture does NOT belong to your primary expertise area.
-      YOUR TASK: Provide your OWN INDEPENDENT answer based on your knowledge.
-      LOGIC STEP: First restate what the question is asking. If the question contains negations
-      ("unusual", "NOT", "never", "least"), identify the OUTLIER that does not fit.
-      You may consider the Guardian's perspective, but if your reasoning leads to a different
-      answer, STATE YOUR OWN ANSWER with confidence. Do not simply defer.
-      Evaluate ALL four options. Do NOT default to any position.
+      The HOST-CULTURE GUARDIAN has primary authority on the target culture.
+      YOUR TASK: Verify the Guardian's answer by checking question structure.
+      LOGIC STEP: If the question contains negations ("unusual", "NOT", "never", "least"),
+      verify the Guardian selected the OUTLIER that does not fit the culture.
+      If the Guardian's answer is logically consistent with what the question asks, AGREE.
+      Only provide a different answer if the Guardian clearly misread the question structure.
       Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "East-Asian Culture"
@@ -215,12 +215,12 @@ culture_roles:
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from East-Asian cultural background.
       The target culture does NOT belong to your primary expertise area.
-      YOUR TASK: Provide your OWN INDEPENDENT answer based on your knowledge.
-      LOGIC STEP: First restate what the question is asking. If the question contains negations
-      ("unusual", "NOT", "never", "least"), identify the OUTLIER that does not fit.
-      You may consider the Guardian's perspective, but if your reasoning leads to a different
-      answer, STATE YOUR OWN ANSWER with confidence. Do not simply defer.
-      Evaluate ALL four options. Do NOT default to any position.
+      The HOST-CULTURE GUARDIAN has primary authority on the target culture.
+      YOUR TASK: Verify the Guardian's answer by checking question structure.
+      LOGIC STEP: If the question contains negations ("unusual", "NOT", "never", "least"),
+      verify the Guardian selected the OUTLIER that does not fit the culture.
+      If the Guardian's answer is logically consistent with what the question asks, AGREE.
+      Only provide a different answer if the Guardian clearly misread the question structure.
       Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "Islamic & Middle-Eastern Culture"
@@ -261,12 +261,12 @@ culture_roles:
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Islamic & Middle-Eastern cultural background.
       The target culture does NOT belong to your primary expertise area.
-      YOUR TASK: Provide your OWN INDEPENDENT answer based on your knowledge.
-      LOGIC STEP: First restate what the question is asking. If the question contains negations
-      ("unusual", "NOT", "never", "least"), identify the OUTLIER that does not fit.
-      You may consider the Guardian's perspective, but if your reasoning leads to a different
-      answer, STATE YOUR OWN ANSWER with confidence. Do not simply defer.
-      Evaluate ALL four options. Do NOT default to any position.
+      The HOST-CULTURE GUARDIAN has primary authority on the target culture.
+      YOUR TASK: Verify the Guardian's answer by checking question structure.
+      LOGIC STEP: If the question contains negations ("unusual", "NOT", "never", "least"),
+      verify the Guardian selected the OUTLIER that does not fit the culture.
+      If the Guardian's answer is logically consistent with what the question asks, AGREE.
+      Only provide a different answer if the Guardian clearly misread the question structure.
       Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "South & Southeast Asian Culture"
@@ -298,12 +298,12 @@ culture_roles:
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from South & Southeast Asian cultural background.
       The target culture does NOT belong to your primary expertise area.
-      YOUR TASK: Provide your OWN INDEPENDENT answer based on your knowledge.
-      LOGIC STEP: First restate what the question is asking. If the question contains negations
-      ("unusual", "NOT", "never", "least"), identify the OUTLIER that does not fit.
-      You may consider the Guardian's perspective, but if your reasoning leads to a different
-      answer, STATE YOUR OWN ANSWER with confidence. Do not simply defer.
-      Evaluate ALL four options. Do NOT default to any position.
+      The HOST-CULTURE GUARDIAN has primary authority on the target culture.
+      YOUR TASK: Verify the Guardian's answer by checking question structure.
+      LOGIC STEP: If the question contains negations ("unusual", "NOT", "never", "least"),
+      verify the Guardian selected the OUTLIER that does not fit the culture.
+      If the Guardian's answer is logically consistent with what the question asks, AGREE.
+      Only provide a different answer if the Guardian clearly misread the question structure.
       Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
 # ---------------------------------------------------------------------------
@@ -317,32 +317,24 @@ judge:
 
     YOUR TASK — follow these steps IN ORDER:
 
-    STEP 1 - QUESTION COMPREHENSION (do this FIRST, before reading any agent responses):
+    STEP 1 - QUESTION COMPREHENSION:
     Parse the question carefully:
     - Does it contain negations? ("unusual", "NOT", "never done", "not uncommon", "least")
     - If YES: the correct answer is the OUTLIER — the option that DOES NOT fit the culture.
     - "not uncommon" = double negation = COMMON → select what IS common.
     - Restate what the question is looking for in simple terms.
 
-    STEP 2 - INDEPENDENT REASONING:
-    Based ONLY on the question and your own knowledge, form a preliminary answer.
-
-    STEP 3 - EVALUATE AGENT RESPONSES:
-    Now compare your preliminary answer with the agents' answers:
-    a) If Guardian agrees with your preliminary answer: high confidence, select it.
-    b) If Guardian disagrees with your preliminary answer:
-       - Check if Guardian's reasoning is logically consistent with what the question ASKS.
-       - If Guardian misunderstood the question (e.g., selected a common practice when asked
-         for "unusual"), OVERRIDE the Guardian.
-       - If Guardian's reasoning is sound, adopt their answer.
-    c) If multiple Auditors independently converge on a DIFFERENT answer than Guardian:
-       - This is a strong signal. Count how many Auditors agree.
-       - If 3+ Auditors agree on an answer different from Guardian, carefully verify
-         the Guardian's logic before accepting it.
-
-    DECISION RULES:
-    - Guardian has authority on FACTUAL cultural claims, NOT on question interpretation.
-    - If Guardian answered based on a misread question, OVERRIDE regardless of confidence.
-    - All options are equally likely. Do NOT have position bias.
+    STEP 2 - EVALUATE AGENT RESPONSES:
+    Read all agents' responses, then apply DECISION RULES:
+    a) The HOST-CULTURE GUARDIAN has PRIMARY AUTHORITY. Their factual claims about
+       the target culture should be trusted by default.
+    b) DEFAULT: Adopt the Guardian's answer.
+    c) ONLY override the Guardian if:
+       - Guardian clearly misunderstood the QUESTION STRUCTURE (e.g., selected a
+         common practice when asked for "unusual" or "NOT"), OR
+       - Guardian's own reasoning explicitly contradicts their answer choice.
+    d) Auditor disagreement alone is NOT sufficient reason to override.
+       Auditors have less expertise on the target culture.
+    e) All options are equally likely. Do NOT have position bias.
 
     Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation.
