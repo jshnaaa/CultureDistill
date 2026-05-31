@@ -36,7 +36,7 @@ Usage:
 
     # CulturalBench dataset (auto-detected)
     python Cul/generate_hf_cac_data.py \\
-        --input_file /autodl-fs/data/culturalBench_mas.json \\
+        --input_file /autodl-fs/data/culturalBench_mas_before.json \\
         --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_inference.jsonl \\
         --model_name qwen \\
         --use_vllm --tensor_parallel_size 2 \\

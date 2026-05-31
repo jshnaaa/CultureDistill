@@ -508,7 +508,7 @@ def main():
         description="MAD Baseline: Debate-Only (A.3, no-rule variant)"
     )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to dataset JSON (normad_mas.json or culturalBench_mas.json)")
+                        help="Path to dataset JSON (normad_mas.json or culturalBench_mas_before.json)")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama/qwen) or HF path")
     parser.add_argument("--output_dir", type=str, default=None,

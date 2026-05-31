@@ -41,14 +41,14 @@ Usage:
 
     # CulturalBench - quick test
     python OG/og_mar.py \\
-        --input_file /autodl-fs/data/culturalBench_mas.json \\
+        --input_file /autodl-fs/data/culturalBench_mas_before.json \\
         --model_name qwen \\
         --tensor_parallel_size 2 \\
         --max_samples 5
 
     # CulturalBench - full dataset
     python OG/og_mar.py \\
-        --input_file /autodl-fs/data/culturalBench_mas.json \\
+        --input_file /autodl-fs/data/culturalBench_mas_before.json \\
         --model_name qwen \\
         --tensor_parallel_size 2 \\
         --batch_size 256 \\

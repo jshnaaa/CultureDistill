@@ -37,7 +37,7 @@ Usage:
 
     # CulturalBench dataset (auto-detected)
     python MACD/macd_debate.py \
-        --input_file /autodl-fs/data/culturalBench_mas.json \
+        --input_file /autodl-fs/data/culturalBench_mas_before.json \
         --model_name qwen \
         --tensor_parallel_size 2 \
         --max_samples 5
@@ -635,7 +635,7 @@ def main():
         description="MACD Baseline: Multi-Agent Cultural Debate (Tan et al., 2026)"
     )
     parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to input dataset (normad_mas.json or culturalBench_mas.json)")
+                        help="Path to input dataset (normad_mas.json or culturalBench_mas_before.json)")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model alias (llama/qwen) or HuggingFace path")
     parser.add_argument("--output_dir", type=str, default=None,
