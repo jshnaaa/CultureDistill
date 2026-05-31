@@ -87,15 +87,15 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Guardian: lower temperature for authoritative, precise responses
-        # CulturalBench uses even lower temp (0.3) for factual knowledge QA
-        guardian_temp = 0.3 if self.task_type == "culturalbench" else 0.5
+        # CulturalBench uses very low temp (0.1) to minimize answer-number errors
+        guardian_temp = 0.1 if self.task_type == "culturalbench" else 0.5
         self.guardian_sampling = SamplingParams(
             temperature=guardian_temp,
             max_tokens=self.max_tokens,
             stop=stop_tokens,
         )
-        # Auditor: moderate temperature for CulturalBench (factual), higher for others
-        auditor_temp = 0.6 if self.task_type == "culturalbench" else 0.9
+        # Auditor: lower temperature for CulturalBench (factual QA), higher for others
+        auditor_temp = 0.3 if self.task_type == "culturalbench" else 0.9
         self.auditor_sampling = SamplingParams(
             temperature=auditor_temp,
             max_tokens=self.max_tokens,
@@ -165,16 +165,10 @@ class HF_CAC_MAS:
                 f"Answer: <1 or 2>"
             )
         elif self.task_type == "culturalbench":
-            # CulturalBench: factual cultural knowledge QA — direct, concise approach
+            # CulturalBench: simple factual cultural knowledge MCQ
             user = (
-                f"QUESTION ABOUT: {target_country}\n\n"
                 f"{question}\n\n"
-                f"Select the correct answer. Read the question carefully — pay attention "
-                f"to exactly what is being asked (e.g., 'uncommon', 'common', 'not typical', "
-                f"'traditional'). Pick the most factually accurate option.\n\n"
-                f"You MUST select exactly one option: 1, 2, 3, or 4.\n\n"
-                f"Reasoning: <brief, factual reasoning>\n"
-                f"Answer: <1, 2, 3, or 4>"
+                f"Answer: <1/2/3/4>"
             )
         else:
             # NormAD: behavior acceptability (3-way 1/2/3)
@@ -235,20 +229,11 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 user = (
-                    f"QUESTION ABOUT: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"The Host-Culture Expert [{guardian_name}] (specialist in "
-                    f"{target_country}'s culture) answered:\n"
+                    f"The {target_country} expert [{guardian_name}] answered:\n"
                     f"---\n{guardian_response}\n---\n\n"
-                    f"As [{agent_name}], provide your independent assessment:\n"
-                    f"1. Read the question carefully. What exactly is being asked?\n"
-                    f"2. Does the Host-Culture Expert's answer seem factually correct?\n"
-                    f"3. If you agree, state why. If you disagree, provide specific "
-                    f"counter-evidence.\n\n"
-                    f"NOTE: The Host-Culture Expert has deeper knowledge of {target_country}. "
-                    f"Only disagree if you have strong factual reasons to believe they are wrong.\n\n"
-                    f"Reasoning: <your analysis>\n"
-                    f"Answer: {answer_hint}"
+                    f"Do you agree? Give your answer.\n\n"
+                    f"Answer: <1/2/3/4>"
                 )
             else:
                 user = (
@@ -283,13 +268,8 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 user = (
-                    f"QUESTION ABOUT: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"Select the correct answer. Read the question carefully — pay attention "
-                    f"to exactly what is being asked (e.g., 'uncommon', 'common', 'not typical'). "
-                    f"Pick the most factually accurate option based on your knowledge.\n\n"
-                    f"Reasoning: <your independent analysis>\n"
-                    f"Answer: {answer_hint}"
+                    f"Answer: <1/2/3/4>"
                 )
             else:
                 user = (
@@ -342,26 +322,12 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             user = (
-                f"QUESTION ABOUT: {target_country}\n\n"
                 f"{question}\n\n"
-                f"The HOST-CULTURE EXPERT is [{guardian_name}] — their cultural expertise "
-                f"most closely matches {target_country}.\n\n"
-                f"Expert analyses:\n{responses_text}\n"
-                f"Determine the CORRECT answer. Follow this decision process:\n\n"
-                f"STEP 1: Read the question yourself. What exactly is being asked?\n"
-                f"STEP 2: What does the Host-Culture Expert [{guardian_name}] answer? "
-                f"Their cultural knowledge about {target_country} is likely the most reliable.\n"
-                f"STEP 3: Do the other experts AGREE or DISAGREE with the Host-Culture Expert?\n"
-                f"STEP 4: Make your decision:\n"
-                f"  - If the Host-Culture Expert's reasoning is clear and factual, PREFER "
-                f"their answer even if some other experts disagree.\n"
-                f"  - ONLY override the Host-Culture Expert if their reasoning contains "
-                f"a clear factual error OR they misread the question, AND multiple other "
-                f"experts provide specific counter-evidence.\n"
-                f"  - Simple majority vote is NOT sufficient to override the Host-Culture Expert.\n\n"
-                f"IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.\n\n"
-                f"Reasoning: <your step-by-step evaluation>\n"
-                f"Answer: <1, 2, 3, or 4>"
+                f"Expert [{guardian_name}] specializes in {target_country}.\n\n"
+                f"Expert responses:\n{responses_text}\n"
+                f"Based on the above, select the correct answer. "
+                f"Give more weight to [{guardian_name}]'s opinion.\n\n"
+                f"Answer: <1/2/3/4>"
             )
         else:
             user = (
@@ -389,7 +355,7 @@ class HF_CAC_MAS:
     # Answer extraction
     # ------------------------------------------------------------------
 
-    def _extract_answer(self, text: str) -> str | None:
+    def _extract_answer(self, text: str, question: str = "") -> str | None:
         """Extract answer from response text. Respects task_type for valid range."""
         if self.task_type == "cultureatlas":
             max_choice = 2
@@ -636,10 +602,10 @@ class HF_CAC_MAS:
             judge_output = self.llm.generate([judge_prompt], self.judge_sampling)
             judge_response = judge_output[0].outputs[0].text.strip()
 
-            judge_answer = self._extract_answer(judge_response)
+            judge_answer = self._extract_answer(judge_response, question)
             if judge_answer is None:
                 # Last resort: if Judge ALSO fails to parse, use weighted vote
-                all_answers = [self._extract_answer(r) for r in agent_responses]
+                all_answers = [self._extract_answer(r, question) for r in agent_responses]
                 fallback = self._majority_vote_with_guardian_veto(
                     all_answers, guardian_idx
                 )
@@ -760,12 +726,12 @@ class HF_CAC_MAS:
 
             for si in range(n):
                 judge_resp = judge_outputs[si].outputs[0].text.strip()
-                judge_answer = self._extract_answer(judge_resp)
+                judge_answer = self._extract_answer(judge_resp, questions[si])
 
                 if judge_answer is None:
                     # Last resort: if Judge ALSO fails to parse
                     all_answers = [
-                        self._extract_answer(agent_responses[si][ai])
+                        self._extract_answer(agent_responses[si][ai], questions[si])
                         for ai in range(self.num_agents)
                     ]
                     fallback = self._majority_vote_with_guardian_veto(

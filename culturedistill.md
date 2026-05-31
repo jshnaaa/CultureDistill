@@ -122,7 +122,6 @@ shutdown
 |------|--------|------|
 | `--negotiation_rounds` | 1 | 协商轮次。0=独立生成（Auditor 不看 Guardian），1=标准协商 |
 | `--include_judge` | true | 是否包含 Judge 裁决。false 时仅输出 Solution 1-6 |
-| `--model_name` | — | `llama`/`qwen`/完整路径 |
 | `--max_samples` | 0 | 0=全量 |
 | `--config_path` | None | 手动指定配置文件路径。不指定时根据数据集自动检测 |
 
@@ -135,13 +134,6 @@ python Cul/split_data.py \
     --output /autodl-fs/data/qwen/normad_splits.pkl \
     --seed 42
 ```
-
-| 参数 | 含义 |
-|------|------|
-| `--input` | HF-CAC 推理数据 JSONL |
-| `--output` | 输出 pkl 文件路径（包含 train/val/test 三个 key）|
-| `--seed` | 随机种子（默认 42，确保可复现）|
-
 
 ### 2.5 输出数据格式
 
@@ -230,22 +222,12 @@ python MAD/self_reflect_debate.py \
     --max_samples 0 \
     --temperature 0.7 \
     --max_tokens 512
-
-# Self-Reflect+Debate Baseline - CulturalBench（Qwen 基座）
-python MAD/self_reflect_debate.py \
-    --input_file /autodl-fs/data/culturalBench_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.7 \
-    --max_tokens 512
 ```
 
 **参数说明**：
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--input_file` | 数据集路径（自动检测 normad/culturalBench） | 必填 |
 | `--output_dir` | 输出目录（默认 /autodl-fs/data/mad） | None |
 | `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
 | `--batch_size` | 每批处理样本数 | 8 |
@@ -334,7 +316,6 @@ python MACD/macd_debate.py \
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--tensor_parallel_size` | vLLM 张量并行数（推荐双卡设为 2） | 2 |
 | `--max_samples` | 最大处理样本数（0=全部） | 0 |
 | `--temperature` | 采样温度（较低值使判断更果断） | 0.3 |
 | `--max_tokens` | Agent 每次生成最大 token 数 | 200 |
@@ -433,7 +414,6 @@ python OG/og_mar.py \
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
 | `--batch_size` | 每批处理样本数 | 8 |
 | `--max_samples` | 最大处理样本数（0=全部） | 0 |
 | `--temperature` | 采样温度（论文使用 0 保证稳定行为） | 0.0 |

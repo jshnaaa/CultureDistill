@@ -385,7 +385,8 @@ def detect_task_type_from_output(data: list) -> str:
     return "normad"
 
 
-def extract_judge_answer(response_text: str, max_choice: int = 3):
+def extract_judge_answer(response_text: str, max_choice: int = 3,
+                         question: str = ""):
     """Extract Judge's final answer from response text."""
     judge_match = re.search(
         r'===== Solution \d+ \[JUDGE.*?\] =====\n(.*?)$',
@@ -402,7 +403,8 @@ def extract_judge_answer(response_text: str, max_choice: int = 3):
     return digits[-1] if digits else None
 
 
-def extract_guardian_answer(response_text: str, max_choice: int = 3):
+def extract_guardian_answer(response_text: str, max_choice: int = 3,
+                            question: str = ""):
     """Extract Guardian's answer from response text."""
     guardian_match = re.search(
         r'===== Solution \d+ \[GUARDIAN\] =====\n(.*?)(?=\n===== Solution)',
@@ -454,9 +456,10 @@ def compute_accuracy(output_file: str) -> dict:
             continue
         country = d.get("country", "unknown")
         response = d.get("response", "")
+        question = d.get("query", "")
 
-        judge_ans = extract_judge_answer(response, max_choice)
-        guardian_ans = extract_guardian_answer(response, max_choice)
+        judge_ans = extract_judge_answer(response, max_choice, question)
+        guardian_ans = extract_guardian_answer(response, max_choice, question)
 
         if judge_ans:
             judge_total += 1
@@ -494,7 +497,8 @@ def compute_accuracy(output_file: str) -> dict:
     # GT and prediction distributions
     gt_dist = dict(Counter(d.get("gt", "").strip() for d in data if d.get("gt")))
     judge_ans_dist = dict(Counter(
-        extract_judge_answer(d.get("response", ""), max_choice) for d in data
+        extract_judge_answer(d.get("response", ""), max_choice, d.get("query", ""))
+        for d in data
     ))
 
     return {
