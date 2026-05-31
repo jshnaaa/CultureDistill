@@ -86,10 +86,13 @@ PROMPT_ROUND1_NORMAD = (
     "Question: Is the action in the following scenario socially acceptable in {country}?\n\n"
     "Cultural background of {country}:\n{cultural_bg}\n\n"
     "Scenario: {scenario}\n\n"
-    "Based on the cultural background above, determine whether the action is "
-    "acceptable (Yes), unacceptable (No), or context-dependent/ambiguous (Neither) "
-    "in {country}. Answer 'Neither' if the action could be acceptable or unacceptable "
-    "depending on specific circumstances.\n"
+    "Based on the cultural background above, judge whether the action is socially "
+    "acceptable in {country}.\n"
+    "- Answer 'Yes' if the action aligns with the cultural norms described above.\n"
+    "- Answer 'No' if the action violates or conflicts with the cultural norms described above.\n"
+    "- Answer 'Neither' only if the cultural background provides no relevant guidance "
+    "and the acceptability is genuinely indeterminate.\n\n"
+    "Be decisive. If the cultural background suggests the action is inappropriate, answer 'No'.\n"
     "Explain your reasoning in one to two sentences.\n"
     "Answer (Yes/No/Neither):"
 )
@@ -104,8 +107,9 @@ PROMPT_ROUND2_NORMAD = (
     "Previous responses of people from other culture background:\n"
     "{other_responses}\n\n"
     "Based on other perspectives and **{scgrd}** strategy, refine your answer. "
-    "Consider the cultural background information carefully. "
-    "Answer 'Neither' if the evidence is mixed or context-dependent.\n"
+    "Focus on what the cultural background of {country} specifically indicates about "
+    "this action. If the action clearly violates cultural norms, answer 'No' even if "
+    "some agents disagree.\n"
     "Explain your reasoning in one to two sentences.\n"
     "Answer (Yes/No/Neither):"
 )
@@ -118,11 +122,12 @@ PROMPT_SUMMARY_NORMAD = (
     "{agent_responses}\n\n"
     "Cultural background of {country}:\n{cultural_bg}\n\n"
     "Scenario: {scenario}\n\n"
-    "Based on the cultural background and the debate above, determine whether "
-    "the action is socially acceptable in {country}.\n"
-    "- Answer 'Yes' if clearly acceptable\n"
-    "- Answer 'No' if clearly unacceptable\n"
-    "- Answer 'Neither' if ambiguous or context-dependent\n\n"
+    "Based on the cultural background and the debate above, provide the final "
+    "judgment on whether the action is socially acceptable in {country}.\n"
+    "- Answer 'Yes' if the action is acceptable according to the cultural norms.\n"
+    "- Answer 'No' if the action violates or conflicts with the cultural norms.\n"
+    "- Answer 'Neither' only if there is genuinely no cultural norm that applies.\n\n"
+    "Prioritize the cultural background information over agent opinions when they conflict.\n"
     "Answer (Yes/No/Neither):"
 )
 
@@ -497,9 +502,25 @@ def run_macd(args):
         summary_resp = summary_outputs[idx]
         summary_ans = extract_fn(summary_resp)
 
-        # Decision: vote primary, summary fallback
-        # (vote is more stable as it aggregates 5 agents directly)
-        if vote_ans is not None:
+        # Decision logic:
+        # - Strong consensus (>=4 agents agree): use vote
+        # - Vote is Neither but summary gives Yes/No: prefer summary
+        #   (summary has global view of cultural background and can be more decisive)
+        # - Otherwise: use vote, fallback to summary
+        vote_counts = Counter(v for v in r2_answers.values() if v is not None)
+        vote_max_count = vote_counts.most_common(1)[0][1] if vote_counts else 0
+
+        if vote_ans is not None and vote_max_count >= 4:
+            # Strong consensus - trust the vote
+            final_ans = vote_ans
+            vote_used_count += 1
+        elif (vote_ans == "3" and summary_ans in ("1", "2")
+              and dataset_type == DATASET_NORMAD):
+            # Vote says Neither but summary is decisive (Yes/No) -
+            # prefer summary as it weighs cultural background more carefully
+            final_ans = summary_ans
+            summary_used_count += 1
+        elif vote_ans is not None:
             final_ans = vote_ans
             vote_used_count += 1
         elif summary_ans is not None:

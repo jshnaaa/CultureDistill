@@ -205,12 +205,17 @@ def extract_answer(text):
     if m:
         return ANSWER_MAP.get(m.group(1))
 
-    # Pattern 6: find first word boundary match, priority: neither > no > yes
-    for word in ["neither", "no", "yes"]:
+    # Pattern 6: find last occurrence of any answer word (last mention = final answer)
+    last_pos = -1
+    last_word = None
+    for word in ["yes", "no", "neither"]:
         pattern = r'\b' + word + r'\b'
         matches = list(re.finditer(pattern, tl))
-        if matches:
-            return ANSWER_MAP[word]
+        if matches and matches[-1].start() > last_pos:
+            last_pos = matches[-1].start()
+            last_word = word
+    if last_word:
+        return ANSWER_MAP[last_word]
 
     return None
 
