@@ -95,10 +95,17 @@ Step 4: Judge — 带权威权重裁决
 ### 2.4 运行命令
 
 ```bash
-# 全量生成（NormAD 数据集，Qwen）— 自动检测为 normad 类型，使用 hf_cac_config.yaml
 cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
+python Cul/generate_hf_cac_data.py \
+      --input_file /autodl-fs/data/culturalBench_mas.json \
+      --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_inference.jsonl \
+      --model_name qwen \
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 0 --negotiation_rounds 1 \
+      --include_judge true
+      
 python Cul/generate_hf_cac_data.py \
       --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
@@ -107,16 +114,6 @@ python Cul/generate_hf_cac_data.py \
       --max_samples 0 --negotiation_rounds 1 \
       --include_judge true
 shutdown
-```
-
-```bash
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/culturalBench_mas.json \
-      --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_inference.jsonl \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true
 ```
 
 **参数说明：**
@@ -188,7 +185,7 @@ python Cul/generate_culture_data.py \
 
 #### 2.6.1 MAD 
 
-**方法简介**：MAD 是 Ki et al. (2024) 提出的多智能体辩论框架，通过两个 LLM Agent 对文化场景进行辩论来达成更准确的文化对齐判断。论文提出了两种变体：
+**简介**：MAD 是 Ki et al. (2024) 提出的多智能体辩论框架，通过两个 LLM Agent 对文化场景进行辩论来达成更准确的文化对齐判断。论文提出了两种变体：
 
 1. **Debate-Only**（A.3）：两个 Agent 独立给出初始判断 → 交换反馈 → 基于反馈给出最终判断 → 由 Judge LLM 仲裁分歧
 2. **Self-Reflect+Debate**（A.4）：两个 Agent 独立给出初始判断 → 各自选择自我反思(A)或辩论(B) → 执行所选动作 → 基于反馈给出最终判断 → Judge 仲裁
@@ -300,7 +297,7 @@ python MAD/self_reflect_debate.py \
 
 #### 2.6.2 MACD (Multi-Agent Cultural Debate)
 
-**方法简介**：MACD 是 Tan et al. (2026) 提出的训练无关多智能体文化辩论框架，通过赋予 Agent 显式的文化身份（而非功能性角色）来缓解 LLM 的文化偏见。核心思想是：
+**简介**：MACD 是 Tan et al. (2026) 提出的训练无关多智能体文化辩论框架，通过赋予 Agent 显式的文化身份（而非功能性角色）来缓解 LLM 的文化偏见。核心思想是：
 
 1. **文化角色设计**：分配 5 个 Agent 分别代表 Western、East Asian、African、Middle Eastern、South Asian 文化视角，每个 Agent 配备详细的人物画像（职业、教育、生活经历）和文化价值观
 2. **多轮辩论（SCGRD 策略）**：Agent 先从各自文化视角独立回答，然后进行"求同存异"（Seeking Common Ground while Reserving Differences）策略的辩论，在共识中保留文化多样性
@@ -320,16 +317,14 @@ MACD/
 **运行命令**：
 
 ```bash
-# MACD Baseline（Qwen 基座，完整数据集，双卡并行）
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/normad_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0
 
-# 快速测试（5 条样本）
 python MACD/macd_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 5
@@ -398,7 +393,7 @@ python MACD/macd_debate.py \
 
 #### 2.6.3 OG-MAR (Ontology-Guided Multi-Agent Reasoning)
 
-**方法简介**：OG-MAR 是 Seo et al. (2026) 提出的本体引导多智能体推理框架，通过构建全球文化本体（ontology）来指导多智能体的文化对齐推理。核心创新：
+**简介**：OG-MAR 是 Seo et al. (2026) 提出的本体引导多智能体推理框架，通过构建全球文化本体（ontology）来指导多智能体的文化对齐推理。核心创新：
 
 1. **文化本体构建**：基于 World Values Survey (WVS) 的 12 个顶层价值域和 76 个细粒度类别，通过 Competency Questions (CQs) 引导 LLM 生成类别间的方向性关系（ontology triples），再经人工专家验证，最终构建包含 76 个类和 150 对 object properties 的文化价值本体。
 2. **人口统计检索**：使用密集嵌入检索与目标人群特征最相似的 K 个个体，获取其结构化价值摘要作为 persona 的依据。
@@ -419,7 +414,6 @@ OG/
 **运行命令**：
 
 ```bash
-# OG-MAR Baseline（Qwen 基座，完整数据集，论文默认参数）
 python OG/og_mar.py \
     --input_file /autodl-fs/data/normad_mas.json \
     --model_name qwen \
@@ -428,7 +422,6 @@ python OG/og_mar.py \
     --max_samples 0 \
     --temperature 0.0
 
-# CulturalBench
 python OG/og_mar.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
     --model_name qwen \

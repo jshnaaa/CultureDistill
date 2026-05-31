@@ -118,6 +118,49 @@ NORMAD_OPTIONS_TEXT = (
 
 
 # ===================================================================
+# CulturalBench Persona Agent Prompt (adapted from Table 8)
+# Minimal change: allows persona to integrate cultural factual knowledge
+# alongside the ontology context, since CulturalBench is factual QA.
+# ===================================================================
+
+CULTURALBENCH_PERSONA_PROMPT = """\
+Task:
+- You are Persona Agent {persona_id}.
+- Given the question and options below, select exactly one option that this persona would choose, based on the persona's cultural knowledge and worldview.
+- Use the provided persona-defining inputs: demographics, value profiles, and ontology context as grounding references.
+- You may also draw on widely known cultural facts about the country/region relevant to the question.
+- Prohibited: unstated assumptions about the persona's personal preferences, or fabricating demographics/values/edges not provided.
+
+Inputs:
+- [DEMOGRAPHICS]: {demographics_text}
+- [VALUE PROFILES]: {value_summaries_text}
+- [ONTOLOGY CONTEXT]: {hyper_nodes_text}
+- [RESPONSE OPTIONS]: {options_text}
+- [USER QUESTION]: {question}
+
+Strict Rules:
+- Stay in persona; integrate the provided inputs with cultural common knowledge of the target country.
+- Integrate all value summaries and apply all ontology relations explicitly (e.g., support/conflict/amplification).
+- Cite at least 2 demographic attributes; explain internal alignment, at least one conflict, and how it is resolved.
+- Choose exactly one option; output only one valid JSON object and nothing else.
+- Your chosen_answer MUST start with the option number followed by a period (e.g., "1. ...", "2. ...", "3. ...", "4. ...").
+- reasoning must be >= 100 words and explicitly cover value/ontology integration and the most influential demographics.
+
+Output Format (JSON only):
+{{
+  "persona_id": "{persona_id}",
+  "chosen_answer": "<option_number>. <option_text>",
+  "reasoning": "...",
+  "alignment_factors": {{
+    "demographic": "...",
+    "value_summaries_used": [],
+    "hyper_edges_used": [],
+    "integration_rationale": "..."
+  }}
+}}"""
+
+
+# ===================================================================
 # Chat template helper
 # ===================================================================
 
@@ -251,35 +294,160 @@ def infer_axis_culturalbench(input_text: str, country: str) -> str:
 # Unified answer extraction (supports both 1-3 and 1-4)
 # ===================================================================
 
-def extract_answer_unified(text: str, dataset_type: str) -> str:
+def _find_outermost_json(text: str) -> dict:
+    """
+    Find and parse the outermost JSON object in text, handling nested braces.
+    Returns parsed dict or None.
+    """
+    # Find the first '{' and then match braces to find the complete object
+    start = text.find('{')
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i+1])
+                except json.JSONDecodeError:
+                    # Try next '{' if this one failed
+                    next_start = text.find('{', start + 1)
+                    if next_start != -1:
+                        return _find_outermost_json(text[next_start:])
+                    return None
+    return None
+
+
+def _match_text_to_option(answer_text: str, options_list: list) -> str:
+    """
+    Match a text-only answer back to its option number by fuzzy text comparison.
+    options_list: list of option strings like ["1. Cycle everywhere", "2. Using deodorant", ...]
+    Returns option number as string ("1"-"4") or None.
+    """
+    if not answer_text or not options_list:
+        return None
+
+    answer_lower = answer_text.lower().strip().rstrip('.')
+
+    best_match = None
+    best_score = 0
+
+    for opt in options_list:
+        opt_stripped = opt.strip()
+        # Extract option number and text: "1. text" or "1) text"
+        opt_match = re.match(r'^(\d)[\.\)]\s*(.*)', opt_stripped)
+        if not opt_match:
+            continue
+        opt_num = opt_match.group(1)
+        opt_text = opt_match.group(2).lower().strip().rstrip('.')
+
+        # Exact match
+        if answer_lower == opt_text:
+            return opt_num
+
+        # Containment match (answer contains option text or vice versa)
+        if opt_text in answer_lower or answer_lower in opt_text:
+            score = len(opt_text) if opt_text in answer_lower else len(answer_lower)
+            if score > best_score:
+                best_score = score
+                best_match = opt_num
+            continue
+
+        # Prefix match (first N chars)
+        min_len = min(len(opt_text), len(answer_lower), 25)
+        if min_len > 5 and opt_text[:min_len] == answer_lower[:min_len]:
+            if min_len > best_score:
+                best_score = min_len
+                best_match = opt_num
+
+    return best_match
+
+
+def extract_answer_unified(text: str, dataset_type: str, options_list: list = None) -> str:
     """
     Extract answer from model output.
     For NormAD: valid answers are 1/2/3.
     For CulturalBench: valid answers are 1/2/3/4.
+
+    Args:
+        text: Raw model output text
+        dataset_type: "normad" or "culturalbench"
+        options_list: List of option strings (e.g., ["1. Cycle everywhere", ...])
+                     Used for text-matching when the model outputs text without a number prefix.
+
+    Strategy:
+    1. Parse the outermost JSON object (handles nested braces like alignment_factors)
+    2. Look for "final_answer" or "chosen_answer" field
+    3. Extract leading digit from the answer value
+    4. If no digit, match answer text to options_list
+    5. Fallback: regex-based field extraction without full JSON parse
+    6. Fallback: keyword patterns in text
     """
     if not text:
         return None
 
     valid_set = "123" if dataset_type == DATASET_NORMAD else "1234"
 
-    # Try to parse JSON first
-    try:
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            obj = json.loads(json_match.group())
-            answer_val = obj.get("final_answer", obj.get("chosen_answer", ""))
-            if answer_val:
-                num_match = re.match(r'(\d)', str(answer_val).strip())
-                if num_match and num_match.group(1) in valid_set:
-                    return num_match.group(1)
-    except (json.JSONDecodeError, AttributeError):
+    # --- Strategy 1: Parse outermost JSON (handles nested objects) ---
+    obj = _find_outermost_json(text)
+    if obj:
+        # Look for the answer fields
+        answer_val = obj.get("final_answer") or obj.get("chosen_answer") or ""
+        if answer_val:
+            answer_str = str(answer_val).strip()
+            # Extract the leading digit from "4. Talking loudly..." or "2: Poached"
+            num_match = re.match(r'(\d)', answer_str)
+            if num_match and num_match.group(1) in valid_set:
+                return num_match.group(1)
+
+            # Text-only answer: match against options_list
+            if options_list:
+                matched = _match_text_to_option(answer_str, options_list)
+                if matched:
+                    return matched
+
+    # --- Strategy 2: Regex-based field extraction (no full JSON parse needed) ---
+    # Directly search for "chosen_answer": "N. ..." or "final_answer": "N. ..."
+    field_pattern = r'"(?:final_answer|chosen_answer)"\s*:\s*"(\d)'
+    field_match = re.search(field_pattern, text)
+    if field_match and field_match.group(1) in valid_set:
+        return field_match.group(1)
+
+    # Also try: "chosen_answer": N (without quotes, just a number)
+    field_pattern2 = r'"(?:final_answer|chosen_answer)"\s*:\s*(\d)'
+    field_match2 = re.search(field_pattern2, text)
+    if field_match2 and field_match2.group(1) in valid_set:
+        return field_match2.group(1)
+
+    # --- Strategy 2b: If JSON parsing found a text answer but no options_list was given ---
+    # Extract the text from the field and try text matching with options in the prompt
+    if obj and options_list:
+        # Already tried above, skip
         pass
 
-    # Fallback: look for answer patterns in text
+    # --- Strategy 3: Look for explicit answer patterns ---
     text_lower = text.lower().strip()
 
-    # Check for explicit number answers
-    pattern = r'(?:answer|choice|option)[:\s]*([' + valid_set + r'])'
+    pattern = r'(?:answer|choice|option)\s*(?:is|:)?\s*([' + valid_set + r'])'
     num_match = re.search(pattern, text_lower)
     if num_match:
         return num_match.group(1)
@@ -294,10 +462,26 @@ def extract_answer_unified(text: str, dataset_type: str) -> str:
         if re.search(r'\b(yes|acceptable)\b', text_lower[:200]):
             return "1"
 
-    # Last resort: look for any valid digit near the start
-    first_digit = re.search(r'[' + valid_set + r']', text[:80])
-    if first_digit:
-        return first_digit.group(0)
+    # --- Strategy 4: Last resort - look for digit NOT in persona_id context ---
+    # Find content after any "chosen_answer" or "final_answer" mention
+    answer_region = re.search(r'(?:chosen_answer|final_answer)["\s:]+(.{1,80})', text)
+    if answer_region:
+        region_text = answer_region.group(1)
+        # First try digit
+        digit_match = re.search(r'[' + valid_set + r']', region_text)
+        if digit_match:
+            return digit_match.group(0)
+        # Try text matching on the region content
+        if options_list:
+            matched = _match_text_to_option(region_text.strip('" '), options_list)
+            if matched:
+                return matched
+
+    # Absolute last resort: skip first 200 chars (avoids persona_id) and find digit
+    if len(text) > 200:
+        late_digit = re.search(r'[' + valid_set + r']', text[200:])
+        if late_digit:
+            return late_digit.group(0)
 
     return None
 
@@ -392,6 +576,7 @@ def run_og_mar(args):
                 "scenario": "",
                 "axis": axis,
                 "options_text": options_text,
+                "options_list": options_list,
                 "question_stem": question_stem,
             })
 
@@ -481,7 +666,14 @@ def run_og_mar(args):
         options_text = p["options_text"]
 
         for k in range(K):
-            user_content = PERSONA_AGENT_PROMPT.format(
+            # Use CulturalBench-specific prompt (allows cultural knowledge)
+            # or standard NormAD prompt (strict ontology-only)
+            prompt_template = (
+                CULTURALBENCH_PERSONA_PROMPT
+                if dataset_type == DATASET_CULTURALBENCH
+                else PERSONA_AGENT_PROMPT
+            )
+            user_content = prompt_template.format(
                 persona_id=k + 1,
                 demographics_text=all_demographics[idx][k],
                 value_summaries_text=all_value_summaries[idx][k],
@@ -521,9 +713,10 @@ def run_og_mar(args):
     # First, extract persona answers for vote summary
     persona_answers = [[None] * K for _ in range(n)]
     for idx in range(n):
+        opts = parsed[idx].get("options_list") if dataset_type == DATASET_CULTURALBENCH else None
         for k in range(K):
             persona_answers[idx][k] = extract_answer_unified(
-                persona_outputs[idx][k], dataset_type
+                persona_outputs[idx][k], dataset_type, options_list=opts
             )
 
     # Build judgment prompts
@@ -580,7 +773,8 @@ def run_og_mar(args):
     for idx, p in enumerate(parsed):
         # Extract judgment answer
         judge_resp = judgment_outputs[idx]
-        judge_ans = extract_answer_unified(judge_resp, dataset_type)
+        opts = p.get("options_list") if dataset_type == DATASET_CULTURALBENCH else None
+        judge_ans = extract_answer_unified(judge_resp, dataset_type, options_list=opts)
 
         # If judgment extraction fails, fall back to majority vote
         if judge_ans is None:

@@ -422,36 +422,78 @@ def extract_scenario(input_text: str) -> str:
     return parts[-1].strip() if parts else ""
 
 
+def _find_outermost_json_common(text: str) -> dict:
+    """
+    Find and parse the outermost JSON object in text, handling nested braces.
+    Returns parsed dict or None.
+    """
+    start = text.find('{')
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i+1])
+                except json.JSONDecodeError:
+                    next_start = text.find('{', start + 1)
+                    if next_start != -1:
+                        return _find_outermost_json_common(text[next_start:])
+                    return None
+    return None
+
+
 def extract_answer(text: str) -> str:
     """
     Extract answer (1/2/3) from model output.
-    Handles both JSON format and free-text format.
+    Handles both JSON format (including nested objects) and free-text format.
     """
     if not text:
         return None
 
-    # Try to parse JSON first
-    try:
-        # Find JSON in text
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            obj = json.loads(json_match.group())
-            # Look for final_answer or chosen_answer
-            answer_val = obj.get("final_answer", obj.get("chosen_answer", ""))
-            if answer_val:
-                # Extract the numeric part
-                num_match = re.match(r'(\d)', str(answer_val).strip())
-                if num_match:
-                    return num_match.group(1)
-    except (json.JSONDecodeError, AttributeError):
-        pass
+    valid_set = "123"
 
-    # Fallback: look for answer patterns in text
+    # Strategy 1: Parse outermost JSON (handles nested objects like alignment_factors)
+    obj = _find_outermost_json_common(text)
+    if obj:
+        answer_val = obj.get("final_answer") or obj.get("chosen_answer") or ""
+        if answer_val:
+            answer_str = str(answer_val).strip()
+            num_match = re.match(r'(\d)', answer_str)
+            if num_match and num_match.group(1) in valid_set:
+                return num_match.group(1)
+
+    # Strategy 2: Regex-based field extraction
+    field_pattern = r'"(?:final_answer|chosen_answer)"\s*:\s*"?(\d)'
+    field_match = re.search(field_pattern, text)
+    if field_match and field_match.group(1) in valid_set:
+        return field_match.group(1)
+
+    # Strategy 3: Fallback keyword patterns
     text_lower = text.lower().strip()
 
-    # Check for explicit number answers
-    num_match = re.search(r'(?:answer|choice|option)[:\s]*(\d)', text_lower)
-    if num_match:
+    num_match = re.search(r'(?:answer|choice|option)\s*(?:is|:)?\s*(\d)', text_lower)
+    if num_match and num_match.group(1) in valid_set:
         return num_match.group(1)
 
     # Check for yes/no/neither keywords (order: neither > unacceptable > acceptable)
@@ -462,10 +504,18 @@ def extract_answer(text: str) -> str:
     if re.search(r'\b(yes|acceptable)\b', text_lower[:200]):
         return "1"
 
-    # Last resort: look for any digit 1-3
-    first_digit = re.search(r'[123]', text[:50])
-    if first_digit:
-        return first_digit.group(0)
+    # Strategy 4: Last resort - skip persona_id region
+    answer_region = re.search(r'(?:chosen_answer|final_answer)["\s:]+(.{1,50})', text)
+    if answer_region:
+        digit_match = re.search(r'[123]', answer_region.group(1))
+        if digit_match:
+            return digit_match.group(0)
+
+    # Skip first 200 chars (avoids persona_id) and find digit
+    if len(text) > 200:
+        late_digit = re.search(r'[123]', text[200:])
+        if late_digit:
+            return late_digit.group(0)
 
     return None
 
@@ -602,8 +652,10 @@ def format_vote_summary(persona_answers: list) -> str:
 def infer_output_path(input_file: str, model_name: str, output_dir: str = None):
     """
     Infer output file paths following naming convention:
-    {dataset}_OGMAR_{model}.json + _metrics.json
+    {dataset}_OGMAR_{model}_{timestamp}.json + _metrics.json
     """
+    from datetime import datetime
+
     if output_dir is None:
         output_dir = "/autodl-fs/data/ogmar"
 
@@ -623,8 +675,11 @@ def infer_output_path(input_file: str, model_name: str, output_dir: str = None):
             model_tag = alias
             break
 
-    out_json = os.path.join(output_dir, f"{dataset_tag}_OGMAR_{model_tag}.json")
-    out_metrics = os.path.join(output_dir, f"{dataset_tag}_OGMAR_{model_tag}_metrics.json")
+    # Append timestamp to avoid overwriting previous results
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    out_json = os.path.join(output_dir, f"{dataset_tag}_OGMAR_{model_tag}_{timestamp}.json")
+    out_metrics = os.path.join(output_dir, f"{dataset_tag}_OGMAR_{model_tag}_{timestamp}_metrics.json")
     return out_json, out_metrics
 
 
