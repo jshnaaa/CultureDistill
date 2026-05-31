@@ -1,0 +1,213 @@
+{
+  "total_samples": 50,
+  "task_type": "culturalbench",
+  "judge_total": 50,
+  "judge_correct": 39,
+  "judge_accuracy": 0.78,
+  "guardian_total": 49,
+  "guardian_correct": 38,
+  "guardian_accuracy": 0.7755102040816326,
+  "gt_distribution": {
+    "1": 11,
+    "4": 15,
+    "2": 9,
+    "3": 15
+  },
+  "judge_answer_distribution": {
+    "3": 17,
+    "4": 13,
+    "2": 13,
+    "1": 7
+  },
+  "per_country": {
+    "Bangladesh": {
+      "total": 2,
+      "judge_correct": 2,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 2,
+      "guardian_accuracy": 1.0
+    },
+    "Chile": {
+      "total": 1,
+      "judge_correct": 0,
+      "judge_accuracy": 0.0,
+      "guardian_correct": 0,
+      "guardian_accuracy": 0.0
+    },
+    "Czech Republic": {
+      "total": 2,
+      "judge_correct": 2,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 0.5
+    },
+    "Egypt": {
+      "total": 1,
+      "judge_correct": 1,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 1.0
+    },
+    "France": {
+      "total": 2,
+      "judge_correct": 2,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 2,
+      "guardian_accuracy": 1.0
+    },
+    "India": {
+      "total": 3,
+      "judge_correct": 3,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 3,
+      "guardian_accuracy": 1.0
+    },
+    "Indonesia": {
+      "total": 3,
+      "judge_correct": 3,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 3,
+      "guardian_accuracy": 1.0
+    },
+    "Iran": {
+      "total": 3,
+      "judge_correct": 2,
+      "judge_accuracy": 0.6666666666666666,
+      "guardian_correct": 2,
+      "guardian_accuracy": 0.6666666666666666
+    },
+    "Israel": {
+      "total": 1,
+      "judge_correct": 1,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 1.0
+    },
+    "Italy": {
+      "total": 1,
+      "judge_correct": 1,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 1.0
+    },
+    "Japan": {
+      "total": 2,
+      "judge_correct": 1,
+      "judge_accuracy": 0.5,
+      "guardian_correct": 1,
+      "guardian_accuracy": 0.5
+    },
+    "Lebanon": {
+      "total": 4,
+      "judge_correct": 3,
+      "judge_accuracy": 0.75,
+      "guardian_correct": 3,
+      "guardian_accuracy": 0.75
+    },
+    "Malaysia": {
+      "total": 2,
+      "judge_correct": 2,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 2,
+      "guardian_accuracy": 1.0
+    },
+    "Mexico": {
+      "total": 1,
+      "judge_correct": 0,
+      "judge_accuracy": 0.0,
+      "guardian_correct": 0,
+      "guardian_accuracy": 0.0
+    },
+    "Morocco": {
+      "total": 1,
+      "judge_correct": 1,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 1.0
+    },
+    "Nepal": {
+      "total": 1,
+      "judge_correct": 1,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 1.0
+    },
+    "Netherlands": {
+      "total": 1,
+      "judge_correct": 0,
+      "judge_accuracy": 0.0,
+      "guardian_correct": 0,
+      "guardian_accuracy": 0.0
+    },
+    "Nigeria": {
+      "total": 2,
+      "judge_correct": 0,
+      "judge_accuracy": 0.0,
+      "guardian_correct": 0,
+      "guardian_accuracy": 0.0
+    },
+    "Philippines": {
+      "total": 2,
+      "judge_correct": 2,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 2,
+      "guardian_accuracy": 1.0
+    },
+    "Saudi Arabia": {
+      "total": 1,
+      "judge_correct": 1,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 1.0
+    },
+    "South Korea": {
+      "total": 2,
+      "judge_correct": 1,
+      "judge_accuracy": 0.5,
+      "guardian_correct": 1,
+      "guardian_accuracy": 0.5
+    },
+    "Spain": {
+      "total": 2,
+      "judge_correct": 2,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 2,
+      "guardian_accuracy": 1.0
+    },
+    "Ukraine": {
+      "total": 2,
+      "judge_correct": 2,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 2,
+      "guardian_accuracy": 1.0
+    },
+    "United Kingdom": {
+      "total": 1,
+      "judge_correct": 1,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 1,
+      "guardian_accuracy": 1.0
+    },
+    "United States": {
+      "total": 1,
+      "judge_correct": 0,
+      "judge_accuracy": 0.0,
+      "guardian_correct": 0,
+      "guardian_accuracy": 0.0
+    },
+    "Vietnam": {
+      "total": 3,
+      "judge_correct": 2,
+      "judge_accuracy": 0.6666666666666666,
+      "guardian_correct": 2,
+      "guardian_accuracy": 0.6666666666666666
+    },
+    "Zimbabwe": {
+      "total": 3,
+      "judge_correct": 3,
+      "judge_accuracy": 1.0,
+      "guardian_correct": 3,
+      "guardian_accuracy": 1.0
+    }
+  }
+}
