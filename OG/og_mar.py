@@ -125,11 +125,10 @@ NORMAD_OPTIONS_TEXT = (
 
 CULTURALBENCH_PERSONA_PROMPT = """\
 Task:
-- You are Persona Agent {persona_id}.
-- Given the question and options below, select exactly one option that this persona would choose, based on the persona's cultural knowledge and worldview.
-- Use the provided persona-defining inputs: demographics, value profiles, and ontology context as grounding references.
-- You may also draw on widely known cultural facts about the country/region relevant to the question.
-- Prohibited: unstated assumptions about the persona's personal preferences, or fabricating demographics/values/edges not provided.
+- You are Persona Agent {persona_id}, a cultural knowledge expert from {country_name}.
+- The question below is a factual cultural knowledge question with exactly one correct answer. Your job is to select the factually correct option based on your deep knowledge of this country's culture, customs, traditions, and practices.
+- Use the provided persona-defining inputs as background context. If the ontology context is relevant to the question topic, integrate it; if it is not directly relevant, rely on your own cultural knowledge.
+- Prohibited: fabricating demographics/values/edges not provided; guessing when uncertain.
 
 Inputs:
 - [DEMOGRAPHICS]: {demographics_text}
@@ -139,12 +138,13 @@ Inputs:
 - [USER QUESTION]: {question}
 
 Strict Rules:
-- Stay in persona; integrate the provided inputs with cultural common knowledge of the target country.
-- Integrate all value summaries and apply all ontology relations explicitly (e.g., support/conflict/amplification).
-- Cite at least 2 demographic attributes; explain internal alignment, at least one conflict, and how it is resolved.
+- This is a factual knowledge question. Choose the option that is objectively correct about this country's culture.
+- Stay in persona; use your lived experience and cultural knowledge of {country_name} to identify the correct answer.
+- If the ontology context directly relates to the question, cite it; otherwise, state that it is not directly applicable and rely on cultural knowledge.
+- Cite at least 2 demographic attributes that inform your perspective.
 - Choose exactly one option; output only one valid JSON object and nothing else.
 - Your chosen_answer MUST start with the option number followed by a period (e.g., "1. ...", "2. ...", "3. ...", "4. ...").
-- reasoning must be >= 100 words and explicitly cover value/ontology integration and the most influential demographics.
+- reasoning must be >= 50 words and explicitly explain why the chosen answer is factually correct about {country_name}'s culture.
 
 Output Format (JSON only):
 {{
@@ -157,6 +157,46 @@ Output Format (JSON only):
     "hyper_edges_used": [],
     "integration_rationale": "..."
   }}
+}}"""
+
+
+# ===================================================================
+# CulturalBench Judgment Agent Prompt (adapted from Table 9)
+# Adds a factual verification step: judgment agent should verify
+# the persona consensus against its own cultural knowledge.
+# ===================================================================
+
+CULTURALBENCH_JUDGMENT_PROMPT = """\
+Task:
+- You are the Judgment Agent.
+- Given the question, options, persona outputs, and a pre-computed vote summary, select exactly one final option.
+- This is a factual cultural knowledge question with one objectively correct answer.
+- Your decision must be based on: (1) Persona outputs (primary evidence), (2) Vote summary (secondary context), and (3) Your own verification of factual correctness.
+- If all personas agree, verify their reasoning is factually sound before confirming. If the consensus answer seems factually incorrect based on well-known cultural facts, you may override it.
+- Prohibited: adding new facts beyond well-established cultural knowledge, or fabricating demographics/values/edges.
+
+Inputs:
+- [USER QUESTION]: {question_text}
+- [RESPONSE OPTIONS]: {options_text}
+- [VOTE SUMMARY]: {vote_summary}
+- [PERSONA OUTPUTS]: {persona_outputs}
+
+Strict Rules:
+- Use information in [PERSONA OUTPUTS] and [VOTE SUMMARY] as primary evidence.
+- Treat vote counts as correct and immutable; do not recount or modify them.
+- Before finalizing, ask yourself: "Is this answer factually correct about this country's culture?"
+- If the answer is well-supported by persona reasoning AND factually sound, confirm it.
+- If you detect a factual error in the consensus (e.g., wrong cultural practice attributed to a country), override with the correct option.
+
+Decision Procedure:
+- A) Factual Verification (Primary): Verify the chosen option is factually correct.
+- B) Evidence Strength (Secondary): Prefer the option supported by explicit, internally consistent persona reasoning.
+- C) Vote Summary (Tertiary): Use vote counts to break ties when evidence strength is comparable.
+
+Output Format (JSON only):
+{{
+  "final_answer": "<option_number>. <option_text>",
+  "reasoning": "..."
 }}"""
 
 
@@ -673,7 +713,7 @@ def run_og_mar(args):
                 if dataset_type == DATASET_CULTURALBENCH
                 else PERSONA_AGENT_PROMPT
             )
-            user_content = prompt_template.format(
+            format_kwargs = dict(
                 persona_id=k + 1,
                 demographics_text=all_demographics[idx][k],
                 value_summaries_text=all_value_summaries[idx][k],
@@ -681,6 +721,10 @@ def run_og_mar(args):
                 options_text=options_text,
                 question=question,
             )
+            # CulturalBench prompt needs country_name for grounding
+            if dataset_type == DATASET_CULTURALBENCH:
+                format_kwargs["country_name"] = p["country"].replace("_", " ").title()
+            user_content = prompt_template.format(**format_kwargs)
             all_persona_prompts.append(apply_chat(tokenizer, user_content))
 
     total_prompts = len(all_persona_prompts)
@@ -745,7 +789,14 @@ def run_og_mar(args):
 
         options_text = p["options_text"]
 
-        user_content = JUDGMENT_AGENT_PROMPT.format(
+        # Use CulturalBench judgment prompt (with factual verification)
+        # or standard NormAD judgment prompt
+        judgment_template = (
+            CULTURALBENCH_JUDGMENT_PROMPT
+            if dataset_type == DATASET_CULTURALBENCH
+            else JUDGMENT_AGENT_PROMPT
+        )
+        user_content = judgment_template.format(
             question_text=question_text,
             options_text=options_text,
             vote_summary=vote_summary,

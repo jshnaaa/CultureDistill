@@ -385,6 +385,21 @@ def detect_task_type_from_output(data: list) -> str:
     return "normad"
 
 
+def _extract_first_digit(text: str, pattern: str) -> str | None:
+    """Extract answer using answer-first format (first line is the number)."""
+    first_line = text.strip().split("\n")[0].strip()
+    m = re.match(rf'^({pattern})$', first_line)
+    if m:
+        return m.group(1)
+    # Fallback: "Answer: X" pattern
+    m = re.search(rf'Answer\s*:\s*({pattern})', text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # Last resort: last digit in valid range
+    digits = re.findall(rf'\b({pattern})\b', text)
+    return digits[-1] if digits else None
+
+
 def extract_judge_answer(response_text: str, max_choice: int = 3,
                          question: str = ""):
     """Extract Judge's final answer from response text."""
@@ -396,11 +411,7 @@ def extract_judge_answer(response_text: str, max_choice: int = 3,
         return None
     judge_text = judge_match.group(1)
     pattern = f'[1-{max_choice}]'
-    m = re.search(rf'Answer\s*:\s*({pattern})', judge_text, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    digits = re.findall(rf'\b({pattern})\b', judge_text)
-    return digits[-1] if digits else None
+    return _extract_first_digit(judge_text, pattern)
 
 
 def extract_guardian_answer(response_text: str, max_choice: int = 3,
@@ -414,11 +425,7 @@ def extract_guardian_answer(response_text: str, max_choice: int = 3,
         return None
     guardian_text = guardian_match.group(1)
     pattern = f'[1-{max_choice}]'
-    m = re.search(rf'Answer\s*:\s*({pattern})', guardian_text, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    digits = re.findall(rf'\b({pattern})\b', guardian_text)
-    return digits[-1] if digits else None
+    return _extract_first_digit(guardian_text, pattern)
 
 
 def compute_accuracy(output_file: str) -> dict:

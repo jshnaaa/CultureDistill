@@ -86,25 +86,36 @@ class HF_CAC_MAS:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
-        # Guardian: lower temperature for authoritative, precise responses
-        # CulturalBench uses very low temp (0.1) to minimize answer-number errors
-        guardian_temp = 0.1 if self.task_type == "culturalbench" else 0.5
+        # Guardian: lower temperature for precise responses
+        # CulturalBench: low temp, short output (number + brief explanation)
+        if self.task_type == "culturalbench":
+            guardian_temp = 0.1
+            cb_max_tokens = 128
+        else:
+            guardian_temp = 0.5
+            cb_max_tokens = self.max_tokens
         self.guardian_sampling = SamplingParams(
             temperature=guardian_temp,
-            max_tokens=self.max_tokens,
+            max_tokens=cb_max_tokens,
             stop=stop_tokens,
         )
-        # Auditor: lower temperature for CulturalBench (factual QA), higher for others
-        auditor_temp = 0.3 if self.task_type == "culturalbench" else 0.9
+        # Auditor: low temp for CulturalBench factual QA
+        if self.task_type == "culturalbench":
+            auditor_temp = 0.1
+            aud_max_tokens = 128
+        else:
+            auditor_temp = 0.9
+            aud_max_tokens = self.max_tokens
         self.auditor_sampling = SamplingParams(
             temperature=auditor_temp,
-            max_tokens=self.max_tokens,
+            max_tokens=aud_max_tokens,
             stop=stop_tokens,
         )
         # Judge: low temperature for stable arbitration
+        judge_max_tokens = 128 if self.task_type == "culturalbench" else self.max_tokens
         self.judge_sampling = SamplingParams(
             temperature=0.3,
-            max_tokens=self.max_tokens,
+            max_tokens=judge_max_tokens,
             stop=stop_tokens,
         )
 
@@ -230,10 +241,8 @@ class HF_CAC_MAS:
             elif self.task_type == "culturalbench":
                 user = (
                     f"{question}\n\n"
-                    f"The {target_country} expert [{guardian_name}] answered:\n"
-                    f"---\n{guardian_response}\n---\n\n"
-                    f"Do you agree? Give your answer.\n\n"
-                    f"Answer: <1/2/3/4>"
+                    f"The {target_country} expert answered:\n{guardian_response.strip()}\n\n"
+                    f"What is your answer?"
                 )
             else:
                 user = (
@@ -321,13 +330,16 @@ class HF_CAC_MAS:
                 f"Answer: <1 or 2>"
             )
         elif self.task_type == "culturalbench":
+            # Show each expert's answer (number + brief explanation)
+            expert_text = ""
+            for name, resp, is_guard in agent_responses:
+                tag = " [HOST EXPERT]" if is_guard else ""
+                expert_text += f"{name}{tag}:\n{resp.strip()}\n\n"
             user = (
                 f"{question}\n\n"
-                f"Expert [{guardian_name}] specializes in {target_country}.\n\n"
-                f"Expert responses:\n{responses_text}\n"
-                f"Based on the above, select the correct answer. "
-                f"Give more weight to [{guardian_name}]'s opinion.\n\n"
-                f"Answer: <1/2/3/4>"
+                f"Expert answers:\n{expert_text}"
+                f"[{guardian_name}] is the host expert for {target_country}. "
+                f"Prefer their answer unless their reasoning is clearly wrong."
             )
         else:
             user = (
@@ -365,6 +377,13 @@ class HF_CAC_MAS:
             max_choice = 3
         pattern = f"[1-{max_choice}]"
 
+        # For culturalbench (answer-first format): check first line first
+        if self.task_type == "culturalbench":
+            first_line = text.strip().split("\n")[0].strip()
+            m = re.match(rf"^({pattern})$", first_line)
+            if m:
+                return m.group(1)
+
         m = re.search(rf"Answer\s*:\s*({pattern})", text, re.IGNORECASE)
         if m:
             return m.group(1)
@@ -386,12 +405,17 @@ class HF_CAC_MAS:
         Determine if the Guardian has failed to provide a valid answer.
 
         Failure conditions:
-          (a) Response is empty or too short to be meaningful
+          (a) Response is empty
           (b) Cannot extract a valid answer number
           (c) Reasoning contains explicit uncertainty/failure indicators
         """
-        if not guardian_response or len(guardian_response.strip()) < 10:
+        if not guardian_response or not guardian_response.strip():
             return True
+
+        # For culturalbench, response may be just a digit — skip length check
+        if self.task_type != "culturalbench":
+            if len(guardian_response.strip()) < 10:
+                return True
 
         # Check if answer is extractable
         answer = self._extract_answer(guardian_response)

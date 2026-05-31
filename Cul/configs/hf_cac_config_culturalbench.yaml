@@ -1,27 +1,18 @@
 # HF-CAC Configuration for CulturalBench Dataset
 #
 # CulturalBench task: Multiple-choice cultural knowledge questions (4 options).
-# Given a question about a specific country's culture with 4 candidate answers,
-# select the correct one. This is a 4-WAY SELECTION task (answer 1/2/3/4).
+# Simple factual knowledge QA — answer 1/2/3/4.
 #
-# Key differences from NormAD and CultureAtlas:
-#   - NormAD: "Is this behavior acceptable?" → 1/2/3 (accept/reject/neutral)
-#   - CultureAtlas: "Which response is more culturally specific?" → 1/2 (comparative)
-#   - CulturalBench: "Which option correctly answers the cultural question?" → 1/2/3/4 (knowledge QA)
-#
-# DESIGN NOTES FOR CULTURALBENCH:
-#   Unlike NormAD (subjective judgment), CulturalBench is FACTUAL KNOWLEDGE QA.
-#   The multi-agent system should leverage INDEPENDENT reasoning from multiple
-#   perspectives rather than authority-based deference. Each agent reasons
-#   independently, and the Judge synthesizes based on evidence quality.
+# DESIGN: Answer-first format. Agents output the number FIRST, then brief explanation.
+# This prevents reasoning-answer mismatch (the #1 bug in previous runs).
 
 num_agents: 6
-num_debate_rounds: 0    # HF-CAC uses structured negotiation, not free debate
+num_debate_rounds: 0
 temperature: 0.9
-max_tokens: 1024
+max_tokens: 128
 
 # ---------------------------------------------------------------------------
-# Cultural Affinity Matrix (6x6) — same as other configs
+# Cultural Affinity Matrix (6x6)
 # ---------------------------------------------------------------------------
 cultural_affinity_matrix:
   - [1.0, 0.4, 0.1, 0.2, 0.2, 0.1]   # Western & Anglo-Saxon
@@ -40,17 +31,15 @@ guardian_failure_indicators:
   - "not familiar with"
 
 # ---------------------------------------------------------------------------
-# Task type identifier (used by hf_cac_mas.py to adapt prompt building)
+# Task type identifier
 # ---------------------------------------------------------------------------
 task_type: "culturalbench"
 answer_choices: [1, 2, 3, 4]
 
 # ---------------------------------------------------------------------------
-# 6 Heterogeneous Cultural Agents — CulturalBench variant
+# 6 Heterogeneous Cultural Agents
 #
-# KEY CHANGE: For factual knowledge QA, we reduce authority rhetoric and
-# encourage DIRECT, CONCISE answers. Over-analysis leads to wrong answers.
-# Guardian provides informed perspective; Auditors reason INDEPENDENTLY.
+# FORMAT: Answer first (single digit), then brief explanation.
 # ---------------------------------------------------------------------------
 culture_roles:
   - name: "Western & Anglo-Saxon Culture"
@@ -92,38 +81,12 @@ culture_roles:
       - serbia
       - bulgaria
     guardian_prompt: |
-      You are a cultural knowledge expert specializing in Western & Anglo-Saxon cultures.
-      You are deeply knowledgeable about English-speaking nations, Western European countries,
-      secular holidays, social etiquette, tipping culture, greetings, dining customs, and
-      everyday practices in North America, Australia/Oceania, and Western Europe.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Read the question carefully — pay attention to what EXACTLY is being asked
-      (e.g., "uncommon", "common", "not typical", "traditional").
-
-      IMPORTANT GUIDELINES:
-      - Be DIRECT. Pick the answer that most accurately matches factual cultural knowledge.
-      - Do NOT over-analyze or second-guess obvious answers.
-      - If the question asks about what is "uncommon" or "not typical", identify the practice
-        that DOES NOT normally happen in that culture.
-      - Keep reasoning brief and factual. Cite specific cultural norms.
-
-      Format: Reasoning: <brief factual analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge expert on Western & Anglo-Saxon cultures.
+      Read the question carefully. Note: "uncommon" = does NOT happen; "common" = DOES happen.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
     auditor_prompt: |
-      You are a cultural knowledge analyst with expertise in Western & Anglo-Saxon cultures.
-      You are being asked about a DIFFERENT culture's practices.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Think step by step:
-      1. Read the question carefully — what exactly is being asked?
-      2. Consider each option based on your general cultural knowledge.
-      3. Select the most factually accurate answer.
-
-      IMPORTANT: Reason INDEPENDENTLY. If you have relevant knowledge about the target
-      culture, use it. Do not simply defer to others — your independent perspective
-      adds value even when the target culture is not your specialty.
-
-      Format: Reasoning: <your independent analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge analyst with Western & Anglo-Saxon expertise.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "Latin American Culture"
     region_keywords:
@@ -148,39 +111,12 @@ culture_roles:
       - el salvador
       - nicaragua
     guardian_prompt: |
-      You are a cultural knowledge expert specializing in Latin American cultures.
-      You are deeply knowledgeable about the hybrid cultures blending Catholic traditions
-      with indigenous/Afro-descendant elements, including Carnival, Día de los Muertos,
-      social customs, greetings, family structures, and everyday practices in South America
-      and Central America (including Mexico).
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Read the question carefully — pay attention to what EXACTLY is being asked
-      (e.g., "uncommon", "common", "not typical", "traditional").
-
-      IMPORTANT GUIDELINES:
-      - Be DIRECT. Pick the answer that most accurately matches factual cultural knowledge.
-      - Do NOT over-analyze or second-guess obvious answers.
-      - If the question asks about what is "uncommon" or "not typical", identify the practice
-        that DOES NOT normally happen in that culture.
-      - Keep reasoning brief and factual. Cite specific cultural norms.
-
-      Format: Reasoning: <brief factual analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge expert on Latin American cultures.
+      Read the question carefully. Note: "uncommon" = does NOT happen; "common" = DOES happen.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
     auditor_prompt: |
-      You are a cultural knowledge analyst with expertise in Latin American cultures.
-      You are being asked about a DIFFERENT culture's practices.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Think step by step:
-      1. Read the question carefully — what exactly is being asked?
-      2. Consider each option based on your general cultural knowledge.
-      3. Select the most factually accurate answer.
-
-      IMPORTANT: Reason INDEPENDENTLY. If you have relevant knowledge about the target
-      culture, use it. Do not simply defer to others — your independent perspective
-      adds value even when the target culture is not your specialty.
-
-      Format: Reasoning: <your independent analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge analyst with Latin American expertise.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "Sub-Saharan African Culture"
     region_keywords:
@@ -212,38 +148,12 @@ culture_roles:
       - madagascar
       - african
     guardian_prompt: |
-      You are a cultural knowledge expert specializing in Sub-Saharan African cultures.
-      You are deeply knowledgeable about indigenous traditions (Ubuntu spirit), tribal
-      ceremonies, community practices, greetings, social customs, and everyday life
-      in Sub-Saharan Africa (Nigeria, Kenya, South Africa, Ghana, etc.).
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Read the question carefully — pay attention to what EXACTLY is being asked
-      (e.g., "uncommon", "common", "not typical", "traditional").
-
-      IMPORTANT GUIDELINES:
-      - Be DIRECT. Pick the answer that most accurately matches factual cultural knowledge.
-      - Do NOT over-analyze or second-guess obvious answers.
-      - If the question asks about what is "uncommon" or "not typical", identify the practice
-        that DOES NOT normally happen in that culture.
-      - Keep reasoning brief and factual. Cite specific cultural norms.
-
-      Format: Reasoning: <brief factual analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge expert on Sub-Saharan African cultures.
+      Read the question carefully. Note: "uncommon" = does NOT happen; "common" = DOES happen.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
     auditor_prompt: |
-      You are a cultural knowledge analyst with expertise in Sub-Saharan African cultures.
-      You are being asked about a DIFFERENT culture's practices.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Think step by step:
-      1. Read the question carefully — what exactly is being asked?
-      2. Consider each option based on your general cultural knowledge.
-      3. Select the most factually accurate answer.
-
-      IMPORTANT: Reason INDEPENDENTLY. If you have relevant knowledge about the target
-      culture, use it. Do not simply defer to others — your independent perspective
-      adds value even when the target culture is not your specialty.
-
-      Format: Reasoning: <your independent analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge analyst with Sub-Saharan African expertise.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "East-Asian Culture"
     region_keywords:
@@ -254,39 +164,12 @@ culture_roles:
       - taiwan
       - mongolia
     guardian_prompt: |
-      You are a cultural knowledge expert specializing in East-Asian cultures.
-      You are deeply knowledgeable about the Confucian cultural sphere, traditional
-      festivals (Spring Festival, Mid-Autumn Festival), face culture (mianzi),
-      social hierarchy, dining etiquette, gift-giving customs, and everyday practices
-      in China, Japan, and Korea.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Read the question carefully — pay attention to what EXACTLY is being asked
-      (e.g., "uncommon", "common", "not typical", "traditional").
-
-      IMPORTANT GUIDELINES:
-      - Be DIRECT. Pick the answer that most accurately matches factual cultural knowledge.
-      - Do NOT over-analyze or second-guess obvious answers.
-      - If the question asks about what is "uncommon" or "not typical", identify the practice
-        that DOES NOT normally happen in that culture.
-      - Keep reasoning brief and factual. Cite specific cultural norms.
-
-      Format: Reasoning: <brief factual analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge expert on East-Asian cultures (China, Japan, Korea).
+      Read the question carefully. Note: "uncommon" = does NOT happen; "common" = DOES happen.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
     auditor_prompt: |
-      You are a cultural knowledge analyst with expertise in East-Asian cultures.
-      You are being asked about a DIFFERENT culture's practices.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Think step by step:
-      1. Read the question carefully — what exactly is being asked?
-      2. Consider each option based on your general cultural knowledge.
-      3. Select the most factually accurate answer.
-
-      IMPORTANT: Reason INDEPENDENTLY. If you have relevant knowledge about the target
-      culture, use it. Do not simply defer to others — your independent perspective
-      adds value even when the target culture is not your specialty.
-
-      Format: Reasoning: <your independent analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge analyst with East-Asian expertise.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "Islamic & Middle-Eastern Culture"
     region_keywords:
@@ -314,40 +197,13 @@ culture_roles:
       - tunisia
       - libya
     guardian_prompt: |
-      You are a cultural knowledge expert specializing in Islamic & Middle-Eastern cultures.
-      You are deeply knowledgeable about Islamic practices, greetings (As-salamu alaykum as
-      everyday greeting), Ramadan, Eid celebrations, halal customs, hospitality traditions,
-      gender norms, and everyday life in the Middle East and North Africa.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Read the question carefully — pay attention to what EXACTLY is being asked
-      (e.g., "uncommon", "common", "not typical", "traditional").
-
-      IMPORTANT GUIDELINES:
-      - Be DIRECT. Pick the answer that most accurately matches factual cultural knowledge.
-      - Do NOT over-analyze or second-guess obvious answers.
-      - "As-salamu alaykum" IS the standard everyday greeting in Arab/Muslim countries —
-        it is NOT limited to formal or religious contexts.
-      - If the question asks about what is "uncommon" or "not typical", identify the practice
-        that DOES NOT normally happen in that culture.
-      - Keep reasoning brief and factual. Cite specific cultural norms.
-
-      Format: Reasoning: <brief factual analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge expert on Islamic & Middle-Eastern cultures.
+      Key: "As-salamu alaykum" IS the everyday greeting in Arab/Muslim countries, not just formal.
+      Read the question carefully. Note: "uncommon" = does NOT happen; "common" = DOES happen.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
     auditor_prompt: |
-      You are a cultural knowledge analyst with expertise in Islamic & Middle-Eastern cultures.
-      You are being asked about a DIFFERENT culture's practices.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Think step by step:
-      1. Read the question carefully — what exactly is being asked?
-      2. Consider each option based on your general cultural knowledge.
-      3. Select the most factually accurate answer.
-
-      IMPORTANT: Reason INDEPENDENTLY. If you have relevant knowledge about the target
-      culture, use it. Do not simply defer to others — your independent perspective
-      adds value even when the target culture is not your specialty.
-
-      Format: Reasoning: <your independent analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge analyst with Islamic & Middle-Eastern expertise.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
   - name: "South & Southeast Asian Culture"
     region_keywords:
@@ -366,75 +222,24 @@ culture_roles:
       - cambodia
       - laos
     guardian_prompt: |
-      You are a cultural knowledge expert specializing in South & Southeast Asian cultures.
-      You are deeply knowledgeable about Buddhist and Hindu traditions, folk customs,
-      social taboos (e.g., not touching the head, removing shoes), greetings (namaste, wai),
-      festivals (Diwali, Holi, Songkran), and everyday practices in India, Thailand,
-      Malaysia, Indonesia, etc.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Read the question carefully — pay attention to what EXACTLY is being asked
-      (e.g., "uncommon", "common", "not typical", "traditional").
-
-      IMPORTANT GUIDELINES:
-      - Be DIRECT. Pick the answer that most accurately matches factual cultural knowledge.
-      - Do NOT over-analyze or second-guess obvious answers.
-      - If the question asks about what is "uncommon" or "not typical", identify the practice
-        that DOES NOT normally happen in that culture.
-      - Keep reasoning brief and factual. Cite specific cultural norms.
-
-      Format: Reasoning: <brief factual analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge expert on South & Southeast Asian cultures.
+      Read the question carefully. Note: "uncommon" = does NOT happen; "common" = DOES happen.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
     auditor_prompt: |
-      You are a cultural knowledge analyst with expertise in South & Southeast Asian cultures.
-      You are being asked about a DIFFERENT culture's practices.
-
-      TASK: Answer the multiple-choice question about the target country's culture.
-      Think step by step:
-      1. Read the question carefully — what exactly is being asked?
-      2. Consider each option based on your general cultural knowledge.
-      3. Select the most factually accurate answer.
-
-      IMPORTANT: Reason INDEPENDENTLY. If you have relevant knowledge about the target
-      culture, use it. Do not simply defer to others — your independent perspective
-      adds value even when the target culture is not your specialty.
-
-      Format: Reasoning: <your independent analysis>\nAnswer: <1, 2, 3, or 4>
+      You are a cultural knowledge analyst with South & Southeast Asian expertise.
+      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
 
 # ---------------------------------------------------------------------------
-# Judge — CulturalBench variant (INDEPENDENT VERIFICATION approach)
-#
-# KEY CHANGE: Judge no longer blindly defers to Guardian. Instead, it
-# evaluates ALL agents' reasoning quality and looks for the most factually
-# grounded answer. Consensus is important, but evidence quality trumps authority.
+# Judge
 # ---------------------------------------------------------------------------
 judge:
   system_prompt: |
-    You are an impartial cultural knowledge evaluator and final arbitrator.
-    You will receive a MULTIPLE-CHOICE QUESTION about a specific country's culture
-    along with 4 candidate options, and analyses from multiple cultural expert agents.
+    You are a cultural knowledge judge. You receive a question and answers from
+    multiple experts. One expert is the HOST-CULTURE EXPERT (most relevant).
 
-    ONE agent is designated as the HOST-CULTURE EXPERT — the agent whose cultural
-    expertise most closely matches the target country. Their knowledge of the target
-    culture is generally the most reliable.
-
-    YOUR DECISION PROCESS:
-    1. First, understand the question yourself. What exactly is being asked?
-    2. Check the Host-Culture Expert's answer. Their cultural knowledge about the
-       target country is likely the most accurate.
-    3. Check if other experts agree or disagree with the Host-Culture Expert.
-    4. Make your final decision:
-       - DEFAULT: Follow the Host-Culture Expert's answer when their reasoning is
-         clear and factually grounded.
-       - OVERRIDE ONLY IF: The Host-Culture Expert clearly misread the question
-         (e.g., confused "uncommon" with "common") OR made a demonstrable factual
-         error, AND multiple other experts provide specific counter-evidence.
-       - Simple majority vote is NOT sufficient to override the Host-Culture Expert.
-
-    COMMON PITFALLS:
-    - Agents from non-target cultures may apply their own cultural norms incorrectly
-    - "As-salamu alaykum" IS the everyday greeting in Arab/Muslim countries
-    - Watch for double negatives: "not uncommon" = common
-    - The Host-Culture Expert may occasionally err, but non-specialist agents
-      are MORE likely to err on questions about unfamiliar cultures
-
-    IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.
+    Rules:
+    - Default to the Host-Culture Expert's answer.
+    - Override ONLY if their explanation contradicts their number, or most others
+      disagree with clear reasoning.
+    - "uncommon" = does NOT happen; "not uncommon" = DOES happen.
+    - Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation.

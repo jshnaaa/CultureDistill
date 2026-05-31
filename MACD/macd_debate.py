@@ -86,13 +86,9 @@ PROMPT_ROUND1_NORMAD = (
     "Question: Is the action in the following scenario socially acceptable in {country}?\n\n"
     "Cultural background of {country}:\n{cultural_bg}\n\n"
     "Scenario: {scenario}\n\n"
-    "Based on the cultural background above, judge whether the action is socially "
-    "acceptable in {country}.\n"
-    "- Answer 'Yes' if the action aligns with the cultural norms described above.\n"
-    "- Answer 'No' if the action violates or conflicts with the cultural norms described above.\n"
-    "- Answer 'Neither' only if the cultural background provides no relevant guidance "
-    "and the acceptability is genuinely indeterminate.\n\n"
-    "Be decisive. If the cultural background suggests the action is inappropriate, answer 'No'.\n"
+    "Directly answer the question according to your culture and the cultural background "
+    "information above. Answer 'Yes' if acceptable, 'No' if unacceptable, or 'Neither' "
+    "only if genuinely ambiguous.\n"
     "Explain your reasoning in one to two sentences.\n"
     "Answer (Yes/No/Neither):"
 )
@@ -106,11 +102,10 @@ PROMPT_ROUND2_NORMAD = (
     "Scenario: {scenario}\n\n"
     "Previous responses of people from other culture background:\n"
     "{other_responses}\n\n"
-    "Based on other perspectives and **{scgrd}** strategy, refine your answer. "
-    "Focus on what the cultural background of {country} specifically indicates about "
-    "this action. If the action clearly violates cultural norms, answer 'No' even if "
-    "some agents disagree.\n"
-    "Explain your reasoning in one to two sentences.\n"
+    "Based on other perspectives and **{scgrd}** strategy, refine your answer to "
+    "the question. You must summarize the common reasoning with other cultures at the "
+    "end of your refined answer. Don't over-analyze, such as what these cultural "
+    "perspectives indicate or mean. You just discuss the original question.\n"
     "Answer (Yes/No/Neither):"
 )
 
@@ -122,12 +117,9 @@ PROMPT_SUMMARY_NORMAD = (
     "{agent_responses}\n\n"
     "Cultural background of {country}:\n{cultural_bg}\n\n"
     "Scenario: {scenario}\n\n"
-    "Based on the cultural background and the debate above, provide the final "
-    "judgment on whether the action is socially acceptable in {country}.\n"
-    "- Answer 'Yes' if the action is acceptable according to the cultural norms.\n"
-    "- Answer 'No' if the action violates or conflicts with the cultural norms.\n"
-    "- Answer 'Neither' only if there is genuinely no cultural norm that applies.\n\n"
-    "Prioritize the cultural background information over agent opinions when they conflict.\n"
+    "Based on the cultural background and the debate above, synthesize a final "
+    "answer on whether the action is socially acceptable in {country}. "
+    "Answer 'Yes', 'No', or 'Neither'.\n"
     "Answer (Yes/No/Neither):"
 )
 
@@ -495,36 +487,54 @@ def run_macd(args):
         # Round 2 answers (already extracted)
         r2_answers = all_r2_answers[idx]
 
-        # Majority vote from Round 2
+        # Majority vote from Round 1 and Round 2
+        r1_vote_ans = majority_vote(r1_answers, dataset_type)
         vote_ans = majority_vote(r2_answers, dataset_type)
 
         # Summary answer
         summary_resp = summary_outputs[idx]
         summary_ans = extract_fn(summary_resp)
 
-        # Decision logic:
-        # - Strong consensus (>=4 agents agree): use vote
-        # - Vote is Neither but summary gives Yes/No: prefer summary
-        #   (summary has global view of cultural background and can be more decisive)
-        # - Otherwise: use vote, fallback to summary
+        # R1 consensus strength
+        r1_vote_counts = Counter(v for v in r1_answers.values() if v is not None)
+        r1_max_count = r1_vote_counts.most_common(1)[0][1] if r1_vote_counts else 0
+
+        # R2 consensus strength
         vote_counts = Counter(v for v in r2_answers.values() if v is not None)
         vote_max_count = vote_counts.most_common(1)[0][1] if vote_counts else 0
 
-        if vote_ans is not None and vote_max_count >= 4:
-            # Strong consensus - trust the vote
+        # Decision logic:
+        # 1. R1 strong consensus (>=4) but R2 flipped: trust R1 (debate degradation guard)
+        # 2. R2 strong consensus (>=4): trust R2 vote
+        # 3. NormAD: vote=Neither but summary=Yes/No: prefer summary
+        # 4. Otherwise: use R2 vote, fallback to summary
+        answer_source = "none"
+        if (r1_max_count >= 4 and r1_vote_ans != vote_ans
+                and vote_max_count < 4):
+            # R1 had strong consensus but R2 flipped without strong consensus
+            # -> debate degradation, trust R1
+            final_ans = r1_vote_ans
+            answer_source = "r1_vote"
+            vote_used_count += 1
+        elif vote_ans is not None and vote_max_count >= 4:
+            # Strong R2 consensus - trust it
             final_ans = vote_ans
+            answer_source = "vote"
             vote_used_count += 1
         elif (vote_ans == "3" and summary_ans in ("1", "2")
               and dataset_type == DATASET_NORMAD):
             # Vote says Neither but summary is decisive (Yes/No) -
             # prefer summary as it weighs cultural background more carefully
             final_ans = summary_ans
+            answer_source = "summary"
             summary_used_count += 1
         elif vote_ans is not None:
             final_ans = vote_ans
+            answer_source = "vote"
             vote_used_count += 1
         elif summary_ans is not None:
             final_ans = summary_ans
+            answer_source = "summary"
             summary_used_count += 1
         else:
             final_ans = ""
@@ -542,11 +552,12 @@ def run_macd(args):
             "round1_answers": r1_answers,
             "round2_responses": round2_responses[idx],
             "round2_answers": r2_answers,
+            "r1_majority_vote": r1_vote_ans if r1_vote_ans else "",
             "majority_vote": vote_ans if vote_ans else "",
             "summary_response": summary_resp,
             "summary_answer": summary_ans if summary_ans else "",
             "final_answer": final_ans,
-            "answer_source": "summary" if summary_ans else ("vote" if vote_ans else "none"),
+            "answer_source": answer_source,
             "correct": is_correct,
         }
         results.append(record)

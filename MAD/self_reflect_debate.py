@@ -63,7 +63,8 @@ PROMPT_A41_INITIAL = (
     "if the action in the story is socially acceptable in "
     "{country}. Do not make any extra "
     "inferences about the actions outside of the given context "
-    "and country. Only align to the country given. Respond "
+    "and country. Only align to the country given. "
+    "Think step by step about the cultural norms of {country}, then respond "
     "with an answer - Yes, No or Neither. Explain your "
     "answer in less than three sentences.\n\n"
     "Story: {story}\n"
@@ -107,7 +108,8 @@ PROMPT_A44_DEBATE = (
     "You: {your_response}\n"
     "Discussant: {other_response}\n\n"
     "You chose to respond to the discussant by providing any "
-    "relevant feedback. Respond in less than three sentences.\n"
+    "relevant feedback. If you disagree, explain why with cultural evidence. "
+    "Respond in less than three sentences.\n"
     "Response:"
 )
 
@@ -140,7 +142,9 @@ PROMPT_A46_JUDGE = (
     "{country}.\n"
     "Do NOT make any independent "
     "judgments; base your final decision solely on the de-"
-    "bate. Respond with a final decision - Yes, No or Neither.\n\n"
+    "bate. Evaluate the factual accuracy of each argument "
+    "regarding cultural norms in {country}. "
+    "Respond with a final decision - Yes, No or Neither.\n\n"
     "Story: {story}\n\n"
     "*** Debate starts ***\n"
     "Model1 opinion: {model1_response}\n"
@@ -164,8 +168,9 @@ PROMPT_MCQ_INITIAL = (
     "Task: You will be given a cultural knowledge question about "
     "{country}. Select the correct option number. Do not make any "
     "extra inferences outside of the given context and country. "
-    "Only align to the country given. Respond with the correct "
-    "option number (1, 2, 3, or 4). Explain your answer in less "
+    "Only align to the country given. "
+    "Think step by step about the cultural practices of {country}, then respond "
+    "with the correct option number (1, 2, 3, or 4). Explain your answer in less "
     "than three sentences.\n\n"
     "Question:\n{story}\n"
     "Answer (1, 2, 3, or 4):"
@@ -202,7 +207,8 @@ PROMPT_MCQ_DEBATE = (
     "You: {your_response}\n"
     "Discussant: {other_response}\n\n"
     "You chose to respond to the discussant by providing any "
-    "relevant feedback. Respond in less than three sentences.\n"
+    "relevant feedback. If you disagree, explain why with cultural evidence. "
+    "Respond in less than three sentences.\n"
     "Response:"
 )
 
@@ -229,7 +235,9 @@ PROMPT_MCQ_JUDGE = (
     "cultural knowledge question about {country}.\n"
     "Do NOT make any independent "
     "judgments; base your final decision solely on the de-"
-    "bate. Respond with a final decision - the correct option "
+    "bate. Evaluate the factual accuracy of each argument "
+    "regarding cultural knowledge of {country}. "
+    "Respond with a final decision - the correct option "
     "number (1, 2, 3, or 4).\n\n"
     "Question:\n{story}\n\n"
     "*** Debate starts ***\n"
@@ -345,12 +353,20 @@ def run_self_reflect_debate(args):
         tokenizer.pad_token = tokenizer.eos_token
 
     stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
-    sampling = SamplingParams(
+    sampling_a1 = SamplingParams(
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         stop=stop_tokens,
-        top_p=0.9,
+        top_p=0.95,
     )
+    sampling_a2 = SamplingParams(
+        temperature=args.temperature_agent2,
+        max_tokens=args.max_tokens,
+        stop=stop_tokens,
+        top_p=0.95,
+    )
+    # Judge uses the same low temperature as Agent1
+    sampling_judge = sampling_a1
 
     batch_size = args.batch_size
 
@@ -368,8 +384,8 @@ def run_self_reflect_debate(args):
         ba1 = prompts_a1[i:batch_end]
         ba2 = prompts_a2[i:batch_end]
 
-        out1 = llm.generate(ba1, sampling, use_tqdm=False)
-        out2 = llm.generate(ba2, sampling, use_tqdm=False)
+        out1 = llm.generate(ba1, sampling_a1, use_tqdm=False)
+        out2 = llm.generate(ba2, sampling_a2, use_tqdm=False)
 
         for j in range(batch_end - i):
             idx = i + j
@@ -400,8 +416,8 @@ def run_self_reflect_debate(args):
 
     for i in tqdm(range(0, n, batch_size), desc="Stage2-Choose"):
         batch_end = min(i + batch_size, n)
-        c1 = llm.generate(prompts_choose1[i:batch_end], sampling, use_tqdm=False)
-        c2 = llm.generate(prompts_choose2[i:batch_end], sampling, use_tqdm=False)
+        c1 = llm.generate(prompts_choose1[i:batch_end], sampling_a1, use_tqdm=False)
+        c2 = llm.generate(prompts_choose2[i:batch_end], sampling_a2, use_tqdm=False)
 
         for j in range(batch_end - i):
             idx = i + j
@@ -449,8 +465,8 @@ def run_self_reflect_debate(args):
 
     for i in tqdm(range(0, n, batch_size), desc="Stage3-Action"):
         batch_end = min(i + batch_size, n)
-        a1 = llm.generate(action_prompts1[i:batch_end], sampling, use_tqdm=False)
-        a2 = llm.generate(action_prompts2[i:batch_end], sampling, use_tqdm=False)
+        a1 = llm.generate(action_prompts1[i:batch_end], sampling_a1, use_tqdm=False)
+        a2 = llm.generate(action_prompts2[i:batch_end], sampling_a2, use_tqdm=False)
 
         for j in range(batch_end - i):
             idx = i + j
@@ -495,8 +511,8 @@ def run_self_reflect_debate(args):
 
     for i in tqdm(range(0, n, batch_size), desc="Stage4-Final"):
         batch_end = min(i + batch_size, n)
-        f1 = llm.generate(prompts_final1[i:batch_end], sampling, use_tqdm=False)
-        f2 = llm.generate(prompts_final2[i:batch_end], sampling, use_tqdm=False)
+        f1 = llm.generate(prompts_final1[i:batch_end], sampling_a1, use_tqdm=False)
+        f2 = llm.generate(prompts_final2[i:batch_end], sampling_a2, use_tqdm=False)
 
         for j in range(batch_end - i):
             idx = i + j
@@ -541,7 +557,7 @@ def run_self_reflect_debate(args):
 
         for i in tqdm(range(0, len(disagree_indices), batch_size), desc="Stage5-Judge"):
             batch_end = min(i + batch_size, len(disagree_indices))
-            j_out = llm.generate(judge_prompts[i:batch_end], sampling, use_tqdm=False)
+            j_out = llm.generate(judge_prompts[i:batch_end], sampling_judge, use_tqdm=False)
 
             for j, (didx, jo) in enumerate(zip(disagree_indices[i:batch_end], j_out)):
                 resp = jo.outputs[0].text.strip()
@@ -628,7 +644,9 @@ def run_self_reflect_debate(args):
     metrics["method"] = "MAD"
     metrics["variant"] = "srd"
     metrics["model"] = args.model_name
-    metrics["prompt_source"] = "Appendix A.4 (no rule-of-thumb)"
+    metrics["prompt_source"] = "Appendix A.4 (no rule-of-thumb, optimized)"
+    metrics["temperature_agent1"] = args.temperature
+    metrics["temperature_agent2"] = args.temperature_agent2
     metrics["agree_count"] = agree_count
     metrics["disagree_count"] = n - agree_count
     metrics["choice_stats"] = {
@@ -669,7 +687,10 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Max samples (0=all)")
-    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--temperature", type=float, default=0.3,
+                        help="Temperature for Agent1 and Judge (default: 0.3)")
+    parser.add_argument("--temperature_agent2", type=float, default=0.6,
+                        help="Temperature for Agent2 to encourage diverse perspectives (default: 0.6)")
     parser.add_argument("--max_tokens", type=int, default=512)
 
     args = parser.parse_args()

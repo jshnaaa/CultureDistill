@@ -299,17 +299,20 @@ MACD/
 **运行命令**：
 
 ```bash
-python MACD/macd_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0
-
+cd autodl-tmp/distill
+source /etc/network_turbo
+sh git.sh
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 5
+
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0
 ```
 
 **参数说明**：
