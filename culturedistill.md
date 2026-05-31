@@ -429,10 +429,10 @@ python OG/og_mar.py \
     --temperature 0.0
 
 # CulturalBench
-python OG/og_mar.py 
-    --input_file /autodl-fs/data/culturalBench_mas.json 
-    --model_name qwen 
-    --tensor_parallel_size 2 
+python OG/og_mar.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
     --batch_size 256
 ```
 
