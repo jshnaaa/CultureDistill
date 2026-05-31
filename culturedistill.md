@@ -306,7 +306,7 @@ python MACD/macd_debate.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
-    --max_samples 5
+    --max_samples 0
 
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/normad_mas.json \
