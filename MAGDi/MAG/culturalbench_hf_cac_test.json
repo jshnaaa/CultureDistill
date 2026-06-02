@@ -1,0 +1,217 @@
+[
+  {
+    "question": "In the Netherlands, which of the following is an unusual common public practice?\n1. Tipping generously\n2. Using deodorant\n3. Talking loudly on the phone.\n4. Cycle everywhere",
+    "gold_answer": "1",
+    "country": "Netherlands",
+    "dataset": "culturalbench",
+    "data_source": "hf_cac",
+    "guardian_idx": 0,
+    "agent0_output_0": {
+      "reasoning": "Talking loudly on the phone is considered impolite and unusual in public spaces in the Netherlands. Dutch culture values quietness and respect for others' space, especially in public transportation and other shared environments.",
+      "answer": "3",
+      "role": "GUARDIAN"
+    },
+    "agent1_output_0": {
+      "reasoning": "From a Latin American cultural perspective, talking loudly on the phone in public spaces is indeed considered impolite and unusual in many countries, which aligns with the Dutch culture as described by the Host-Culture Guardian. However, it's important to acknowledge that cultural norms can vary widely even within Latin America, and what is considered impolite in one country might be more common in another. The Guardian's perspective on Dutch culture is authoritative in this context.",
+      "answer": "1",
+      "role": "AUDITOR"
+    },
+    "agent2_output_0": {
+      "reasoning": "Talking loudly on the phone is indeed considered unusual and impolite in the Netherlands, aligning with the value of respect and consideration for others' space. While in some Sub-Saharan African cultures, it might be more common to converse loudly in public, the Dutch cultural emphasis on quietness and minimal disturbance in public spaces reflects a different social norm. I defer to the Host-Culture Guardian's expertise on this matter.",
+      "answer": "3",
+      "role": "AUDITOR"
+    },
+    "agent3_output_0": {
+      "reasoning": "Talking loudly on the phone is indeed unusual and considered impolite in the Netherlands. From my East-Asian cultural background, I understand that many Asian cultures also value quietness and respect for others in public spaces. This shared cultural value supports the Guardian's perspective. While practices may vary, the core principle of maintaining a quiet and considerate environment in public spaces is similar across these cultures.",
+      "answer": "1",
+      "role": "AUDITOR"
+    },
+    "agent4_output_0": {
+      "reasoning": "From my cultural lens, talking loudly on the phone can be considered impolite in many Islamic and Middle-Eastern cultures as well, as it disrupts others' space and privacy. However, I defer to the Host-Culture Guardian's authority on the specific norms of Dutch culture, which emphasize quietness and respect in public spaces.",
+      "answer": "1",
+      "role": "AUDITOR"
+    },
+    "agent5_output_0": {
+      "reasoning": "Talking loudly on the phone is indeed unusual in the Netherlands, as the Dutch value quietness and respect for others. This aligns with the values found in many South and Southeast Asian cultures, where public noise is also generally discouraged. However, as a Cross-Cultural Auditor, I defer to the Host-Culture Guardian's authority on specific practices in the Netherlands.",
+      "answer": "1",
+      "role": "AUDITOR"
+    },
+    "judge_output": {
+      "reasoning": "Talking loudly on the phone is considered unusual and impolite in the Netherlands, as the Dutch culture values quietness and respect for others in public spaces. The Host-Culture Guardian, [Western & Anglo-Saxon Culture], provided specific cultural evidence that aligns with the majority of the Auditors' perspectives. While the Guardian's answer is authoritative, the consensus from multiple cross-cultural auditors supports the idea that talking loudly on the phone is indeed an unusual practice in the Netherlands. There are no logical errors in the Guardian's reasoning, and the specific cultural evidence provided is strong.",
+      "answer": "3",
+      "role": "JUDGE"
+    }
+  },
+  {
+    "question": "In Korean dining etiquette, what is a common practice regarding drinks and paying for the meal?\n1. It's common to split the bill evenly amongst all diners, regardless of age.\n2. The person who is older always pays, regardless of who did the invitation\n3. Everyone pays for their own meal and drinks.\n4. Younger people pour drinks for the elders and the elders pay for the meal.",
+    "gold_answer": "4",
+    "country": "South Korea",
+    "dataset": "culturalbench",
+    "data_source": "hf_cac",
+    "guardian_idx": 3,
+    "agent0_output_0": {
+      "reasoning": "From a Western & Anglo-Saxon cultural perspective, it is not as common for younger people to pour drinks for elders and for the elders to pay for the meal. However, I defer to the Host-Culture Guardian's authority, as they have provided the culturally accurate information that in South Korea, this practice is indeed common and known as \"jungban,\" where the host or the oldest person pays for the meal.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent1_output_0": {
+      "reasoning": "As a Cross-Cultural Auditor from a Latin American background, I agree with the Host-Culture Guardian's answer. In Korean dining etiquette, it is indeed common for younger people to pour drinks for the elders and for the elders to pay for the meal. This practice, known as \"jungban,\" reflects a respect for seniority and a culture of hospitality, which is also prevalent in many Latin American cultures where younger family members often serve and take care of elders during meals. While the specifics and nuances of such practices can vary, the Guardian's explanation aligns with the general cultural norms observed in South Korea.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent2_output_0": {
+      "reasoning": "While the practice of younger people pouring drinks for elders and the elders paying for the meal is common in Korean dining etiquette, as stated by the Host-Culture Guardian, I acknowledge that this might differ from practices in Sub-Saharan African cultures, where there might be more collective sharing of costs and responsibilities. However, I defer to the Guardian's expertise on South Korean customs and their authoritative answer.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent3_output_0": {
+      "reasoning": "In Korean dining etiquette, it is a common practice for younger people to pour drinks for the elders, and the elders typically pay for the meal. This is known as \"jungban\" (주부안), where the host or the oldest person pays for the meal.",
+      "answer": "4",
+      "role": "GUARDIAN"
+    },
+    "agent4_output_0": {
+      "reasoning": "While the practice of younger people pouring drinks for elders and the elders paying for the meal is common in South Korean culture, as confirmed by the Host-Culture Guardian, it aligns with the respect and honor shown to the elderly in many cultures, including Islamic and Middle-Eastern cultures. However, I defer to the Host-Culture Guardian's authority on South Korean dining etiquette, as they provide the authoritative answer.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent5_output_0": {
+      "reasoning": "While the practice of younger people pouring drinks for elders and the elders paying for the meal is a common tradition in South Korea (as explained by the Host-Culture Guardian), I acknowledge that this may not be the only accepted norm. In some modern settings or among younger generations, the concept of splitting the bill evenly or each person paying for their own meal and drinks is becoming more common. However, given the Guardian's authoritative stance on this matter, I defer to the provided answer.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "judge_output": {
+      "reasoning": "The Host-Culture Guardian and multiple Cross-Cultural Auditors have consistently identified that in Korean dining etiquette, it is common for younger people to pour drinks for the elders and for the elders to pay for the meal. This practice, known as \"jungban,\" reflects a respect for seniority and a culture of hospitality. The Guardian's specific cultural evidence and the consensus among the Auditors provide strong support for this answer.",
+      "answer": "4",
+      "role": "JUDGE"
+    }
+  },
+  {
+    "question": "What is not an uncommon aspect in Nigeria?\n1. Celebrating Thanksgiving\n2. Large-scale consumption of fast food as a cultural practice.\n3. Individualism and self-reliance\n4. Emphasis on community and collective responsibility",
+    "gold_answer": "1",
+    "country": "Nigeria",
+    "dataset": "culturalbench",
+    "data_source": "hf_cac",
+    "guardian_idx": 2,
+    "agent0_output_0": {
+      "reasoning": "Emphasis on community and collective responsibility is indeed a deeply rooted cultural practice in Nigeria, as acknowledged by the Host-Culture Guardian. From a Western & Anglo-Saxon cultural lens, this can be contrasted with more individualistic societies where personal achievement and independence are often prioritized. However, I defer to the Guardian's expertise on Nigeria and confirm that this is a common and significant aspect of Nigerian culture.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent1_output_0": {
+      "reasoning": "Emphasis on community and collective responsibility is indeed a deeply rooted cultural practice in Nigeria, as explained by the Host-Culture Guardian. From my Latin American cultural perspective, while there are significant differences between Latin American and Nigerian cultures, both emphasize community and collective well-being, albeit in different contexts. The Guardian's insight is authoritative on this matter, and it is essential to defer to their expertise regarding Nigerian culture.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent2_output_0": {
+      "reasoning": "Emphasis on community and collective responsibility is a deeply rooted cultural practice in Nigeria, often seen in various social and religious ceremonies and daily interactions. Options 1, 2, and 3 do not accurately reflect common cultural practices in Nigeria.",
+      "answer": "4",
+      "role": "GUARDIAN"
+    },
+    "agent3_output_0": {
+      "reasoning": "Emphasis on community and collective responsibility is indeed a deeply rooted cultural practice in Nigeria, as confirmed by the Host-Culture Guardian. From my East-Asian cultural lens, while there are differences in specific practices, many East-Asian cultures also value community and collective well-being, which can provide a contrast but not necessarily negate the Guardian's insight. The Guardian's authority on Nigeria's cultural practices is primary, and their explanation aligns with my understanding of cultural values across diverse regions.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent4_output_0": {
+      "reasoning": "Emphasis on community and collective responsibility is indeed a strong cultural value in Nigeria, which aligns with the Host-Culture Guardian's perspective. From my Islamic and Middle-Eastern cultural background, I understand that community and collective responsibility are also highly valued. This value is reflected in various aspects of life, including social support systems, communal events, and religious practices. While I can see why certain practices like celebrating Thanksgiving or large-scale fast food consumption might be observed, they are not as deeply ingrained in the cultural fabric of Nigeria as community and collective responsibility. Therefore, I defer to the Host-Culture Guardian's authoritative answer.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent5_output_0": {
+      "reasoning": "Emphasis on community and collective responsibility is indeed a deeply rooted cultural practice in Nigeria, as noted by the Host-Culture Guardian. From a South & Southeast Asian cultural lens, this emphasis on community is also a significant aspect of many societies in this region. However, I must defer to the Guardian's authority on specifics regarding Nigerian culture, as my primary expertise does not lie in Sub-Saharan African cultures.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "judge_output": {
+      "reasoning": "Emphasis on community and collective responsibility is a deeply rooted cultural practice in Nigeria, as confirmed by the Host-Culture Guardian and supported by the consensus of multiple cross-cultural auditors. This value is evident in various aspects of Nigerian life, including social and religious ceremonies, and is a common and significant aspect of the culture.",
+      "answer": "4",
+      "role": "JUDGE"
+    }
+  },
+  {
+    "question": "Which is the preferred way of cooking eggs for Spanish people?\n1. Poached\n2. Omelette\n3. Scrambled\n4. Over-easy",
+    "gold_answer": "2",
+    "country": "Spain",
+    "dataset": "culturalbench",
+    "data_source": "hf_cac",
+    "guardian_idx": 0,
+    "agent0_output_0": {
+      "reasoning": "In Spain, omelettes (tortilla Española) are the most preferred way of cooking eggs. This dish is a staple in Spanish cuisine and is often served as a main course or a light meal.",
+      "answer": "2",
+      "role": "GUARDIAN"
+    },
+    "agent1_output_0": {
+      "reasoning": "While the omelette (tortilla Española) is indeed a beloved dish in Spain, as a Cross-Cultural Auditor from a Latin American background, I acknowledge that the Guardian's perspective is authoritative. The preference for omelettes in Spain aligns with the broader culinary practices in the Iberian Peninsula, but it is important to recognize that cooking preferences can vary even within a single country. Therefore, while I defer to the Guardian's expertise in this matter, I understand that other methods of cooking eggs, such as poaching or scrambling, may also have significant regional variations and personal preferences in Spain.",
+      "answer": "2",
+      "role": "AUDITOR"
+    },
+    "agent2_output_0": {
+      "reasoning": "From my understanding, while omelettes (tortilla Española) are indeed popular in Spain and often serve as a main course or a light meal, the Guardian's authority on Spanish culture is definitive. However, it's worth noting that preferences for cooking eggs can vary significantly within a country, and other methods like poaching, scrambling, or cooking over-easy are also widely enjoyed. The omelette holds a special place in Spanish cuisine, but it may not be universally preferred over other methods.",
+      "answer": "2",
+      "role": "AUDITOR"
+    },
+    "agent3_output_0": {
+      "reasoning": "While the Host-Culture Guardian's answer is correct and reflects the preference for omelettes (tortilla Española) in Spanish cuisine, as an East-Asian cultural background Cross-Cultural Auditor, I note that food preferences can vary widely within and across cultures. Omelettes are indeed popular, but scrambled eggs (huevos revueltos) are also very common and beloved in Spain, often served with fried potatoes and a tomato sauce. The Guardian's answer is authoritative on this matter, but it's important to recognize the diversity in culinary practices within the same culture.",
+      "answer": "2",
+      "role": "AUDITOR"
+    },
+    "agent4_output_0": {
+      "reasoning": "While the Guardian's answer is authoritative from a Western and Anglo-Saxon perspective, in Spain, omelettes (tortilla Española) are indeed highly favored and often served as a main course. However, from my Islamic & Middle-Eastern cultural background, I understand that people in my region also have a preference for various egg preparations. The Guardian's expertise on Spanish culinary preferences should be respected as they provide accurate information from their cultural context.",
+      "answer": "2",
+      "role": "AUDITOR"
+    },
+    "agent5_output_0": {
+      "reasoning": "While an omelette is indeed a popular dish in Spain, particularly the tortilla Española, the Guardian's authority on the matter gives them primary authority. However, from a South and Southeast Asian cultural perspective, we might find other methods of cooking eggs more common due to regional preferences and dietary habits.",
+      "answer": "2",
+      "role": "AUDITOR"
+    },
+    "judge_output": {
+      "reasoning": "The Host-Culture Guardian, who has expertise in Western and Anglo-Saxon culture, states that omelettes (tortilla Española) are the most preferred way of cooking eggs in Spain. The majority of the cross-cultural auditors also support this, indicating a strong consensus. While there may be regional variations and personal preferences, the tortilla Española is widely recognized as a staple dish in Spanish cuisine and is often served as a main course or a light meal. Therefore, the preferred way of cooking eggs for Spanish people is the omelette.",
+      "answer": "2",
+      "role": "JUDGE"
+    }
+  },
+  {
+    "question": "In Moroccan culture, how do people typically greet people they know on the street?\n1. By saying \"hello\"\n2. By hugging them\n3. By giving a casual nod.\n4. By saying \"peace be upon you\"",
+    "gold_answer": "4",
+    "country": "Morocco",
+    "dataset": "culturalbench",
+    "data_source": "hf_cac",
+    "guardian_idx": 4,
+    "agent0_output_0": {
+      "reasoning": "While the traditional greeting in Moroccan culture is \"peace be upon you\" (as-salam alaykum), it is important to acknowledge that in modern urban settings, people may also greet each other with a simple \"hello\" or a nod, especially among younger generations and in more casual contexts. However, given the Guardian's authoritative stance on this matter, their answer reflects the most common and respectful greeting in Moroccan culture.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent1_output_0": {
+      "reasoning": "While I acknowledge that the traditional greeting in Moroccan culture is \"as-salam alaykum,\" it's important to note that casual acquaintances or in more modern settings, people might also greet each other with a simple \"hello\" or a nod, especially in urban areas where people are more familiar with Western cultural influences. The Guardian's answer reflects the traditional and formal greeting, which is indeed common, but I defer to their expertise on the specifics of Moroccan culture.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent2_output_0": {
+      "reasoning": "While greetings can vary within different regions and contexts, the Host-Culture Guardian's answer is authoritative for Moroccan culture. As a Cross-Cultural Auditor, I acknowledge the importance of \"peace be upon you\" (as-salam alaykum) in Moroccan Islamic tradition. However, it's worth noting that in more casual or contemporary settings, nods or hellos might be common among younger generations or in less formal interactions. Nonetheless, the traditional and respectfully expected greeting remains \"peace be upon you.\"",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent3_output_0": {
+      "reasoning": "While \"peace be upon you\" (as-salam alaykum) is indeed a common and respectful greeting in Moroccan culture, it is typically more formal and used in situations like greeting someone you know but not intimately. Street encounters often involve more casual greetings such as a nod or a simple \"hello.\" The Guardian's answer is correct in terms of the formal greeting, but it may not fully capture the typical casual behavior observed on the street.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "agent4_output_0": {
+      "reasoning": "In Moroccan culture, the traditional and most common greeting for people they know on the street is \"peace be upon you\" (as-salam alaykum). This greeting is widely used and considered a sign of respect and Islamic tradition.",
+      "answer": "4",
+      "role": "GUARDIAN"
+    },
+    "agent5_output_0": {
+      "reasoning": "While \"peace be upon you\" (as-salam alaykum) is indeed a widely used and respectful greeting in Moroccan culture, it is more commonly associated with formal or specific greeting situations. For casual greetings on the street, Moroccans often use a simpler \"hello\" (maa shaa' Allah) or give a casual nod. The Guardian's answer is correct and authoritative regarding the traditional greeting, but it may not fully capture the commonality of more informal greetings in real-life interactions.",
+      "answer": "4",
+      "role": "AUDITOR"
+    },
+    "judge_output": {
+      "reasoning": "The most common greeting on the street in Moroccan culture, according to the Host-Culture Guardian, is \"peace be upon you\" (as-salam alaykum). However, the Guardian also acknowledges that in more casual or contemporary settings, people might greet each other with a simple \"hello\" or a nod, especially among younger generations and in urban areas. Given the consensus from multiple auditors and the Guardian's own acknowledgment of more casual greetings, option 4 is the most accurate representation of typical greetings in Moroccan culture.",
+      "answer": "4",
+      "role": "JUDGE"
+    }
+  }
+]
