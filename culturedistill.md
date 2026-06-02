@@ -6,19 +6,23 @@
 
 ### 1.1 HF-CAC：一种新的多智能体协作范式（创新点一）
 
-HF-CAC（Home-Field Culture-Activated Collaboration）是我们提出的面向文化对齐任务的多智能体协作新范式。核心思想是：针对文化知识的"属地性"和"不对称性"特征，引入"主场/客场"动态权威机制——根据目标国家自动激活对应文化背景的 Agent 作为主场守护者（Guardian），赋予其更高话语权和一票否决权，其余 Agent 作为跨文化审视者（Auditor）提供对比视角。
+HF-CAC（Home-Field Culture-Activated Collaboration）是提出的面向文化对齐任务的多智能体协作新范式。
 
-### 1.2 CAMAD：基于 HF-CAC 推理数据的文化感知蒸馏框架
+核心思想：针对文化知识的"属地性"和"不对称性"特征，引入"主场/客场"动态权威机制——根据目标国家自动激活对应文化背景的 Agent 作为主场守护者（Guardian），赋予其更高话语权和一票否决权，其余 Agent 作为跨文化审视者（Auditor）提供对比视角。
+
+### 1.2 CAMAD：基于 HF-CAC 的文化感知蒸馏框架（创新点二）
 
 CAMAD 是基于 HF-CAC 生成的结构化推理数据构建的三阶段蒸馏框架，目标是将多智能体系统的跨文化推理能力注入单体语言模型，使其具备主场文化确权能力（Guardian 的知识精度）、跨文化边界感知能力（Auditor 的对比视角）、以及文化一致性的自我过程监督能力（PRM 引导的推理路径优化）。三阶段如下：
 
 ```
 Stage 1: 主场权威加权SFT → 单体模型学习 Guardian 的确权推理模式，掩码 Auditor 早期混淆 Token
 
-Stage 2: 开卷式步骤标注 → 审计器在 Ground Truth 先验下，对推理步骤打全正值离散标签 {0.1, 0.5, 0.9}
+Stage 2: 开卷式步骤标注 + PRM 训练 → 审计器在 Ground Truth 先验下，对推理步骤打离散标签 {0.1, 0.5, 0.9}
 
-Stage 3: 文化感知过程奖励 → GRPO强化学习 → PRM 保留 Sigmoid 激活 + 类别加权 MSE 训练；GRPO 使用加权平均 R_total 优化推理路径（量纲完美统一于 [0,1]）
+Stage 3: 文化感知过程奖励 → GRPO 强化学习 → 使用加权平均 R_total 优化推理路径（量纲统一于 [0,1]）
 ```
+
+融合策略
 
 ## 2. HF-CAC：基于主场文化激活的多智能体协作范式
 
@@ -76,9 +80,9 @@ Step 4: Judge — 带权威权重裁决
 #### 2.3.4 Guardian 一票否决权（Veto Power）机制
 
 在 Judge 裁决和 fallback 投票中：
-- 如果 Guardian 的答案与多数不同，但 Guardian 提供了具体文化证据 → 采信 Guardian
 - 如果 Guardian 的答案与多数相同 → 直接确认
-- 若 Guardian 失效 → 激活 Judge 启发式跨文化仲裁机制
+- 如果 Guardian 的答案与多数不同，但 Guardian 提供了具体文化证据 → 采信 Guardian
+- 若 Guardian 证据不足，即失效 → 激活 Judge 启发式跨文化仲裁机制
 
 **Guardian 失效的判定条件**：(a) Guardian 回答中提取不到有效答案（格式崩溃、输出截断），OR (b) Guardian 的推理中包含明确的不确定性放弃标记（如 "I'm not sure"、"I don't have enough knowledge"、推理内容为空）。
 
@@ -498,9 +502,92 @@ Cul/
     └── train_grpo_v3.py               # Stage 3b: GRPO 强化学习训练
 ```
 
-### 2.8 各 Agent 完整 Prompt 记录
+### 2.8 Agent 角色设定
 
-#### 2.11.1 Guardian System Prompt
+HF-CAC 框架通过 `--num_agents` 参数支持 2~6 个智能体的消融实验。默认使用 6 个智能体（完整覆盖全球六大文化圈），减少智能体数量时按照"文化亲缘性"原则进行合并——将 Hofstede 文化维度相近、地理相邻、宗教/哲学传统有交叉的文化区域合并为一个智能体。
+
+#### 设计原则
+
+合并遵循三条准则：
+
+1. **最大化文化距离**：保留的智能体之间应尽可能代表差异最大的文化维度（个人主义 vs 集体主义、高权力距离 vs 低权力距离、世俗 vs 宗教主导等），以确保辩论中产生有意义的对比视角。
+2. **优先合并亲缘文化**：文化亲和矩阵中得分较高的区域优先合并（如 East-Asian 与 South & SE Asian 共享集体主义和佛教传统，亲和度 0.5；Sub-Saharan African 与 Islamic & Middle-Eastern 地理相邻且有伊斯兰文化渗透，亲和度 0.5）。
+3. **保持 Guardian 机制有效性**：每种配置下，数据集中出现的所有国家都必须能被至少一个智能体的 region_keywords 覆盖，确保 Home-Field Guardian 机制不会失效。
+
+#### 各配置下的角色分配
+
+**6 agents（默认，完整配置）**
+
+| # | 角色名称 | 覆盖区域 |
+|---|---------|---------|
+| 1 | Western & Anglo-Saxon | 北美、西欧、澳洲、东欧 |
+| 2 | Latin American | 中南美洲 |
+| 3 | Sub-Saharan African | 撒哈拉以南非洲 |
+| 4 | East-Asian | 中日韩、蒙古 |
+| 5 | Islamic & Middle-Eastern | 中东、北非、土耳其 |
+| 6 | South & Southeast Asian | 南亚、东南亚 |
+
+理由：六大文化圈是文化人类学中公认的全球文化分区，每个区域内部有高度一致的价值观体系，区域之间有显著差异。这是理论上的最大有效数量——再增加会出现冗余（如将 Western 拆分为"北美"和"西欧"，二者文化距离不足以产生有意义的辩论分歧）。
+
+**5 agents**
+
+| # | 角色名称 | 覆盖区域 | 合并说明 |
+|---|---------|---------|---------|
+| 1 | Western & Anglo-Saxon | 北美、西欧、澳洲、东欧 | 不变 |
+| 2 | Latin American | 中南美洲 | 不变 |
+| 3 | Afro-Islamic | 撒哈拉以南非洲 + 中东北非 | 合并 Sub-Saharan African 与 Islamic & Middle-Eastern |
+| 4 | East-Asian | 中日韩、蒙古 | 不变 |
+| 5 | South & Southeast Asian | 南亚、东南亚 | 不变 |
+
+合并理由：Sub-Saharan African 与 Islamic & Middle-Eastern 在亲和矩阵中得分 0.5（最高的非自身对之一），地理上相邻（北非是二者的过渡带），且撒哈拉以南非洲有大量穆斯林人口（尼日利亚北部、索马里、苏丹等），文化渗透深。合并后的 Afro-Islamic 智能体同时具备部落传统和伊斯兰教法的认知基础。
+
+**4 agents**
+
+| # | 角色名称 | 覆盖区域 | 合并说明 |
+|---|---------|---------|---------|
+| 1 | Western & Anglo-Saxon | 北美、西欧、澳洲、东欧 | 不变 |
+| 2 | Latin American & African | 中南美洲 + 撒哈拉以南非洲 | 合并 Latin American 与 Sub-Saharan African |
+| 3 | East & South Asian | 中日韩 + 南亚 + 东南亚 | 合并 East-Asian 与 South & SE Asian |
+| 4 | Islamic & Middle-Eastern | 中东、北非 | 不变 |
+
+合并理由：
+- Latin American 与 Sub-Saharan African 亲和度 0.3，且拉美文化本身就是欧洲殖民文化与非洲裔文化的混合体（如巴西的 Candomblé、古巴的 Santería），合并后智能体能同时覆盖"非洲-拉美"文化连续体。
+- East-Asian 与 South & SE Asian 亲和度 0.5，共享佛教传统、集体主义价值观、高语境沟通方式，且东南亚（越南、新加坡）本身就处于儒家文化圈与南亚文化圈的交汇地带。
+
+**3 agents**
+
+| # | 角色名称 | 覆盖区域 | 合并说明 |
+|---|---------|---------|---------|
+| 1 | Western & Latin | 北美、西欧、澳洲、东欧 + 中南美洲 | 合并 Western 与 Latin American |
+| 2 | Afro-Islamic | 撒哈拉以南非洲 + 中东北非 | 合并 Sub-Saharan African 与 Islamic & Middle-Eastern |
+| 3 | Asian (East, South & SE) | 中日韩 + 南亚 + 东南亚 | 合并 East-Asian 与 South & SE Asian |
+
+合并理由：三个智能体对应 Huntington 文明冲突论中的三大文明板块——"西方文明"（含拉美作为西方的延伸）、"伊斯兰-非洲文明"、"亚洲文明"。Western 与 Latin American 亲和度 0.4（拉美的殖民语言、天主教传统、法律体系均源自西欧），合并后仍能保持三方之间的最大文化距离：个人主义-世俗（Western & Latin）vs 宗教-部落集体主义（Afro-Islamic）vs 儒家-佛教集体主义（Asian）。
+
+**2 agents**
+
+| # | 角色名称 | 覆盖区域 | 合并说明 |
+|---|---------|---------|---------|
+| 1 | Western-Individualist | 北美、西欧、澳洲、东欧 + 中南美洲 | Western + Latin American |
+| 2 | Eastern-Collectivist | 中日韩 + 南亚 + 东南亚 + 撒哈拉以南非洲 + 中东北非 | 其余四个区域全部合并 |
+
+合并理由：这是最极端的消融配置，对应 Hofstede 文化维度中最核心的一条轴线——**个人主义 vs 集体主义**。Western-Individualist 代表低权力距离、个人权利优先、世俗法治的文化传统；Eastern-Collectivist 代表高权力距离、群体和谐优先、宗教/传统权威主导的文化传统。虽然内部异质性很大，但这条轴线是跨文化研究中解释力最强的单一维度，2-agent 配置的目的是验证"仅靠一条核心文化对立轴是否足以产生有效的辩论蒸馏数据"。
+
+#### 预期消融结论
+
+- 6 agents：最高准确率（baseline），但推理成本最高（6× LLM 调用/样本）
+- 5 agents：预期准确率下降 < 1%（合并的两个区域亲缘度高，信息损失小）
+- 4 agents：预期准确率下降 1-3%（开始丢失细粒度文化区分能力）
+- 3 agents：预期准确率下降 3-5%（粗粒度文明板块仍能捕捉主要文化差异）
+- 2 agents：预期准确率下降 5-10%（仅保留一条文化轴线，对文化内部差异完全丧失区分力）
+
+推理成本与智能体数量线性相关（N agents = N 次 LLM 调用 + 1 次 Judge 调用），因此消融实验的核心问题是：**在准确率-成本的 trade-off 曲线上，拐点在哪里？**
+
+---
+
+### 2.9 各 Agent 完整 Prompt 记录
+
+#### 2.9.1 Guardian System Prompt
 
 所有 6 个文化 Agent 共享同一模板，仅文化区域名称和 cognitive foundation 描述不同：
 
@@ -544,7 +631,7 @@ Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
 | Islamic & Middle-Eastern | Sharia law, Eid al-Fitr, Eid al-Adha, unique halal dietary prohibitions, the sanctity of the color green and the right hand, and other Islamic cultural norms prevalent in the Middle East, North Africa, and parts of Southeast Asia |
 | South & Southeast Asian | Buddhist and Hindu traditions, as well as the unique folk customs and cultural taboos of tropical regions (such as not touching someone's head), prevalent in India, Thailand, Malaysia, etc. |
 
-#### 2.11.2 Auditor System Prompt
+#### 2.9.2 Auditor System Prompt
 
 同样 6 个 Agent 共享模板，仅文化背景名和 cognitive foundation 不同：
 
@@ -572,7 +659,7 @@ Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
 格式：Reasoning: <你的跨文化对比分析>\nAnswer: <数字>
 ```
 
-#### 2.11.3 Judge System Prompt
+#### 2.9.3 Judge System Prompt
 
 ```
 You are a neutral cultural fact-checker and final arbitrator.
@@ -632,7 +719,7 @@ When evaluating:
    - 审查每个审计员的推理链中是否包含具体的文化引用（习俗、传统、规范），并评估其与目标文化语境的对齐度。
 ```
 
-#### 2.11.4 Guardian Per-Round User Prompt（Phase 1）
+#### 2.9.4 Guardian Per-Round User Prompt（Phase 1）
 
 Guardian 在第一阶段独立生成时接收的用户消息：
 
@@ -672,7 +759,7 @@ Reasoning: <你的权威文化分析>
 Answer: <数字>
 ```
 
-#### 2.11.5 Auditor Per-Round User Prompt
+#### 2.9.5 Auditor Per-Round User Prompt
 
 **（a）有协商模式（negotiation_rounds=1）：Auditor 看到 Guardian 回答后生成**
 
@@ -744,7 +831,7 @@ Reasoning: <你的跨文化对比分析>
 Answer: <数字>
 ```
 
-#### 2.11.6 Judge Per-Round User Prompt
+#### 2.9.6 Judge Per-Round User Prompt
 
 **（a）正常模式（Guardian 有效）：**
 
@@ -904,7 +991,7 @@ Reasoning: <你的推理，需引用亲缘度加权证据>
 Answer: <数字>
 ```
 
-#### 2.11.7 采样温度配置
+#### 2.9.7 采样温度配置
 
 | 角色 | Temperature | 设计意图 |
 |------|-------------|---------|
@@ -919,7 +1006,7 @@ Answer: <数字>
 
 ### 3.1 动机
 
-HF-CAC 生成的多智能体对话数据中，包含了 Guardian（主场守护者）和 Auditor（客场审视者）两种角色的完整推理轨迹。Auditor 在辩论早期可能输出带有文化混淆、偏见或引导错误的内容。如果使用传统 SFT（对所有 Token 平等计算交叉熵），单体模型会在自回归预测中拟合这些"毒草 Token"，在内部种下文化混淆的种子。
+HF-CAC 生成的多智能体对话数据中，包含了 Guardian（主场守护者）和 Auditor（客场审视者）两种角色的完整推理轨迹。Auditor 在辩论早期可能输出带有文化混淆、偏见或引导错误的内容。如果使用传统 SFT（对所有 Token 平等计算交叉熵），单体模型会在自回归预测中拟合这些"毒草 Token"。
 
 ### 3.2 核心策略：Token 级加权与掩码
 
@@ -1144,13 +1231,11 @@ python Cul/step_label/validate_labels.py \
 
 ### 5.1 PRM 架构
 
-**基座模型**：Stage 1 SFT 训练完成的 student model（非独立小模型）。
-
-**设计思路**：使用 SFT 后的模型作为 PRM 基座，因为该模型已经通过 Stage 1 学习了文化推理的语义表示，对文化相关 Token 具有更好的隐层表征。在此基础上添加线性回归头，以最小参数增量获得步骤级打分能力。
+**基座模型**：student model（或 SFT 后的模型）。
 
 **架构**：
 
-在 SFT 模型基座之上添加一个线性回归头（hidden_size → 1）和 Sigmoid 激活函数。前向推理时，将完整输入（含所有 Step）送入基座模型获取最后一层 hidden states，然后在每个 Step 终止符的位置提取对应的 hidden state 向量，经线性头映射为标量 logit，再通过 Sigmoid 压缩到 (0, 1) 区间，作为该 Step 的预测分数。最终输出为一组步骤级分数，每个分数对应一个 Step 的质量评估。
+在基座之上添加一个线性回归头（hidden_size → 1）和 Sigmoid 激活函数。前向推理时，将完整输入（含所有 Step）送入基座模型获取最后一层 hidden states，然后在每个 Step 终止符的位置提取对应的 hidden state 向量，经线性头映射为标量 logit，再通过 Sigmoid 压缩到 (0, 1) 区间，作为该 Step 的预测分数。最终输出为一组步骤级分数，每个分数对应一个 Step 的质量评估。
 
 **为什么保留 Sigmoid 激活函数**：
 
@@ -1276,7 +1361,7 @@ python Cul/prm/eval_prm.py \
 
 ## 6. GRPO 强化学习
 
-### 6.1 Reward 设计：加权平均形式
+### 6.1 Reward：加权平均形式
 
 ```
 R_total = alpha * R_outcome + (1 - alpha) * Mean(R_process)
