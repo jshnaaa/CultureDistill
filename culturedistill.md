@@ -1677,28 +1677,28 @@ Pipeline 各步骤：
 
 ```bash
 # Step 0（仅 RECONCILE 模式，自动触发）：生成对称多智能体推理数据
-python generate_reconcile_data.py \
+python MAGDi/generate_reconcile_data.py \
     --input_file ../Cul/data/culturalBench_mas.json \
     --output_file /autodl-fs/data/qwen/culturalbench_reconcile_inference.jsonl \
     --config_file ../Cul/configs/reconcile_config.yaml \
     --model_name qwen --use_vllm --tensor_parallel_size 2
 
 # Step 1：将推理数据转换为 MAG 图格式
-python generate_mag_data.py \
+python MAGDi/generate_mag_data.py \
     --data_source reconcile \
     --input_file /autodl-fs/data/qwen/culturalbench_reconcile_inference.jsonl \
     --dataset culturalbench \
     --output_file MAG/culturalbench_reconcile.json
 
 # Step 2：提取节点嵌入（加权平均池化 last hidden states）
-python get_node_emb_culture.py \
+python MAGDi/get_node_emb_culture.py \
     --mag_file MAG/culturalbench_reconcile.json \
     --model_name mistralai/Mistral-7B-Instruct-v0.2 \
     --output_file node_emb/culturalbench_reconcile_node_emb.pkl \
     --data_source reconcile
 
 # Step 3：训练 MAGDi（NTP + Margin Ranking + GCN 三目标）
-python train_culture.py \
+python MAGDi/train_culture.py \
     --dataset culturalbench --data_source reconcile \
     --mag_file MAG/culturalbench_reconcile.json \
     --node_emb_file node_emb/culturalbench_reconcile_node_emb.pkl \
@@ -1707,7 +1707,7 @@ python train_culture.py \
     --num_epochs 10 --lr 5e-6 --alpha 1.0 --beta 1.0 --gamma 0.1
 
 # Step 4：评估（使用与 CAMAD 相同的 test split）
-python test_culture.py \
+python MAGDi/test_culture.py \
     --dataset culturalbench --data_source reconcile \
     --data_pkl /autodl-fs/data/qwen/culturalbench_splits.pkl \
     --base_model mistralai/Mistral-7B-Instruct-v0.2 \
