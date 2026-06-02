@@ -220,6 +220,11 @@ def main():
     parser.add_argument("--include_judge", type=str, default="true",
                         choices=["true", "false"],
                         help="Whether to include Judge reasoning. Default: true.")
+    parser.add_argument("--num_agents", type=int, default=6,
+                        choices=[2, 3, 4, 5, 6],
+                        help="Number of cultural agents for ablation study. "
+                             "6=full (default), fewer agents merge culturally "
+                             "proximate roles. See culturedistill.md §2.8.")
     parser.add_argument("--eval_accuracy", type=str, default="true",
                         choices=["true", "false"],
                         help="Whether to compute and save accuracy metrics "
@@ -306,8 +311,10 @@ def main():
         max_tokens=args.max_tokens,
         include_judge=args.include_judge,
         negotiation_rounds=args.negotiation_rounds,
+        num_agents=args.num_agents,
     )
     print(f"HF-CAC initialized:")
+    print(f"  Num agents: {mas.num_agents}")
     print(f"  Task type: {mas.task_type}")
     print(f"  Include Judge: {args.include_judge}")
     print(f"  Negotiation rounds: {args.negotiation_rounds}")
@@ -319,12 +326,14 @@ def main():
             batch = dataset[start: start + args.batch_size]
             results = mas.inference_batch(batch)
             for sample, result in zip(batch, results):
-                output = {**sample, **result, "task_type": mas.task_type}
+                output = {**sample, **result, "task_type": mas.task_type,
+                          "num_agents": mas.num_agents}
                 write_to_jsonl(lock, args.output_file, output)
     else:
         for sample in tqdm(dataset, desc="Samples"):
             result = mas.inference(sample)
-            output = {**sample, **result, "task_type": mas.task_type}
+            output = {**sample, **result, "task_type": mas.task_type,
+                      "num_agents": mas.num_agents}
             write_to_jsonl(lock, args.output_file, output)
 
     print(f"\nDone. Results saved to: {args.output_file}")
