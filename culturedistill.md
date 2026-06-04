@@ -2,8 +2,6 @@
 
 ## 1. 概览
 
-贡献：
-
 ### 1.1 HF-CAC：一种新的多智能体协作范式（创新点一）
 
 HF-CAC（Home-Field Culture-Activated Collaboration）是提出的面向文化对齐任务的多智能体协作新范式。
@@ -104,19 +102,19 @@ source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
       --input_file /autodl-fs/data/culturalBench_mas.json \
-      --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_inference.jsonl \
+      --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_6agents.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true
+      --include_judge true --num_agents 6
       
 python Cul/generate_hf_cac_data.py \
       --input_file /autodl-fs/data/normad_mas.json \
-      --output_file /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+      --output_file /autodl-fs/data/qwen/normad_hf_cac_6agents.jsonl \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true
+      --include_judge true --num_agents 6
 shutdown
 ```
 
@@ -135,7 +133,7 @@ shutdown
 
 ```bash
 python Cul/split_data.py \
-    --input /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --input /autodl-fs/data/qwen/normad_hf_cac_6agents.jsonl \
     --output /autodl-fs/data/qwen/normad_splits.pkl \
     --seed 42
 ```
@@ -152,11 +150,6 @@ python Cul/split_data.py \
   "response": "===== Solution 1 [GUARDIAN] =====\nReasoning: ...\nAnswer: 1\n===== Solution 2 [AUDITOR] =====\n...\n===== Solution 7 [JUDGE] =====\n..."
 }
 ```
-
-与原 RECONCILE 格式的区别：
-- Solution 标题包含 `[GUARDIAN]`/`[AUDITOR]`/`[JUDGE]` 角色标签
-- 额外输出 `guardian_idx` 和 `guardian_name` 字段，便于下游蒸馏管线使用
-- Guardian 的推理路径包含权威确认语言，Auditor 包含对比/不确定性表达
 
 ### 2.6 Baseline
 
@@ -178,7 +171,6 @@ python Cul/generate_culture_data.py \
 | `--max_samples` | 处理样本数（0=全量，>0=取前 N 条用于快速测试）|
 | `--num_debate_rounds` | 辩论轮数（覆盖 config 中的值，0=无辩论仅独立推理）|
 | `--include_judge` | 是否包含 Judge 裁决（`true`/`false`）|
-| `--batch_size` | vLLM 批次大小（默认 8）|
 
 #### 2.6.1 MAD 
 
@@ -235,8 +227,6 @@ python MAD/self_reflect_debate.py \
 |------|------|--------|
 | `--output_dir` | 输出目录（默认 /autodl-fs/data/mad） | None |
 | `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
-| `--batch_size` | 每批处理样本数 | 8 |
-| `--max_samples` | 最大处理样本数（0=全部） | 0 |
 | `--temperature` | 采样温度 | 0.7 |
 | `--max_tokens` | 最大生成 token 数 | 512 |
 
@@ -324,7 +314,6 @@ python MACD/macd_debate.py \
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--max_samples` | 最大处理样本数（0=全部） | 0 |
 | `--temperature` | 采样温度（较低值使判断更果断） | 0.3 |
 | `--max_tokens` | Agent 每次生成最大 token 数 | 200 |
 | `--num_rounds` | 辩论轮数（论文默认 2 轮） | 2 |
@@ -422,8 +411,6 @@ python OG/og_mar.py \
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--batch_size` | 每批处理样本数 | 8 |
-| `--max_samples` | 最大处理样本数（0=全部） | 0 |
 | `--temperature` | 采样温度（论文使用 0 保证稳定行为） | 0.0 |
 | `--max_tokens` | 最大生成 token 数（JSON 输出较长） | 768 |
 | `--num_personas` | Persona Agent 数量 K（论文默认 5） | 5 |
@@ -470,50 +457,9 @@ python OG/og_mar.py \
 }
 ```
 
-### 2.7 代码结构
-
-```
-Cul/
-├── scripts/
-│   ├── convert_normad.py              # 数据格式转换：normad.jsonl → normad_mas.json
-│   ├── convert_culturalbench.py       # 数据格式转换：CulturalBench-Easy.csv → culturalBench_mas.json
-│   └── analyze_inference.py           # 推理结果分析脚本
-├── configs/
-│   ├── hf_cac_config.yaml             # HF-CAC 配置（NormAD：行为可接受性 1/2/3）
-│   ├── hf_cac_config_cultureatlas.yaml  # HF-CAC 配置（CultureAtlas：文化深度比较 1/2）
-│   ├── hf_cac_config_culturalbench.yaml # HF-CAC 配置（CulturalBench：文化知识四选一 1/2/3/4）
-│   └── reconcile_config.yaml          # 原 RECONCILE 配置（baseline）
-├── hf_cac_mas.py                      # HF-CAC 核心推理引擎（主场识别、两阶段 batch inference、Affinity Arbitration）
-├── generate_hf_cac_data.py            # HF-CAC 数据生成入口（自动检测 normad/cultureatlas/culturalbench）
-├── resume_hf_cac.py                   # HF-CAC 断点续跑工具
-├── run_camad_pipeline.py              # CAMA-D 全流程 Pipeline 入口（一键串联 Phase 0-5）
-├── split_data.py                      # 数据划分（8:1:1 → pkl）
-├── evaluate.py                        # 评估脚本（支持 sft/rl/sft_rl 模式）
-├── sft/
-│   └── train_sft_weighted.py          # Stage 1: 主场权威加权 SFT 训练
-├── step_label/
-│   ├── split_steps.py                 # 推理步骤切分
-│   ├── label_steps.py                 # Stage 2: 开卷式步骤标注（{0.1, 0.5, 0.9}）
-│   ├── split_step_labels.py           # 步骤标签数据划分
-│   └── validate_labels.py             # 标签验证
-├── prm/
-│   ├── train_prm_mse.py               # Stage 3a: 过程奖励模型训练（Sigmoid + 加权 MSE）
-│   └── eval_prm.py                    # PRM 评估
-└── grpo/
-└── train_grpo_v3.py               # Stage 3b: GRPO 强化学习训练（含 Guardian 相似度调制信号）
-```
-
-### 2.8 Agent 角色设定
+### 2.7 Agent 角色设定
 
 HF-CAC 框架通过 `--num_agents` 参数支持 2~6 个智能体的消融实验。默认使用 6 个智能体（完整覆盖全球六大文化圈），减少智能体数量时按照"文化亲缘性"原则进行合并——将 Hofstede 文化维度相近、地理相邻、宗教/哲学传统有交叉的文化区域合并为一个智能体。
-
-#### 设计原则
-
-合并遵循三条准则：
-
-1. **最大化文化距离**：保留的智能体之间应尽可能代表差异最大的文化维度（个人主义 vs 集体主义、高权力距离 vs 低权力距离、世俗 vs 宗教主导等），以确保辩论中产生有意义的对比视角。
-2. **优先合并亲缘文化**：文化亲和矩阵中得分较高的区域优先合并（如 East-Asian 与 South & SE Asian 共享集体主义和佛教传统，亲和度 0.5；Sub-Saharan African 与 Islamic & Middle-Eastern 地理相邻且有伊斯兰文化渗透，亲和度 0.5）。
-3. **保持 Guardian 机制有效性**：每种配置下，数据集中出现的所有国家都必须能被至少一个智能体的 region_keywords 覆盖，确保 Home-Field Guardian 机制不会失效。
 
 #### 各配置下的角色分配
 
@@ -574,15 +520,6 @@ HF-CAC 框架通过 `--num_agents` 参数支持 2~6 个智能体的消融实验�
 
 合并理由：这是最极端的消融配置，对应 Hofstede 文化维度中最核心的一条轴线——**个人主义 vs 集体主义**。Western-Individualist 代表低权力距离、个人权利优先、世俗法治的文化传统；Eastern-Collectivist 代表高权力距离、群体和谐优先、宗教/传统权威主导的文化传统。虽然内部异质性很大，但这条轴线是跨文化研究中解释力最强的单一维度，2-agent 配置的目的是验证"仅靠一条核心文化对立轴是否足以产生有效的辩论蒸馏数据"。
 
-#### 预期消融结论
-
-- 6 agents：最高准确率（baseline），但推理成本最高（6× LLM 调用/样本）
-- 5 agents：预期准确率下降 < 1%（合并的两个区域亲缘度高，信息损失小）
-- 4 agents：预期准确率下降 1-3%（开始丢失细粒度文化区分能力）
-- 3 agents：预期准确率下降 3-5%（粗粒度文明板块仍能捕捉主要文化差异）
-- 2 agents：预期准确率下降 5-10%（仅保留一条文化轴线，对文化内部差异完全丧失区分力）
-
-推理成本与智能体数量线性相关（N agents = N 次 LLM 调用 + 1 次 Judge 调用），因此消融实验的核心问题是：**在准确率-成本的 trade-off 曲线上，拐点在哪里？**
 
 #### 消融实验运行命令
 
@@ -590,9 +527,6 @@ HF-CAC 框架通过 `--num_agents` 参数支持 2~6 个智能体的消融实验�
 cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
-
-# --- NormAD 数据集 ---
-# 6 agents (baseline, 默认)
 python Cul/generate_hf_cac_data.py \
       --input_file /autodl-fs/data/normad_mas.json \
       --output_file /autodl-fs/data/qwen/normad_hf_cac_6agents.jsonl \
@@ -690,9 +624,9 @@ shutdown
 
 ---
 
-### 2.9 各 Agent 完整 Prompt 记录
+### 2.8 各 Agent 完整 Prompt 记录
 
-#### 2.9.1 Guardian System Prompt
+#### 2.8.1 Guardian System Prompt
 
 所有 6 个文化 Agent 共享同一模板，仅文化区域名称和 cognitive foundation 描述不同：
 
@@ -736,7 +670,7 @@ Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
 | Islamic & Middle-Eastern | Sharia law, Eid al-Fitr, Eid al-Adha, unique halal dietary prohibitions, the sanctity of the color green and the right hand, and other Islamic cultural norms prevalent in the Middle East, North Africa, and parts of Southeast Asia |
 | South & Southeast Asian | Buddhist and Hindu traditions, as well as the unique folk customs and cultural taboos of tropical regions (such as not touching someone's head), prevalent in India, Thailand, Malaysia, etc. |
 
-#### 2.9.2 Auditor System Prompt
+#### 2.8.2 Auditor System Prompt
 
 同样 6 个 Agent 共享模板，仅文化背景名和 cognitive foundation 不同：
 
@@ -764,7 +698,7 @@ Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
 格式：Reasoning: <你的跨文化对比分析>\nAnswer: <数字>
 ```
 
-#### 2.9.3 Judge System Prompt
+#### 2.8.3 Judge System Prompt
 
 ```
 You are a neutral cultural fact-checker and final arbitrator.
@@ -824,7 +758,7 @@ When evaluating:
    - 审查每个审计员的推理链中是否包含具体的文化引用（习俗、传统、规范），并评估其与目标文化语境的对齐度。
 ```
 
-#### 2.9.4 Guardian Per-Round User Prompt（Phase 1）
+#### 2.8.4 Guardian Per-Round User Prompt（Phase 1）
 
 Guardian 在第一阶段独立生成时接收的用户消息：
 
@@ -864,7 +798,7 @@ Reasoning: <你的权威文化分析>
 Answer: <数字>
 ```
 
-#### 2.9.5 Auditor Per-Round User Prompt
+#### 2.8.5 Auditor Per-Round User Prompt
 
 **（a）有协商模式（negotiation_rounds=1）：Auditor 看到 Guardian 回答后生成**
 
@@ -936,7 +870,7 @@ Reasoning: <你的跨文化对比分析>
 Answer: <数字>
 ```
 
-#### 2.9.6 Judge Per-Round User Prompt
+#### 2.8.6 Judge Per-Round User Prompt
 
 **（a）正常模式（Guardian 有效）：**
 
@@ -1096,7 +1030,7 @@ Reasoning: <你的推理，需引用亲缘度加权证据>
 Answer: <数字>
 ```
 
-#### 2.9.7 采样温度配置
+#### 2.8.7 采样温度配置
 
 | 角色 | Temperature | 设计意图 |
 |------|-------------|---------|
@@ -1121,18 +1055,7 @@ HF-CAC 生成的多智能体对话数据中，包含了 Guardian（主场守护�
 - Auditor 最终轮之前的对抗性输出（质疑、混淆、偏离目标文化的内容）→ labels 填充 -100（完全掩码，不参与梯度计算）
 - Auditor 最终轮中被 Guardian 说服后的正确表态 → 保留，loss 权重 = 1.0（不放大，但允许学习"认知转换模式"）
 
-### 3.3 超参数
-
-| 参数 | 值 | 说明 |
-|------|----|------|
-| alpha (Guardian 权重) | 2.0 | Guardian Token 的 loss 放大系数 |
-| Auditor 掩码范围 | 非最终轮全部 Token | 最终轮表态保留 |
-| 学习率 | 2e-5 | 全参微调 |
-| Epochs | 3 | 早停（val_acc 2 epoch 不提升） |
-
-### 3.4 运行命令
-
-支持单卡和多卡 DDP 训练（通过 HuggingFace Accelerate）。
+### 3.3 运行命令
 
 单卡训练：
 
@@ -1173,7 +1096,6 @@ accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
 | `--lora_r` | LoRA rank（默认 32，保证文化知识充分学习）|
 | `--lr` | 学习率（LoRA 默认 2e-4，高于全参微调）|
 | `--eval_every_n_epochs` | 每 N 个 epoch 在验证集上评估一次（默认 1）|
-| `--max_samples` | 训练样本数量限制，0 表示使用全部数据，N>0 表示只使用前 N 条样本（默认 0）|
 | `--batch_size` | 每张卡的 batch size（默认 4，双卡时全局有效 batch size = 4×2 = 8）|
 | `--grad_accum_steps` | 梯度累积步数（默认 1，可增大以模拟更大 batch）|
 
@@ -1372,21 +1294,7 @@ python Cul/step_label/validate_labels.py \
 | 文化混淆步 (0.1) | 2.0 | 次高价值，模型需识别文化偏差和跨文化混淆 |
 | 中立讨论步 (0.5) | 1.0 | 基准权重，数量多但信息密度低 |
 
-### 5.3 训练配置
-
-| 参数 | 值 | 说明 |
-|------|----|------|
-| 基座模型 | Stage 1 SFT model (7B/8B) | 已有文化语义表征 |
-| 训练方式 | LoRA (rank=16) + score_head 全参 | 避免破坏 SFT 学到的生成能力 |
-| 学习率 | 5e-5 (score_head), 1e-4 (LoRA) | |
-| Epochs | 5 | |
-| Batch size | 8 | |
-| 优化器 | AdamW (weight_decay=0.01) | |
-| bf16 | True | |
-
-**为什么用 LoRA 而非全参微调**：PRM 的基座将在 Stage 3 GRPO 中作为打分器使用，如果全参微调可能破坏其作为生成模型的能力（后续若需要复用为 actor 模型）。LoRA 以最小扰动添加打分能力。
-
-### 5.4 验证指标
+### 5.3 验证指标
 
 | 指标 | 目标 | 说明 |
 |------|------|------|
@@ -1402,7 +1310,7 @@ pred ∈ [0.3, 0.7] → 预测为 0.5（中立讨论步）
 pred < 0.3   → 预测为 0.1（文化混淆步）
 ```
 
-### 5.5 运行命令
+### 5.4 运行命令
 
 **切分标注数据为 train/val（PRM 训练需要）**
 ```bash
@@ -1453,20 +1361,24 @@ python Cul/prm/train_prm_mse.py \
     --eval_every_n_epochs 1
 ```
 
-注意：RL-only 模式不传 `--sft_adapter_path`，PRM 直接在原始 base model 上训练。
-
 **PRM 评估**
 ```bash
 python Cul/prm/eval_prm.py \
     --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
     --sft_path /autodl-fs/data/model/qwen/normad_camad_sft/best \
     --val_file /autodl-fs/data/qwen/normad_step_labels_val.jsonl
+
+python Cul/prm/eval_prm.py \
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
+    --val_file /autodl-fs/data/qwen/normad_step_labels_val.jsonl
 ```
 ---
 
-## 6. GRPO 强化学习
+## 6. GRPO
 
-### 6.1 Reward：加权平均形式
+### 6.1 GRPO（不混合）
+
+#### 6.1.1 Reward：加权平均形式
 
 ```
 R_total = alpha * R_outcome + (1 - alpha) * Mean(R_process)
@@ -1477,56 +1389,9 @@ R_total = alpha * R_outcome + (1 - alpha) * Mean(R_process)
 - `Mean(R_process) ∈ [0.1, 0.9]`：当前推理链中所有步骤的 PRM 得分（经 Sigmoid）的算术平均值。中间全走偏为 ~0.1，全中立为 ~0.5，完美主场确权为 ~0.9
 - `alpha = 0.6`：结果奖励占主导
 
-**具体数值示例**：
-- 模型答对 + 推理全是文化混淆步：`R_total = 0.6 × 1 + 0.4 × 0.1 = 0.64`
-- 模型答对 + 推理展现完美主场确权：`R_total = 0.6 × 1 + 0.4 × 0.9 = 0.96`
-- 模型答错 + 推理全是确权步：`R_total = 0.6 × 0 + 0.4 × 0.9 = 0.36`
-- 模型答错 + 推理全是混淆步：`R_total = 0.6 × 0 + 0.4 × 0.1 = 0.04`
+#### 6.1.2 运行命令
 
-**超参数 alpha=0.6 的逻辑支撑**：
-
-在文化对齐任务中，"答对（事实正确）"是硬指标，底线不能丢，因此 R_outcome 必须占大头（0.6）。而"推理路径的文化合理性"（R_process）作为软约束，负责从多组全部答对的采样中，选出表现得最像主场 Guardian、最优雅的那条路径。0.4 的权重足以在组内拉开相对 Advantage 的差距，促使 GRPO 向主场思辨方向演化。
-
-### 6.2 GRPO 在线采样流程
-
-```
-对每个 prompt (question, country)：
-  1. 当前 policy 采样 G=10 条推理路径
-  2. 对每条路径：
-     a. 规则验证答案 → R_outcome ∈ {0, 1}
-     b. 启发式切分推理步骤 → [Step 1], [Step 2], ...
-     c. PRM 对每个 Step 终止符位置打分（Sigmoid 输出 ∈ (0,1)）→ scores[]
-     d. Mean(R_process) = mean(scores)  // ∈ [0.1, 0.9]
-     e. R_total = 0.6 * R_outcome + 0.4 * Mean(R_process)
-  3. 组内计算 Advantage（RLOO baseline）
-  4. [可选] Guardian 相似度调制：
-     a. 查找该 (country, query) 对应的 Guardian response
-     b. 计算 S_guardian = R_outcome^guardian * (R_guardian - mean_R_on)
-     c. 对每条 rollout 计算 Sim(y_i, y_guardian)
-     d. A_i += λ * w_culture * S_guardian * Sim(y_i, y_guardian)
-  5. 策略梯度更新 policy 参数
-  6. 下一轮用更新后模型重新采样
-```
-
-### 6.3 训练配置
-
-| 参数 | 值 | 说明 |
-|------|----|------|
-| Student model | Qwen2.5-7B-Instruct / Llama-3.1-8B-Instruct | |
-| Group size (G) | 10 | 每 prompt 采样数 |
-| Advantage estimator | RLOO | |
-| alpha (R_outcome 权重) | 0.6 | |
-| KL penalty | 0.05 | 防止 policy 漂移 |
-| Temperature | 0.7 | 采样温度 |
-| 学习率 | 5e-7 (RL-only), 1e-7 (SFT+RL) | |
-| Max rounds | 30 (RL-only), 20 (SFT+RL) | |
-| Eval every | 5 rounds | |
-| bf16 | True | |
-| ZeRO stage | 3 | 2卡必须 |
-
-### 6.4 运行命令
-
-**GRPO 强化学习（SFT+RL 模式，LoRA，无 DeepSpeed）**
+**GRPO （SFT+RL 模式，LoRA，无 DeepSpeed）**
 ```bash
 python Cul/grpo/train_grpo_v3.py \
     --model_name qwen \
@@ -1557,7 +1422,7 @@ python Cul/grpo/train_grpo_v3.py \
 | `--lora_r` | GRPO LoRA rank（默认 16）|
 
 
-**GRPO 强化学习（无 SFT adapter，lr=5e-5，max_rounds=30）**
+**GRPO（无 SFT adapter，lr=5e-5，max_rounds=30）**
 ```bash
 python Cul/grpo/train_grpo_v3.py \
     --model_name qwen \
@@ -1574,7 +1439,7 @@ python Cul/grpo/train_grpo_v3.py \
 ```
 与 SFT+RL 模式的关键差异：不传 `--sft_adapter`（从 base model 出发），学习率 5e-5（高于 SFT+RL 的 2e-5），最大轮数 30（多于 SFT+RL 的 20）。
 
-**备选: GRPO 强化学习（DeepSpeed ZeRO-3 版，train_grpo.py）**
+**备选: GRPO（DeepSpeed ZeRO-3 版，train_grpo.py）**
 ```bash
 deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
     --model_name     qwen \
@@ -1601,121 +1466,7 @@ deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
 
 与 `train_grpo_v3.py` 的区别：使用 DeepSpeed ZeRO-3 进行多卡并行（显存效率更高），R_total = 0.7×R_ans + 0.3×R_cultural，PRM 使用 step-level scoring（与 `train_prm_mse.py` 训练的 PRM 完全适配）。
 
-### 6.5 Guardian 相似度调制信号（Similarity-Modulated Guardian Signal）
-
-#### 问题：奖励重复计算
-
-原始 CGM-GRPO 方案中，Guardian 信号 `S_guardian` 作为统一 bonus 加到所有 on-policy rollout 的 advantage 上：
-
-```
-A_i = A_i^base + λ * w_culture * S_guardian
-```
-
-这存在"奖励重复计算"问题：一个答错的 rollout（R_outcome=0）和一个答对的 rollout（R_outcome=1）获得相同的 Guardian bonus。这违反了直觉——只有与 Guardian 推理路径相似的 rollout 才应该获得正向引导。
-
-#### 改进：相似度调制
-
-改进后的公式：
-
-```
-A_i = A_i^base + λ * w_culture * S_guardian * Sim(y_i, y_guardian)
-```
-
-其中：
-- `A_i^base`：标准 RLOO advantage（R_i - R_on_bar）
-- `S_guardian = R_outcome^guardian * (R_guardian - R̄_on)`：Guardian 信号强度
-  - `R_outcome^guardian`：Guardian 是否答对（质量门控，0 或 1）
-  - `R_guardian`：Guardian 的 reward 值
-  - `R̄_on`：on-policy 全组 R_outcome 均值
-- `Sim(y_i, y_guardian) ∈ [0, 1]`：rollout i 与 Guardian 的相似度
-- `λ`：全局引导强度（默认 0.3）
-- `w_culture`：文化权重（默认 1.0）
-
-#### Sim 计算方式
-
-支持三种模式（`--guardian_sim_mode`）：
-
-| 模式 | 计算方式 | 特点 |
-|------|----------|------|
-| `answer` | 答案一致性：rollout 答案 == Guardian 答案 → 1.0，否则 → 0.0 | 最简单，计算零开销，推荐默认 |
-| `step_overlap` | SequenceMatcher 对推理步骤序列的相似度比率 ∈ [0,1] | 软相似度，捕捉推理路径相似性 |
-| `hybrid` | 0.7 × answer_sim + 0.3 × step_overlap | 兼顾答案正确性和推理路径 |
-
-#### 信号行为分析
-
-| 场景 | S_guardian | Sim | Bonus | 效果 |
-|------|-----------|-----|-------|------|
-| Guardian 答对，rollout 也答对且路径相似 | 正 | 高 | 正（大） | 强化该 rollout |
-| Guardian 答对，rollout 答错 | 正 | 0 | 0 | 不干扰（避免重复计算） |
-| Guardian 答对，rollout 答对但路径不同 | 正 | 低 | 正（小） | 轻微引导 |
-| Guardian 答错 | 0 | - | 0 | 质量门控生效，不引导 |
-| 全组都答对（mean_R_on=1） | 0 | - | 0 | 无需引导，回退标准 GRPO |
-
-#### 运行命令
-
-**GRPO + Guardian 相似度调制（推荐配置）**
-```bash
-python Cul/grpo/train_grpo_v3.py \
-    --model_name qwen \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
-    --prm_backbone /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
-    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --guardian_lambda 0.3 \
-    --guardian_w_culture 1.0 \
-    --guardian_sim_mode answer \
-    --output_dir /autodl-fs/data/model/qwen/normad_camad_grpo_guardian \
-    --alpha 0.6 \
-    --n_samples 10 \
-    --max_rounds 20 \
-    --eval_every 5 \
-    --lr 2e-5 \
-    --lora_r 16
-```
-
-| 参数 | 含义 |
-|------|------|
-| `--guardian_data` | HF-CAC 推理输出 JSONL（含 Guardian response） |
-| `--guardian_lambda` | Guardian 信号强度 λ（默认 0.3，建议范围 0.1-0.5） |
-| `--guardian_w_culture` | 文化权重 w_culture（默认 1.0） |
-| `--guardian_sim_mode` | 相似度模式：answer / step_overlap / hybrid |
-
-**消融实验：不同 sim_mode 对比**
-```bash
-# answer 模式（二值，最快）
-python Cul/grpo/train_grpo_v3.py \
-    --model_name qwen \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
-    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --guardian_lambda 0.3 --guardian_sim_mode answer \
-    --output_dir /autodl-fs/data/model/qwen/grpo_guardian_sim_answer \
-    --alpha 0.6 --n_samples 10 --max_rounds 20 --eval_every 5 --lr 2e-5
-
-# hybrid 模式（0.7*answer + 0.3*step_overlap）
-python Cul/grpo/train_grpo_v3.py \
-    --model_name qwen \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
-    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --guardian_lambda 0.3 --guardian_sim_mode hybrid \
-    --output_dir /autodl-fs/data/model/qwen/grpo_guardian_sim_hybrid \
-    --alpha 0.6 --n_samples 10 --max_rounds 20 --eval_every 5 --lr 2e-5
-
-# 无 Guardian 基线（标准 GRPO，用于对比）
-python Cul/grpo/train_grpo_v3.py \
-    --model_name qwen \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
-    --output_dir /autodl-fs/data/model/qwen/grpo_no_guardian_baseline \
-    --alpha 0.6 --n_samples 10 --max_rounds 20 --eval_every 5 --lr 2e-5
-```
-
-### 6.6 测试 运行命令
+#### 6.1.3 评估的运行命令
 
 ```bash
 # 评估 SFT 模型
@@ -1751,6 +1502,81 @@ python Cul/evaluate.py \
 | `--sft_adapter` | SFT LoRA adapter 路径（sft 和 sft_rl 模式需要）|
 | `--grpo_adapter` | GRPO LoRA adapter 路径（rl 和 sft_rl 模式需要）|
 | `--output_json` | 可选，保存详细结果（含每条样本的预测和按国家分组准确率）|
+
+### 6.2 CGM-GRPO
+
+CGM-GRPO（Culture-Guided Mixed-Policy GRPO）是 CAMAD 框架的核心创新训练算法，在标准 GRPO 的 advantage estimation 中注入来自 HF-CAC Guardian 的文化专家引导信号，实现「文化难度感知的混合策略强化学习」。
+
+**核心思想**：保持 RLOO 对 on-policy 轨迹的计算完全不变，额外叠加一个 Guardian 引导项作为 advantage 增强。引导强度由三因子文化难度系数 $w_{culture}$ 动态调制。Guardian 不参与 policy gradient 的梯度计算（不需要 importance sampling），只通过自身的 reward 值影响 on-policy 轨迹被鼓励/抑制的程度。
+
+**核心公式**：
+
+$$A_i = A_i^{base} + \lambda \cdot w_{culture} \cdot S_{guardian} \cdot Sim(y_i, y_{guardian})$$
+
+其中：
+
+- $A_i^{base} = R_i - \bar{R}_{on}$：标准 RLOO advantage（leave-one-out baseline）
+- $S_{guardian} = R_{outcome}^{guardian} \cdot (R_{guardian} - \bar{R}_{on}^{full})$：质量门控的 Guardian 信号
+- $R_{guardian} = \alpha \cdot R_{outcome}^{guardian} + (1-\alpha) \cdot Mean(R_{process}^{guardian})$：Guardian 的综合奖励（使用 PRM 评分）
+- $Sim(y_i, y_{guardian})$：rollout 与 Guardian 的相似度调制（answer/step_overlap/hybrid 模式）
+- $\lambda$：全局引导强度超参（默认 0.5）
+
+**三因子文化难度系数**：
+
+$$w_{culture} = \lambda_1 \cdot (1 - hit\_rate) + \lambda_2 \cdot rarity_i + \lambda_3 \cdot (1 - affinity_i)$$
+
+推荐系数 $\lambda_1=0.6, \lambda_2=0.3, \lambda_3=0.1$。三个因子分别捕捉：动态模型能力（hit_rate 越低越需要引导）、静态数据稀缺度（长尾文化圈 rarity 高）、文化迁移难度（孤立文化 affinity 低）。支持三种模式：`hit_only`（MVP）、`hit_rarity`（标准）、`full`（三因子）。
+
+**门控机制**：
+
+- 质量门控：Guardian 答错时 $S_{guardian}=0$，引导项自动消失
+- 必要性门控：$hit\_rate \geq 0.8$ 时跳过引导（模型已足够好）
+
+**与标准 GRPO 的关键区别**：Guardian 轨迹不参与 RLOO baseline 计算，不参与 policy gradient 的 backward，不需要 importance sampling。它只是一个标量信号叠加到 on-policy 轨迹的 advantage 上。
+
+**代码位置**：`Cul/grpo/train_cgm_grpo.py`（训练）、`Cul/grpo/eval_cgm_grpo.py`（评估）
+
+**训练命令**（双卡，SFT+CGM-GRPO 模式）：
+
+```bash
+python Cul/grpo/train_cgm_grpo.py \
+    --model_name     qwen \
+    --sft_adapter    /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --data_pkl       /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --guardian_data  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_dir     /autodl-fs/data/model/qwen/normad_camad_cgm_grpo \
+    --w_culture_mode hit_rarity \
+    --lambda_guide   0.5 \
+    --alpha          0.6 \
+    --n_samples      5 \
+    --max_rounds     20 \
+    --batches_per_round 130 \
+    --eval_every     5
+```
+
+**评估命令**（双卡）：
+
+```bash
+python Cul/grpo/eval_cgm_grpo.py \
+    --mode sft_rl \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --grpo_adapter /autodl-fs/data/model/qwen/normad_camad_cgm_grpo/best \
+    --output_json /autodl-fs/data/results/cgm_grpo_eval.json
+```
+
+**关键参数说明**：
+
+| 参数 | 说明 |
+|------|------|
+| `--guardian_data` | HF-CAC 推理 JSONL 文件路径（必需）|
+| `--lambda_guide` | Guardian 引导强度（默认 0.5，建议搜索 {0.3, 0.5, 0.7}）|
+| `--w_culture_mode` | 文化难度系数模式：`hit_only`/`hit_rarity`/`full` |
+| `--affinity_config` | 亲缘度矩阵配置路径（仅 `full` 模式需要）|
+| `--guardian_sim_mode` | 相似度模式：`answer`/`step_overlap`/`hybrid` |
+| `--hit_rate_threshold` | 必要性门控阈值（默认 0.8）|
 
 ---
 
