@@ -140,95 +140,147 @@ UFT（MIT, NeurIPS 2025, arXiv:2505.16984）把条件路由做到了单步内：
 
 为什么可行：完全复用现有 SFT 脚本，仅增加一个按国家分组的遗忘检测逻辑。是 ReLIFT 思想在文化场景的直接落地，风险最低、收益明确，应作为第一优先实现的方案。
 
-### 创新思路二：文化亲缘度加权的 Off-Policy Guidance GRPO（LUFFY 乘以 HF-CAC）
+### 创新思路二（主推方案）：文化难度感知的混合策略 GRPO（CGM-GRPO: Culture-Guided Mixed-Policy GRPO）
 
-这是把 LUFFY 的 Mixed-Policy GRPO 与 CAMAD 已有的文化亲缘度矩阵深度结合的原创方案，理论价值最高。
+这是本文档的主推创新方案。核心思想不是简单的 Mixed-Policy（LUFFY 已做），而是 Culture-Difficulty-Aware Mixed-Policy——根据文化难度动态决定「什么时候相信专家（Guardian）、什么时候相信模型自己」。这是文化对齐任务独有的创新点：文化知识的难度拥有明确的结构化先验（数据频率 + 模型实时能力 + 文化迁移距离），而通用推理任务（如数学）的难度缺乏这样的外部先验。
 
-机制：在 GRPO 的 advantage estimation 中，除了当前 policy 的 on-policy rollout（G 条），额外注入来自 HF-CAC 的 off-policy Guardian 轨迹作为高质量外部示范。关键创新在于——off-policy 轨迹的重要性采样权重不是均匀的，而是按 CAMAD 已有的 6 乘 6 文化亲缘度矩阵进行调制：当目标国家属于冷门长尾文化（Guardian 在 MAS 阶段曾失效、靠亲缘度仲裁的样本），加大 off-policy Guardian 示范的引导权重，因为这类样本模型最难自己探索出来；当目标国家是高频文化（模型本身已掌握），减小 off-policy 权重，让模型自主探索。
+机制概述：在 GRPO 的 advantage estimation 中，保持 RLOO 对 on-policy 轨迹的计算完全不变，额外叠加一个来自 HF-CAC Guardian 的引导信号作为 advantage 增强项。引导强度由三因子文化难度系数 w_culture 动态调制。Guardian 不参与 RLOO baseline 计算（保持理论合法性），也不参与 policy gradient 的梯度计算（不需要 importance sampling），它只通过自身的 reward 值影响 on-policy 轨迹被鼓励/抑制的程度。
 
-这正好对应 LUFFY 的核心洞见：纯 on-policy RL 受限于模型自身能力，弱模型在长尾文化上根本采样不出正确路径，必须靠强示范突破能力边界。而 CAMAD 的文化亲缘度矩阵恰好提供了一个现成的、确定性的难度/置信度先验来调制 off-policy 强度。
+核心公式：A_i = (R_i - R_on_bar) + lambda * w_culture * S_guardian
 
-为什么可行且创新：CAMAD 已经有亲缘度矩阵和 Guardian 轨迹数据，复用现成资产；把文化属地性从数据生成阶段（HF-CAC）一路贯穿到 RL 阶段（亲缘度加权的 mixed-policy），形成方法论闭环，是单纯套用 LUFFY 所不具备的故事性。
+其中：第一项 (R_i - R_on_bar) 是标准 RLOO advantage，R_on_bar 是同一 prompt 下其他 on-policy 轨迹的 leave-one-out 均值。第二项是 Guardian 文化专家引导项，S_guardian = R_outcome_guardian * (R_guardian - R_on_bar_full)，即 Guardian 轨迹的 R_total 相对于 on-policy 全组均值的优势（乘以 Guardian 答案正确性作为质量门控）。w_culture 是三因子文化难度系数，根据当前 prompt 的文化学习难度动态调制引导强度。lambda 是全局引导强度超参（建议 0.5）。
+
+公式的直觉：当模型在某文化题上全部答错（R_on_bar 趋近 0）而 Guardian 答对（R_guardian 较高）时，S_guardian 很大、w_culture 也很大（hit_rate=0），第二项把所有 on-policy 轨迹的 advantage 统一上调——即使它们本身的 reward 都很低，也会受到 Guardian 的正向引导。反之，模型自己答对率很高时，w_culture 趋近 0，第二项消失，完全回退为标准 GRPO。
+
+为什么这比 LUFFY 更适合文化场景：LUFFY 对所有样本统一注入 off-policy 信号（且需要 importance sampling 修正），我们根据文化难度差异化地调控引导力度（且不需要 IS）。文化任务的独特之处在于：不同文化圈的「模型学习难度」差异极大且可被先验量化，这为差异化引导提供了理论和数据支撑。
 
 ---
 
-#### 思路二详细实现方案
+#### 思路二详细实现方案（修订版：CGM-GRPO）
 
-##### A. 核心算法设计
+##### A. 核心算法设计与理论合法性
 
-整体思路是将 GRPO 的 advantage estimation 从纯 on-policy 扩展为 mixed-policy：每个 prompt 的 G 条采样中，保留 G_on 条来自当前 policy 的 on-policy rollout，同时注入 G_off 条来自 HF-CAC Guardian 的 off-policy 示范轨迹，两类轨迹共同参与 RLOO advantage 计算，但 off-policy 轨迹带有重要性采样修正和文化亲缘度调制权重。
+具体流程如下。对每个 prompt (question, country)：
 
-具体流程如下。对每个 prompt (question, country)：第一步，当前 policy 采样 G_on 条推理路径（与现有逻辑完全一致）。第二步，从 HF-CAC 数据中检索该 prompt 对应的 Guardian 推理轨迹（已存在于 pkl 数据的 response 字段中，格式为 "===== Solution 1 [GUARDIAN] ===== Reasoning: ... Answer: ..."），解析出 Guardian 的 reasoning 部分作为 off-policy 示范。第三步，对 off-policy 轨迹计算重要性采样比率 rho = pi_current(y_guardian | x) / pi_ref(y_guardian | x)，其中 pi_current 是当前 policy 的概率，pi_ref 是 reference model（disable LoRA adapter 后的 base）的概率。第四步，计算文化亲缘度调制系数 w_culture。第五步，将 on-policy 和 off-policy 轨迹合并为一个扩展组，计算 RLOO advantage，其中 off-policy 轨迹的 advantage 乘以 clip(rho, 1-epsilon, 1+epsilon) 乘以 w_culture 作为最终加权。第六步，正常计算 policy gradient loss。
+第一步，当前 policy 采样 G 条推理路径（与现有逻辑完全一致，G=5）。
 
-##### B. 文化亲缘度调制系数 w_culture 的计算
+第二步，从 HF-CAC 数据中检索该 prompt 对应的 Guardian 推理轨迹（已存在于 pkl 数据的 response 字段中，格式为 "===== Solution 1 [GUARDIAN] ===== Reasoning: ... Answer: ..."），解析出 Guardian 的 reasoning 部分。对 Guardian 轨迹计算 R_guardian = alpha * R_outcome_guardian + (1-alpha) * Mean(R_process_guardian)，使用与 on-policy 轨迹完全相同的 reward 计算逻辑（规则验证答案 + PRM scoring）。
 
-w_culture 的设计目标是：模型越难自主探索的文化，off-policy 示范的引导力度越大。具体计算分两种策略，可以择一使用或组合：
+第三步，对 G 条 on-policy 轨迹计算标准 RLOO advantage：A_i_base = R_i - R_on_bar（R_on_bar 是 leave-one-out baseline）。这一步与现有 train_grpo_v3.py 的 rloo_advantages 函数完全一致。
 
-策略一（基于亲缘度矩阵的静态先验）：对目标国家所属文化圈 i，从 6x6 亲缘度矩阵中取出第 i 行，计算该文化圈与其他所有文化圈的平均亲缘度 avg_aff_i = mean(affinity[i, j] for j != i)。亲缘度越低说明该文化越孤立、越冷门，模型越难从其他文化知识迁移，因此 w_culture = 1 - avg_aff_i。以现有矩阵为例：Sub-Saharan African 的 avg_aff = mean(0.1, 0.3, 0.1, 0.5, 0.2) = 0.24，w_culture = 0.76（高引导）；Western 的 avg_aff = mean(0.4, 0.1, 0.2, 0.2, 0.1) = 0.20，w_culture = 0.80（也高，但这是因为西方文化虽然亲缘度低但预训练语料丰富，需要第二个策略修正）。
+第四步，计算文化难度系数 w_culture（三因子公式，详见 B 节）。
 
-策略二（基于 on-policy rollout 准确率的动态调制）：在每个 batch 中，先统计当前 policy 对该 prompt 的 G_on 条 rollout 的 R_outcome 命中率 hit_rate。hit_rate 越低说明模型当前越搞不定这个文化题，off-policy 引导越有价值。w_culture = (1 - hit_rate) 的某个单调递增函数，最简单的就是 w_culture = 1 - hit_rate。
+第五步，计算 Guardian 引导信号 S_guardian = R_outcome_guardian * (R_guardian - R_on_bar_full)，其中 R_on_bar_full 是 G 条 on-policy 轨迹的全组均值（注意这里不用 leave-one-out，因为 S_guardian 对所有 on-policy 轨迹是相同的增量）。
 
-推荐组合策略：w_culture = lambda_static * (1 - avg_aff_i) + (1 - lambda_static) * (1 - hit_rate)，其中 lambda_static 是静态先验与动态信号的混合比例，建议初始设为 0.3（以动态信号为主，静态先验为辅）。这样既利用了亲缘度矩阵的领域先验，又能根据模型实际表现自适应调整。
+第六步，合成最终 advantage：A_i = A_i_base + lambda * w_culture * S_guardian。
+
+第七步，正常计算 policy gradient：gradient = sum(A_i * grad(log pi_theta(y_i|x)))，只对 on-policy 轨迹求梯度。
+
+理论合法性说明——为什么不需要 Importance Sampling：
+
+之前版本的方案试图让 Guardian 轨迹直接参与 RLOO 的 advantage 计算和 policy gradient，这要求计算 rho = pi_current / pi_behavior。但 Guardian 轨迹的行为策略是 HF-CAC 多智能体系统（Agent+Judge+筛选），其生成概率根本没有保存，也无法精确计算。
+
+CGM-GRPO 的解决方案：完全不需要 importance sampling。原因是——在我们的公式中，Guardian 轨迹不参与 policy gradient 的梯度计算。它只通过 S_guardian = R_guardian - R_on_bar 这个标量值影响 on-policy 轨迹的 advantage。梯度仍然只对 on-policy 轨迹 y_i ~ pi_theta 求导：gradient = A_i * grad(log pi_theta(y_i|x))。Guardian 轨迹的作用纯粹是「调整 on-policy 轨迹被鼓励/抑制的程度」，本身不需要对 Guardian 轨迹求梯度，因此不需要 IS 修正。这比 LUFFY 的处理更简洁——LUFFY 把 off-policy 轨迹也参与梯度更新所以需要 IS，而我们只用它的 reward 信号。
+
+##### B. 文化难度系数 w_culture 的三因子设计
+
+w_culture 的设计目标是：量化「当前 prompt 对模型的文化学习难度」，决定 Guardian 专家引导的强度。核心洞见是：文化难度不等于文化孤立度，而是数据频率、模型能力、文化迁移难度三者的综合。
+
+三因子公式：w_culture = lambda_1 * (1 - hit_rate) + lambda_2 * rarity_i + lambda_3 * (1 - affinity_i)
+
+推荐系数：lambda_1 = 0.6, lambda_2 = 0.3, lambda_3 = 0.1。设计逻辑如下：
+
+第一因子 (1 - hit_rate)：动态模型能力信号，权重最大（0.6）。hit_rate 是当前 policy 对该 prompt 的 G 条 on-policy rollout 中答对的比例。这是最直接的难度度量——模型自己答不出来的题就是难题。它随训练实时变化，天然实现了「模型学会后自动减弱引导」的自适应效果。
+
+第二因子 rarity_i：静态数据稀缺度信号，中等权重（0.3）。定义为 rarity_i = 1 - freq_i，其中 freq_i 是目标国家所属文化圈在训练集中的样本占比。以 NormAD 数据集为例（2633 样本，75 国家）：如果 Western 文化圈覆盖约 20 个国家、占比约 30%，则 rarity_western = 0.70；Sub-Saharan African 覆盖约 6 个国家、占比约 8%，则 rarity_africa = 0.92。这解决了 hit_rate 在训练初期（普遍低）时无法区分真长尾和假长尾的冷启动问题。
+
+第三因子 (1 - affinity_i)：文化迁移难度的弱先验，最低权重（0.1）。affinity_i 取亲缘度矩阵第 i 行的非对角线均值。它反映的是「其他文化圈的知识能否迁移到目标文化」的难度。权重设为 0.1 是因为：(a) 它与数据频率存在相关性（高频文化通常也有更多跨文化交流），独立信息量有限；(b) 前面分析发现它单独使用时会产生反直觉结果（Western 反而权重高）。作为辅助修正信号即可。
+
+关于 rarity_i 的计算：在训练开始前，对 pkl 数据做一次性统计，按 country -> culture_circle 映射后计算各文化圈样本占比，硬编码为一个 dict。这与亲缘度矩阵一样是确定性的、不随训练变化的静态量。
+
+为什么这个设计合理：w_culture 的值域在 [0, 1] 范围内。当模型对某文化题全部答对（hit_rate=1）、该文化又是高频（rarity 低）、且与其他文化亲缘度高（affinity 高）时，w_culture 趋近于 0，Guardian 引导几乎消失——这正是我们想要的（模型已经会了，不需要专家帮忙）。反之，模型答不出来（hit=0）、数据稀缺（rarity 高）、文化孤立（affinity 低）时，w_culture 趋近于 1，Guardian 引导最大化——这也正确（模型最需要帮助的时候）。
 
 ##### C. 是否强依赖文化亲缘度矩阵
 
-不强依赖。亲缘度矩阵在本方案中的角色是「锦上添花的静态先验」而非「不可或缺的核心组件」。具体来说：
+不强依赖。在三因子公式中，亲缘度矩阵仅贡献权重 0.1 的最弱信号。即使完全去掉第三因子（lambda_3=0），公式退化为 w_culture = 0.67*(1-hit_rate) + 0.33*rarity（重新归一化），仍然是一个完全合理的文化难度度量。
 
-最小可行版本（MVP）完全不需要亲缘度矩阵——只用策略二（on-policy hit_rate 动态调制），即 w_culture = 1 - hit_rate。这已经能实现核心功能：模型答不出来的题加大 Guardian 示范引导，答得出来的题让模型自主探索。这个版本的实现难度最低，效果也有保障。
+最小可行版本（MVP）：只用第一因子，w_culture = 1 - hit_rate。零额外依赖，核心机制完整。
 
-进阶版本引入亲缘度矩阵作为正则化先验，好处是：在训练初期模型 hit_rate 普遍很低时（几乎所有题都答不对），纯动态策略无法区分「真正冷门的长尾文化」和「模型暂时还没学会但其实不难的高频文化」，此时亲缘度矩阵提供了一个有意义的区分信号。但即使不用它，方案依然成立。
+标准版本：加入 rarity（需要一次性统计训练集的文化圈分布，约 10 行代码）。
 
-论文叙事角度：如果要发论文，建议保留亲缘度矩阵作为消融实验的一个维度（有矩阵 vs 无矩阵），证明文化先验能带来额外增益。但工程落地可以先跑 MVP 版本验证核心思路。
+完整版本：三因子全开（额外加载 hf_cac_config.yaml 中的亲缘度矩阵，约 15 行代码）。
 
-##### D. 现有代码需要的修改
+消融实验设计：MVP -> 标准 -> 完整，逐步验证每个因子的边际贡献。
 
-基于对 train_grpo_v3.py（889 行）的详细分析，需要修改的模块和预估改动量如下：
+##### D. Guardian 引导信号的门控机制
 
-第一，数据加载模块（改动量：约 30 行）。当前 GRPOPromptDataset 只取 query/country/gt 三个字段。需要额外提取 response 字段中的 Guardian 推理轨迹。具体做法：在 __init__ 中解析 response 字段，用正则匹配 "===== Solution N [GUARDIAN] =====" 到下一个 "=====" 之间的内容，提取 Guardian 的 Reasoning 部分。同时加载 guardian_idx 字段用于后续亲缘度查询。
+一个重要的实现细节：并非所有 prompt 都应注入 Guardian 引导。需要两个门控条件：
 
-第二，亲缘度矩阵加载（改动量：约 15 行）。新增一个命令行参数 --affinity_config 指向 hf_cac_config.yaml，在初始化时读取 cultural_affinity_matrix 和 culture_roles 的 region_keywords，构建 country -> culture_idx 的映射表。如果不传此参数则退化为纯动态模式。
+门控一（质量门控）：只在 Guardian 答对时激活引导。如果 Guardian 轨迹的 R_outcome = 0（答错），令 S_guardian = 0，第二项自动消失。这可以通过在公式中乘以 R_outcome_guardian 来优雅实现：S_guardian = R_outcome_guardian * (R_guardian - R_on_bar)。
 
-第三，off-policy 轨迹注入（改动量：约 40 行）。在现有的 generate_responses 之后、reward 计算之前，插入一段逻辑：对每个 prompt，从数据中取出预存的 Guardian 轨迹（1 条），追加到 all_responses[pi] 列表末尾，同时标记哪些 index 是 off-policy 的。这样 G_on=5（现有默认值），G_off=1，总组大小变为 6。
+门控二（必要性门控）：如果 on-policy rollout 全部答对（hit_rate = 1），w_culture 的第一因子为 0，引导自然很弱。但更极端的做法是设一个阈值：当 hit_rate >= 0.8 时直接令第二项为 0（即模型已经够好了，不需要专家了）。这能进一步避免对已掌握文化的过度干预。
 
-第四，reward 计算（改动量：约 10 行）。off-policy Guardian 轨迹同样需要计算 R_total（R_outcome + PRM scoring），逻辑与 on-policy 完全一致，无需特殊处理。
+##### E. 现有代码需要的修改（新建文件方案）
 
-第五，advantage 计算与加权（改动量：约 50 行）。这是核心改动。当前的 rloo_advantages 函数需要扩展：对扩展组（6 条）计算 RLOO baseline，然后对 off-policy 轨迹的 advantage 乘以 clip(rho, 0.8, 1.2) * w_culture。需要新增：(a) 计算 rho 的函数（复用现有的 compute_logprobs，在 Phase A 中对 Guardian 轨迹也计算 ref_logprob 和 policy_logprob，二者之差取 exp 即为 rho）；(b) 计算 w_culture 的函数（根据 country 查亲缘度矩阵 + 当前 batch 的 hit_rate）。
+根据实验设计需要保留 train_grpo_v3.py 作为 SFT+RL 基线，混合策略新建 Cul/grpo/train_grpo_mixed_policy.py。新文件可以大量复用 v3 的函数，核心差异如下：
 
-第六，policy gradient 计算（改动量：约 20 行）。Phase B 中对 off-policy 轨迹的梯度更新需要乘以 clip(rho) * w_culture 系数。具体修改位置在第 770-773 行的 pg_loss 计算处，对 off-policy sample 额外乘以调制系数。
+第一，数据加载模块（新增约 40 行）。扩展 GRPOPromptDataset，额外解析 response 字段中的 Guardian 推理轨迹（正则匹配 "===== Solution N [GUARDIAN] =====" 段落），提取 Reasoning 部分。同时预计算 Guardian 的 R_outcome（与 gold answer 比对）用于质量门控。加载 guardian_idx 字段。
 
-第七，日志与监控（改动量：约 15 行）。新增打印 off-policy 相关统计：平均 rho、平均 w_culture、off-policy 轨迹的平均 R_total vs on-policy 的对比。
+第二，文化难度计算模块（新增约 50 行）。包含：(a) 训练集文化圈频率统计（rarity_i 计算）；(b) 亲缘度矩阵加载（可选）；(c) country -> culture_circle 映射表构建；(d) w_culture 三因子计算函数。
 
-总改动量预估：约 180-200 行新增/修改代码，集中在 train_grpo_v3.py 一个文件中。不需要新建文件，不需要修改 PRM 或 SFT 管线。难度评估为中等——核心逻辑清晰，主要工作量在正确实现重要性采样比率和调试数值稳定性。
+第三，Guardian reward 计算（新增约 20 行）。对 Guardian 轨迹做 PRM scoring 得到 R_guardian（逻辑复用现有 PRM batch scoring）。
 
-##### E. 显卡资源需求与训练时长预估
+第四，CGM-GRPO advantage 计算（修改约 30 行）。替换原有的 rloo_advantages 调用，改为：先对 on-policy 的 G 条计算标准 RLOO advantage A_i = R_i - R_on_bar，然后叠加 Guardian 引导项 lambda * w_culture * S_guardian。
+
+第五，policy gradient 计算（基本不变）。关键点：梯度只对 on-policy 轨迹求导，Guardian 轨迹不参与 backward。因此 Phase B 的循环范围仍然只遍历 on-policy 的 G 条 response，只是它们的 advantage 值被 Guardian 调整过了。不需要对 Guardian 轨迹计算 log-prob 或做 backward。这比之前的方案简单得多。
+
+第六，新增命令行参数（约 10 行）：--lambda_guide（Guardian 引导强度，默认 0.5）、--affinity_config（可选，亲缘度矩阵配置路径）、--w_culture_mode（"hit_only" / "hit_rarity" / "full"，对应 MVP/标准/完整版）。
+
+第七，日志与监控（新增约 15 行）。打印：平均 w_culture、S_guardian 均值、Guardian 答对率、各文化圈 hit_rate 分布。
+
+总新增代码量预估：约 250-300 行（新文件），其中大部分是从 v3 复制过来的框架代码。核心新逻辑约 100 行。难度评估为中低——比之前的方案更简单，因为：(a) 不需要 importance sampling；(b) 不需要对 Guardian 轨迹计算 log-prob；(c) 不需要修改 Phase B 的梯度计算逻辑；(d) Guardian 信号只是一个标量加到 advantage 上。
+
+##### F. 显卡资源需求与训练时长预估
 
 当前配置：2 卡 48GB vGPU（policy on cuda:0, PRM on cuda:1）。
 
-显存分析：现有 train_grpo_v3.py 在 G=5（n_samples=5）、prompt_batch=8 的配置下已经能在 2x48GB 上运行。思路二的改动是将每个 prompt 的组大小从 5 扩展到 6（多 1 条 off-policy 轨迹）。这条 off-policy 轨迹不需要 generate（已经预存），只需要做 forward pass 计算 log-prob（与现有 Phase A/B 逻辑一致）。因此显存增量非常小——每个 prompt 多一次 forward pass 的激活内存，约增加 1/5 = 20% 的 Phase B 计算量。结论：2x48GB 完全够用，无需降低 batch size 或 n_samples。
+显存分析：CGM-GRPO 相比原版 GRPO 的额外显存开销极小。原因是 Guardian 轨迹不参与 policy 的 forward/backward（不需要计算 log-prob），只需要过一次 PRM 获取 R_guardian 分数。PRM scoring 在 cuda:1 上进行，每个 batch 多 8 条文本（8 个 prompt 各 1 条 Guardian 轨迹）的 PRM forward pass，相比现有的 8*5=40 条 on-policy 轨迹，增量仅 20%，且 PRM 本身已是 eval 模式、无梯度。结论：2x48GB 完全够用，不需要任何调整。
 
-如果想更激进地增加 off-policy 轨迹数量（比如注入 2-3 条 Auditor 轨迹），可以将 n_samples 从 5 降到 4 来腾出空间，保持总组大小不变（4 on-policy + 2 off-policy = 6）。但建议先用 5+1 的配置验证效果。
+训练时长预估：主要额外开销是 Guardian 轨迹的 PRM scoring（每 batch 多 8 条，约增加 15% 的 PRM 时间）。on-policy 部分的 generate、Phase A、Phase B 完全不变。综合每轮增加约 5-10% 的时间，即每轮约 42-66 分钟（比之前方案的 15-20% 增量更小，因为不需要对 Guardian 做 log-prob 计算）。
 
-训练时长预估：现有 GRPO 每轮（round）处理 130 个 batch，每 batch 8 个 prompt，每 prompt 生成 5 条 response。基于 Qwen2.5-7B-Instruct + LoRA 在 2x48GB 上的实测，每轮约需 40-60 分钟（主要瓶颈是逐 prompt 串行 generate）。思路二的额外开销：(a) off-policy 轨迹不需要 generate（直接从数据读取），节省了最大的时间瓶颈；(b) 多 1 条轨迹的 reward 计算（PRM scoring）约增加 20% 的 PRM 时间；(c) 多 1 条轨迹的 log-prob 计算约增加 20% 的 Phase A/B 时间。综合预估每轮增加约 15-20% 的时间，即每轮约 50-70 分钟。
+收敛轮数预估：与之前分析一致，Guardian 引导提供了更强的学习方向信号（特别是在长尾文化的全错 batch 上），预估 10-15 轮收敛。总训练时长：10-15 轮 x 45-65 分钟/轮 = 7.5-16 小时，一天内可完成。
 
-收敛轮数预估：现有纯 on-policy GRPO 在 SFT+RL 模式下配置为 max_rounds=20、eval_every=5、patience=3（即连续 3 次 eval 不提升则 early stop）。根据 LUFFY 论文的实验结论，mixed-policy 方法相比纯 on-policy 通常能加速收敛 1.5-2 倍（因为 off-policy 示范提供了更强的学习信号，减少了无效探索）。预估思路二在 10-15 轮即可收敛（对比纯 on-policy 的 15-20 轮）。特别是在长尾文化题上，由于 Guardian 示范直接提供了正确路径，模型不再需要靠运气采样到正确答案，收敛速度提升会更显著。
+##### G. 潜在风险与应对
 
-总训练时长预估：10-15 轮 x 50-70 分钟/轮 = 8-17 小时。保守估计一天内可以跑完一次完整实验。
+风险一：Guardian 本身在某些题上答错，导致错误引导。应对：质量门控（S_guardian 乘以 R_outcome_guardian），答错时引导项自动归零。在 NormAD 上 HF-CAC 的 Guardian 准确率约 70-80%，约 20-30% 的 prompt 会因为 Guardian 答错而退化为纯 on-policy GRPO，这是合理的安全网。
 
-##### F. 潜在风险与应对
+风险二：lambda 设置过大导致模型过度依赖 Guardian、丧失泛化能力。应对：(a) w_culture 随 hit_rate 提升自动衰减；(b) 可以设全局衰减 lambda_t = lambda * gamma^round（gamma=0.95），让引导随训练递减；(c) 消融实验搜索 lambda in {0.3, 0.5, 0.7}。
 
-风险一：off-policy 轨迹与当前 policy 分布差异过大导致 rho 爆炸。应对：用 clip(rho, 0.8, 1.2) 截断，这是 PPO/LUFFY 的标准做法。如果 rho 持续很大（说明 Guardian 轨迹与模型当前策略差异极大），可以考虑随训练进程逐步放宽 clip 范围（从 0.9-1.1 逐步放到 0.7-1.3）。
+风险三：R_on_bar 在全错 batch 上为 0，此时 S_guardian = R_guardian - 0 = R_guardian，引导信号最大。这其实是好事——模型全答不对时最需要 Guardian 帮助。但需要确保此时引导方向正确（即 Guardian 确实答对），否则会产生很大的负面影响。门控一（质量门控）确保了这一点。
 
-风险二：Guardian 轨迹本身质量不一致（有些 Guardian 也会犯错）。应对：只注入 R_outcome=1 的 Guardian 轨迹（即 Guardian 答对的样本）。对于 Guardian 答错的样本，不注入 off-policy 示范，退化为纯 on-policy GRPO。这个过滤逻辑在数据加载时即可完成。
+风险四：不同文化圈的 Guardian 质量差异大。比如 Western Guardian 准确率 90% 但 Sub-Saharan Guardian 可能只有 60%。应对：可以在训练前统计各文化圈的 Guardian 准确率，对低质量 Guardian 的样本降低 lambda 或直接跳过。但这属于进阶优化，MVP 阶段先用统一的质量门控即可。
 
-风险三：模型过度依赖 off-policy 示范，丧失自主探索能力。应对：w_culture 的动态调制天然解决了这个问题——随着训练进行，模型在各文化上的 hit_rate 逐步提升，w_culture 自动衰减，off-policy 引导力度自然减弱。此外可以设置一个全局衰减因子 gamma_decay，让 off-policy 权重随 round 数指数衰减。
+##### H. CGM-GRPO 的方法论故事线
 
-风险四：与现有 KL penalty 的交互。当前 KL_COEF=0.05 约束 policy 不要偏离 reference 太远。off-policy 示范可能把 policy 往 Guardian 方向拉，与 KL penalty 产生张力。建议：对 off-policy 轨迹的梯度不施加 KL penalty（因为我们就是希望 policy 向 Guardian 靠拢），只对 on-policy 轨迹保留 KL penalty。
+整个 CAMAD 框架通过 CGM-GRPO 实现了完美闭环：
 
-##### G. 与思路一的关系和落地顺序
+第一环（数据生成）：HF-CAC 多智能体协作，利用主场 Guardian 机制生成高质量文化推理轨迹，亲缘度矩阵在 Guardian 失效时提供 fallback 仲裁。
 
-思路一（文化锚点交错回注）和思路二不是互斥的，而是互补的。思路一解决的是「已学会的文化知识在 RL 过程中被遗忘」的问题（防守），思路二解决的是「从未学会的长尾文化知识如何在 RL 过程中首次习得」的问题（进攻）。
+第二环（过程监督）：Culture-Aware PRM 对推理步骤打文化合理性标签（0.9/0.5/0.1），R_total 统一结果正确性和文化合理性。
 
-推荐落地顺序：先实现思路二的 MVP 版本（纯动态 w_culture = 1 - hit_rate，不用亲缘度矩阵），验证 mixed-policy 的核心收益。如果效果显著，再叠加思路一的交错回注作为防遗忘保险。最后引入亲缘度矩阵做消融实验，量化静态文化先验的增量贡献。
+第三环（强化学习）：CGM-GRPO 在 GRPO 的 advantage 中注入 Guardian 引导信号，由文化难度系数 w_culture 动态调制引导强度，实现「文化难度感知的混合策略强化学习」。
+
+核心创新叙事：不是简单的 Mixed-Policy（LUFFY 已做），而是 Culture-Difficulty-Aware Mixed-Policy。区别在于：LUFFY 对所有样本统一注入 off-policy 信号，我们根据文化难度动态决定「什么时候相信专家、什么时候相信模型自己」。这是文化对齐任务独有的——因为文化知识的难度有明确的结构化先验（数据频率 + 文化迁移距离），而通用推理任务（如数学）的难度缺乏这样的外部先验。
+
+论文贡献可以概括为：(1) 提出 CGM-GRPO，首个文化难度感知的混合策略 GRPO 算法；(2) 设计三因子文化难度系数 w_culture，融合动态模型能力评估与静态文化先验；(3) 证明 Guardian 信号作为 advantage 增强项（而非参与 RLOO baseline）的理论合法性与实验有效性；(4) 在 CAMAD 框架下实现从数据生成到强化学习的完整闭环。
+
+##### I. 与思路一的关系和实验设计
+
+思路一（文化锚点交错回注）和 CGM-GRPO 解决的是不同问题：思路一防止已学知识在 RL 中遗忘（防守），CGM-GRPO 帮助模型在 RL 中首次学会长尾文化知识（进攻）。两者可以独立实现、也可以组合使用。
+
+四组对比实验设计：(1) SFT-only：Cul/sft/train_sft_weighted.py 产出；(2) RL-only：train_grpo_v3.py 不传 --sft_adapter；(3) SFT+RL（串行两阶段）：train_grpo_v3.py 传 --sft_adapter；(4) SFT+RL+CGM（文化难度感知混合策略）：train_grpo_mixed_policy.py 传 --sft_adapter。四组使用相同的数据划分、PRM、base model，只有 Stage 3 策略不同。
+
+可选的消融实验：(a) CGM-GRPO w_culture=hit_only vs hit+rarity vs full 三因子；(b) lambda 搜索 {0.3, 0.5, 0.7}；(c) 有/无质量门控；(d) CGM-GRPO + 思路一交错回注 vs 单独 CGM-GRPO。
 
 ### 创新思路三：PRM 信号驱动的 Token 级 SFT 动态加权（CHORD 乘以 Culture-PRM）
 
@@ -248,7 +300,7 @@ w_culture 的设计目标是：模型越难自主探索的文化，off-policy �
 
 ### 四个思路的推荐落地顺序
 
-建议按先稳妥强基线、后创新探索的顺序推进：第一步实现思路一（文化遗忘感知交错回注），它复用现有 SFT/GRPO 脚本、风险最低，先把 SFT+RL 防遗忘的强基线立住；第二步实现思路二（亲缘度加权 Off-Policy GRPO），这是论文创新性最强、与 CAMAD 资产结合最深的方案，作为主推方法；思路三、思路四作为消融与进阶对比，验证 token 级 PRM 加权和难度分流的增量收益。所有方案都应与现有的 SFT-only、RL-only、朴素 SFT-then-RL 三个基线在相同算力预算下做严格公平对比（牢记 SFT-then-RL Outperforms 一文的警示）。
+建议按先稳妥强基线、后创新探索的顺序推进：第一步实现思路一（文化遗忘感知交错回注），它复用现有 SFT/GRPO 脚本、风险最低，先把 SFT+RL 防遗忘的强基线立住；第二步实现思路二（CGM-GRPO 文化难度感知混合策略），这是论文创新性最强、与 CAMAD 资产结合最深的方案，作为主推方法；思路三、思路四作为消融与进阶对比，验证 token 级 PRM 加权和难度分流的增量收益。所有方案都应与现有的 SFT-only、RL-only、朴素 SFT-then-RL 三个基线在相同算力预算下做严格公平对比（牢记 SFT-then-RL Outperforms 一文的警示）。
 
 ---
 
@@ -260,7 +312,7 @@ w_culture 的设计目标是：模型越难自主探索的文化，off-policy �
 
 ## 七、关键结论速览
 
-第一，传统 SFT-then-RL 两阶段范式的核心痛点是灾难性遗忘、低效探索、信号互补性未被利用，这在文化对齐场景会放大为 RL 阶段遗忘长尾文化知识。第二，混合训练的理论基础是 SFT 与 RL 在统一策略梯度框架下只是权重函数不同的特例（HPT/UPGE），二者不可解耦（On the Non-decoupling）。第三，六大类混合方法各有适用边界，文化对齐这类需平衡知识精度与泛化、且知识高度长尾的任务，最适合交错训练（防遗忘）与混合策略/条件训练（难度分流）。第四，2026 年最新进展（CHORD、SRFT、ReLIFT、LUFFY、DYPO、GHPO、BRIDGE）共同指向动态、自适应、按样本/token 粒度决定 SFT 与 RL 配比的趋势。第五，必须警惕 SFT-then-RL Outperforms 一文的发现——评估混合方法务必在相同算力下做公平对比，避免把超参红利误认为方法创新。第六，针对 CAMAD 的推荐路线是：以文化遗忘感知交错回注立强基线，以文化亲缘度加权 Off-Policy GRPO 作主推创新，把文化属地性从数据生成一路贯穿到 RL 优化，形成方法论闭环。
+第一，传统 SFT-then-RL 两阶段范式的核心痛点是灾难性遗忘、低效探索、信号互补性未被利用，这在文化对齐场景会放大为 RL 阶段遗忘长尾文化知识。第二，混合训练的理论基础是 SFT 与 RL 在统一策略梯度框架下只是权重函数不同的特例（HPT/UPGE），二者不可解耦（On the Non-decoupling）。第三，六大类混合方法各有适用边界，文化对齐这类需平衡知识精度与泛化、且知识高度长尾的任务，最适合交错训练（防遗忘）与混合策略/条件训练（难度分流）。第四，2026 年最新进展（CHORD、SRFT、ReLIFT、LUFFY、DYPO、GHPO、BRIDGE）共同指向动态、自适应、按样本/token 粒度决定 SFT 与 RL 配比的趋势。第五，必须警惕 SFT-then-RL Outperforms 一文的发现——评估混合方法务必在相同算力下做公平对比，避免把超参红利误认为方法创新。第六，针对 CAMAD 的推荐路线是：以文化遗忘感知交错回注立强基线，以 CGM-GRPO 文化难度感知混合策略作主推创新，把文化属地性从数据生成一路贯穿到 RL 优化，形成方法论闭环。
 
 ---
 
