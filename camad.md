@@ -508,11 +508,6 @@ $$w_{culture} = \lambda_1 \cdot (1 - hit\_rate) + \lambda_2 \cdot rarity_i + \la
 - 质量门控：Guardian 答错时 $R_{outcome}^{guardian}=0$，整个 $S_{guardian}=0$，引导项自动消失
 - 必要性门控：$hit\_rate \geq 0.8$ 时强制 $w_{culture}=0$（模型对该 prompt 已足够好，无需外部引导）
 
-**性能优化**（已实现于代码中）：
-
-- Batch Generate（优化 1）：将 `prompt_batch` 个 prompt 按 `gen_mini_batch`（默认 4）分组，每组一次 `model.generate()` 调用同时产出 `mini_batch × n_samples` 个序列。左 padding + `num_return_sequences` 批量采样，GPU 利用率从 ~30% 提升至 ~85%，生成阶段加速 50-70%。
-- Batch LogProb（优化 2）：Phase A（reference log-prob，无梯度）以 `logprob_mini_batch=8` 批量 forward；Phase B（policy log-prob，有梯度）以 `logprob_mini_batch_grad=4` 分组 forward+backward，配合 gradient accumulation。使用 `gather + logsumexp` 代替完整 log_softmax 避免 vocab 维度大矩阵，log-prob 计算阶段加速 80%+。
-
 **显存布局**（2×48GB vGPU）：
 
 - cuda:0（Policy）：base model bf16 ~15GB + LoRA ~0.2GB + KV cache（20 seq × 640 tok）~4.5GB + 梯度/激活（gradient checkpointing）~8-12GB → 峰值 ~32-38GB
@@ -520,8 +515,6 @@ $$w_{culture} = \lambda_1 \cdot (1 - hit\_rate) + \lambda_2 \cdot rarity_i + \la
 - Guardian 引导不增加任何 GPU 开销（纯 CPU 查表 + 标量运算）
 
 **与标准 GRPO 的关键区别**：Guardian 轨迹不参与 RLOO baseline 计算，不参与 policy gradient 的 backward，不需要 importance sampling，不需要 Sim 相似度调制。它只是一个标量 bonus 统一叠加到 on-policy 轨迹的 advantage 上。
-
-**代码位置**：`Cul/grpo/train_grpo_mixed_policy.py`
 
 **训练命令**（双卡，SFT+CGM-GRPO 模式，少数样本快速验证）：
 
