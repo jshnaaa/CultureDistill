@@ -15,16 +15,16 @@ role tags ([GUARDIAN]/[AUDITOR]) in solution headers.
 Usage:
     # Generate RECONCILE data for CultureBench
     python generate_reconcile_data.py \
-        --input_file ../Cul/data/culturalBench_mas.json \
-        --output_file ../Cul/data/culturalbench_reconcile_inference.jsonl \
+        --input_file /autodl-fs/data/culturalBench_mas.json \
+        --output_file /autodl-fs/data/qwen/culturalbench_reconcile_inference.jsonl \
         --config_file ../Cul/configs/reconcile_config.yaml \
         --model_name qwen \
         --use_vllm --tensor_parallel_size 2
 
     # Generate RECONCILE data for NormAD
     python generate_reconcile_data.py \
-        --input_file ../Cul/data/normad_mas.json \
-        --output_file ../Cul/data/normad_reconcile_inference.jsonl \
+        --input_file /autodl-fs/data/normad_mas.json \
+        --output_file /autodl-fs/data/qwen/normad_reconcile_inference.jsonl \
         --config_file ../Cul/configs/reconcile_config.yaml \
         --model_name qwen \
         --use_vllm --tensor_parallel_size 2

@@ -1590,41 +1590,33 @@ python Cul/grpo/eval_cgm_grpo.py \
 
 **文化对齐适配方案**：
 
-将 MAGDi 迁移到文化对齐任务（NormAD、CultureBench）时，核心改动在于多智能体数据来源和图结构的适配。我们支持两种数据源模式，通过 `--data_source` 参数切换：
+将 MAGDi 迁移到文化对齐任务时，核心改动是多智能体数据来源和图结构的适配。支持两种数据源模式，通过 `--data_source` 参数切换：
 
 1. **MAGDi + RECONCILE**（主实验对比）：使用 RECONCILE 对称多智能体系统（5 个平等文化专家 + 1 个 Judge）生成讨论数据，图结构为全对称（所有 Agent → Judge）。这代表"通用多智能体蒸馏方法直接应用于文化任务"，与完整 CAMAD pipeline 做方法级对比。
 2. **MAGDi + HF-CAC**（消融实验）：使用 CAMAD 的 HF-CAC 非对称多智能体系统（6 个 Agent，含 Guardian/Auditor 角色 + Judge）生成的数据，图结构为非对称（Guardian → 所有 Auditor，所有 Agent → Judge）。这与 CAMAD 的加权 SFT 蒸馏在相同数据上对比，隔离蒸馏方法本身的差异。
 
 **实验设置**：
 
-数据集使用与 CAMAD 完全相同的 train/test 划分（由 `split_data.py` 生成的 pkl 文件），确保公平对比。学生模型通过 `--model_name` 参数指定，支持 `llama`（Llama-3.1-8B-Instruct）和 `qwen`（Qwen2.5-7B-Instruct）两种基座，与 CAMAD 使用相同的基座模型以确保对比公平。训练 10 个 epoch，损失权重 α=1.0, β=1.0, γ=0.1。评估指标为 overall accuracy 和 per-country accuracy，与 CAMAD 评估脚本对齐。
+数据集使用与 CAMAD 完全相同的 train/test 划分（由 `split_data.py` 生成的 pkl 文件）。
+学生模型通过 `--model_name` 参数指定，支持 `llama`和 `qwen`两种基座。
+训练 10 个 epoch，损失权重 α=1.0, β=1.0, γ=0.1。评估指标为 overall accuracy。
 
 **Pipeline 与运行命令**：
 
 代码位于 `MAGDi/` 目录，完整 pipeline 包含 4 步（RECONCILE 模式额外有 Step 0 自动生成推理数据）：
 
 ```bash
-# 运行完整 pipeline（一键执行）
-cd MAGDi
-
-# 主实验：MAGDi + RECONCILE（CultureBench，Qwen 基座）
-DATASET=culturalbench DATA_SOURCE=reconcile MODEL_NAME=qwen bash run_magdi_culture.sh
-
-# 消融实验：MAGDi + HF-CAC（CultureBench，Qwen 基座）
-DATASET=culturalbench DATA_SOURCE=hf_cac MODEL_NAME=qwen bash run_magdi_culture.sh
-
-# NormAD 数据集（Llama 基座）
-DATASET=normad DATA_SOURCE=reconcile MODEL_NAME=llama bash run_magdi_culture.sh
-DATASET=normad DATA_SOURCE=hf_cac MODEL_NAME=llama bash run_magdi_culture.sh
-```
-
-Pipeline 各步骤：
-
-```bash
 # Step 0（仅 RECONCILE 模式，自动触发）：生成对称多智能体推理数据
 python generate_reconcile_data.py \
-    --input_file ../Cul/data/culturalBench_mas.json \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
     --output_file /autodl-fs/data/qwen/culturalbench_reconcile_inference.jsonl \
+    --config_file ../Cul/configs/reconcile_config.yaml \
+    --model_name qwen --use_vllm --tensor_parallel_size 2
+
+# NormAD 版本：
+python generate_reconcile_data.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/qwen/normad_reconcile_inference.jsonl \
     --config_file ../Cul/configs/reconcile_config.yaml \
     --model_name qwen --use_vllm --tensor_parallel_size 2
 
@@ -1660,8 +1652,6 @@ python test_culture.py \
     --output_json results/magdi_culturalbench_reconcile_qwen.json
 ```
 
-**作为 CAMAD 基线的定位**：MAGDi 对所有 Agent 一视同仁（对称交互、平等投票），不区分哪个 Agent 对目标文化更具权威性，也缺乏过程级质量控制。这正是 CAMAD 通过 HF-CAC 主场机制和 PRM 过程奖励所解决的问题。因此 MAGDi 作为"通用多智能体蒸馏 vs 文化感知蒸馏"的对比基线是合理的。
-
 ### 7.2 AgentArk
 
 **论文**：AgentArk: Distilling Multi-Agent Intelligence into a Single LLM Agent (Luo et al., 2026, arXiv:2602.03955)
@@ -1683,23 +1673,9 @@ python test_culture.py \
 - **PRM 训练**：基于 TRL 的 PRMTrainer，在标注后的多方案数据上训练步骤级奖励模型，学习判断推理链中每一步的质量。
 - **GRPO 强化学习**：使用训练好的 PRM 作为奖励信号，通过 RLOO 优势估计对学生模型进行在线策略优化，支持 PRM 奖励、可验证奖励（VR）及混合模式（PRMVR）。
 
-**关键结果**：在 MATH、GSM8K、QMSum、HotpotQA、QASPER、MedMCQA、TruthfulQA 等基准上，蒸馏后的单智能体模型相比基线平均提升 +4.8%，且推理成本降至多智能体系统的约 1/N（N 为辩论中的 Agent 数量）。结论表明：PRM 能力比学生模型大小更重要；推理质量比数据量更重要；过程感知蒸馏改善的是推理行为而非仅准确率。
-
-**作为 CAMAD 基线的适用性分析**：
-
-AgentArk 原本设计用于数学推理、问答摘要和常识推理任务，将其迁移到文化对齐任务上是可行的，理由如下：
-
-1. **Pipeline 形式兼容**：AgentArk 的"多智能体辩论 → 标注 → PRM 训练 → GRPO 优化"全流程与 CAMAD 的三阶段高度同构，可以直接在 CultureBench 数据集上复用其推理-训练 pipeline，仅需将数学题替换为文化选择题。
-2. **过程奖励模型思路一致**：AgentArk 的 PAD 策略与 CAMAD 的 Stage 2-3（PRM + GRPO）在方法论上高度相似，两者都使用步骤级奖励信号指导策略优化。这使得 AgentArk 成为控制"是否使用文化感知机制"这一变量的理想基线。
-3. **缺乏文化感知的权威度机制**：AgentArk 的多智能体辩论中所有 Agent 使用相同的模型（同质 Agent），不区分哪个 Agent 对目标文化更具权威性。相比之下，CAMAD 的 HF-CAC 通过主场/客场不对称机制让文化归属 Agent 获得更高话语权，从而产生更高质量的文化推理数据。
-4. **同质 Agent vs. 异质文化 Agent**：AgentArk 的辩论智能体是完全对称的（同一模型的多次采样），而 CAMAD 使用不同文化背景的 Agent（如东亚文化 Agent、拉美文化 Agent），能提供真正的跨文化多样性视角，而非仅仅是随机采样带来的多样性。
-5. **SFT 阶段无加权机制**：AgentArk 的 R-SFT 对所有训练 token 等权处理，而 CAMAD 的 Stage 1 使用主场权威加权 SFT，掩码 Auditor 早期混淆 Token，有选择性地强化文化确权知识。
-
-因此，AgentArk 作为"通用多智能体蒸馏方法直接应用于文化任务"的基线是高度合理的——它代表了当前最先进的多智能体到单智能体蒸馏技术水平，但缺乏文化特异性设计。预期其在文化对齐任务上的表现将介于 MAGDi 和 CAMAD 之间：优于 MAGDi（因为 AgentArk 拥有更完整的过程奖励蒸馏 pipeline），但弱于 CAMAD（因为它缺乏文化感知的权威度机制和结构化的文化对比推理）。
-
 **实现方案概述**：
 
-我们在 `ark/culture/` 目录下实现了 AgentArk 应用于文化对齐任务的完整 pipeline，共 5 个阶段：
+在 `ark/culture/` 目录实现了 AgentArk 应用于文化对齐任务的完整 pipeline，共 5 个阶段：
 
 - **Stage 0 — 同质多智能体辩论数据生成**（`generate_debate_data.py`）：部署 5 个相同的 LLM Agent（默认 Qwen2.5-7B-Instruct），对文化选择题进行 2 轮辩论。所有 Agent 使用统一 system prompt，不赋予任何文化身份标签。辩论结束后通过多数投票聚合最终答案，将完整辩论轨迹和最终回答作为 SFT 训练数据输出。通过 vLLM 进行批量推理加速。
 - **Stage 1 — 标准监督微调**（`train_sft.py`）：使用辩论生成的数据对学生模型进行 LoRA SFT。采用均匀交叉熵损失（uniform CE loss），对所有 token 等权处理，不做任何文化权威加权或 token 掩码。与 CAMA-D 的 α=2.0 token-weighted SFT 形成对照。训练使用 Accelerate DDP 多卡并行。
@@ -1711,21 +1687,80 @@ AgentArk 原本设计用于数学推理、问答摘要和常识推理任务，�
 
 实验覆盖两个数据集（NormAd 三分类、CultureBench 四分类）和两种数据来源（通过 `--data_source reconcile|hf_cac` 参数切换）。基座模型限定为两种：Qwen2.5-7B-Instruct（`--model_name qwen`）和 LLaMA-3.1-8B-Instruct（`--model_name llama`），不支持其他模型。数据以 pkl 格式存储，结构为 `{"train": [...], "val": [...], "test": [...]}`。SFT 和 GRPO 各训练 3 epoch，学习率 2e-5，LoRA rank=64。PRM 训练 5 epoch，学习率 1e-5。GRPO 每条样本生成 4 条候选（group_size=4）。
 
-**运行命令**：
+**Pipeline 与运行命令**：
+位于 `ark/culture/` 目录，完整 pipeline 包含 5 步（以 CulturalBench + RECONCILE + Qwen 为例）：
 
 ```bash
-# 一键运行完整 pipeline（参数：数据来源、数据集、模型）
-bash ark/culture/run_pipeline.sh reconcile normad qwen
+# Step 0：同质多智能体辩论数据生成
+python ark/culture/generate_debate_data.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
+    --output_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
+    --model_name qwen \
+    --num_agents 5 --num_rounds 2 \
+    --use_vllm --tensor_parallel_size 2
 
-# 也可分阶段执行：
-python ark/culture/generate_debate_data.py --data_source hf_cac --dataset culturebench --num_agents 5 --num_rounds 2
-python ark/culture/train_sft.py --data_source hf_cac --dataset culturebench --epochs 3
-python ark/culture/train_prm.py --data_source hf_cac --dataset culturebench --epochs 5
-python ark/culture/train_grpo.py --data_source hf_cac --dataset culturebench --epochs 3 --group_size 4
-python ark/culture/evaluate.py --data_source hf_cac --dataset culturebench
+# NormAD 版本：
+python ark/culture/generate_debate_data.py \
+    --input_file /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/qwen/normad_agentark_debate.jsonl \
+    --model_name qwen \
+    --num_agents 5 --num_rounds 2 \
+    --use_vllm --tensor_parallel_size 2
+
+# Step 0.5：数据划分（8:1:1 train/val/test）
+python Cul/split_data.py \
+    --input /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
+    --output /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --seed 42
+
+# Step 1：标准 SFT（均匀 CE Loss，无 token 加权）
+python ark/culture/train_sft.py \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --output_dir /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen \
+    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+
+# Step 2a：推理步骤切分
+python Cul/step_label/split_steps.py \
+    --input_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
+    --output_file /autodl-fs/data/qwen/culturalbench_agentark_steps.jsonl \
+    --max_sentences_per_step 3 --sources guardian judge
+
+# Step 2b：步骤标注（LLM open-book labeling）
+python Cul/step_label/label_steps.py \
+    --input_file /autodl-fs/data/qwen/culturalbench_agentark_steps.jsonl \
+    --output_file /autodl-fs/data/qwen/culturalbench_agentark_step_labels.jsonl \
+    --model_name qwen --batch_size 64 --tensor_parallel_size 2
+
+# Step 2c：PRM 训练（标准 MSE，无类别加权）
+python ark/culture/train_prm.py \
+    --base_model_path /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+    --sft_adapter_path /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
+    --train_file /autodl-fs/data/qwen/culturalbench_agentark_step_labels.jsonl \
+    --val_file /autodl-fs/data/qwen/culturalbench_agentark_step_labels_val.jsonl \
+    --output_dir /autodl-fs/data/model/agentark/prm_culturalbench_reconcile_qwen \
+    --epochs 5 --batch_size 8
+
+# Step 3：GRPO 强化学习
+python ark/culture/train_grpo.py \
+    --model_name qwen \
+    --data_source reconcile \
+    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
+    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --prm_path /autodl-fs/data/model/agentark/prm_culturalbench_reconcile_qwen/best \
+    --output_dir /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen \
+    --alpha 0.6 --n_samples 5 --max_rounds 30
+
+# Step 4：评估（使用与 CAMAD 相同的 test split）
+python ark/culture/evaluate.py \
+    --mode sft_rl \
+    --model_name qwen \
+    --data_source reconcile \
+    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
+    --grpo_adapter /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen/best \
+    --output_json results/agentark_culturalbench_reconcile_qwen.json
 ```
-
-**与 CAMA-D 的关键差异总结**：AgentArk baseline 实现中刻意保持了"通用蒸馏方法原样迁移"的设计哲学——同质 Agent（无文化身份）、均匀损失（无 token 加权）、标准 MSE PRM（无类别加权）、无国家前缀。这些设计选择使其与 CAMA-D 的文化感知机制形成清晰的消融对照，从而验证文化特异性设计带来的增益。
 
 ## 8. 消融实验设计
 

@@ -87,10 +87,10 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Guardian: lower temperature for precise, authoritative responses
-        # CulturalBench: slightly lower overall but SAME asymmetry pattern
+        # CulturalBench: think-then-answer needs more tokens for step-by-step reasoning
         if self.task_type == "culturalbench":
             guardian_temp = 0.3
-            cb_max_tokens = 256
+            cb_max_tokens = 512
         else:
             guardian_temp = 0.5
             cb_max_tokens = self.max_tokens
@@ -177,16 +177,16 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             # CulturalBench: factual cultural knowledge MCQ (4-way)
+            # Guardian uses think-then-answer format for deeper reasoning
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
                 f"{question}\n\n"
-                f"As the Host-Culture Guardian for {target_country}:\n"
-                f"1. First understand what the question asks (watch for negations "
-                f"like \"unusual\", \"not uncommon\", \"pair with X\").\n"
-                f"2. Consider ALL four options — do not default to the first one.\n"
-                f"3. Pick the most culturally accurate answer based on your expertise.\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), "
-                f"second line is a brief explanation."
+                f"As the Host-Culture Guardian for {target_country}, think step by step:\n"
+                f"Step 1: What is this question ACTUALLY asking? "
+                f"(Identify negations like \"unusual\", \"not uncommon\", \"least likely\")\n"
+                f"Step 2: Evaluate each option (1/2/3/4) against your cultural expertise.\n"
+                f"Step 3: State your final answer.\n\n"
+                f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
             )
         else:
             # NormAD: behavior acceptability (3-way 1/2/3)
@@ -410,12 +410,22 @@ class HF_CAC_MAS:
             max_choice = 3
         pattern = f"[1-{max_choice}]"
 
-        # For culturalbench (answer-first format): check first line first
+        # For culturalbench: check LAST line first (think-then-answer format for Guardian),
+        # then fall back to first line (answer-first format for Auditors/Judge)
         if self.task_type == "culturalbench":
-            first_line = text.strip().split("\n")[0].strip()
-            m = re.match(rf"^({pattern})$", first_line)
-            if m:
-                return m.group(1)
+            lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+            # Check last line (Guardian think-then-answer)
+            if lines:
+                last_line = lines[-1]
+                m = re.match(rf"^({pattern})$", last_line)
+                if m:
+                    return m.group(1)
+            # Check first line (Auditor/Judge answer-first)
+            if lines:
+                first_line = lines[0]
+                m = re.match(rf"^({pattern})$", first_line)
+                if m:
+                    return m.group(1)
 
         m = re.search(rf"Answer\s*:\s*({pattern})", text, re.IGNORECASE)
         if m:

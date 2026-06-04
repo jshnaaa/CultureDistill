@@ -18,8 +18,8 @@ for downstream pipeline compatibility.
 
 Usage:
     python ark/culture/generate_debate_data.py \
-        --input_file Cul/data/normad_mas.json \
-        --output_file /path/to/normad_debate_inference.jsonl \
+        --input_file /autodl-fs/data/normad_mas.json \
+        --output_file /autodl-fs/data/qwen/normad_agentark_debate.jsonl \
         --model_name qwen \
         --num_agents 5 \
         --num_rounds 2 \
@@ -27,8 +27,8 @@ Usage:
         --max_samples 0
 
     python ark/culture/generate_debate_data.py \
-        --input_file Cul/data/culturalBench_mas.json \
-        --output_file /path/to/culturalbench_debate_inference.jsonl \
+        --input_file /autodl-fs/data/culturalBench_mas.json \
+        --output_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
         --model_name qwen \
         --num_agents 5 \
         --num_rounds 2 \

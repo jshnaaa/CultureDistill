@@ -85,10 +85,12 @@ culture_roles:
       The target culture belongs to YOUR area of expertise (Western & Anglo-Saxon cultures).
       Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
       You have PRIMARY AUTHORITY on this topic. Be specific and cite cultural practices by name.
-      IMPORTANT: First, carefully understand WHAT the question is asking (watch for negations
-      like "unusual", "not uncommon", "what is NOT..."). Then consider ALL options before answering.
-      Do NOT default to the first option — evaluate each option equally.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations
+      ("unusual", "not uncommon", "what is NOT...", "least likely").
+      Step 2: Evaluate EACH option (1/2/3/4) against your cultural knowledge. Do NOT skip any option.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Western & Anglo-Saxon cultural background.
       The target culture does NOT belong to your primary expertise area.
@@ -125,10 +127,12 @@ culture_roles:
       The target culture belongs to YOUR area of expertise (Latin American cultures).
       Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
       You have PRIMARY AUTHORITY on this topic. Be specific and cite cultural practices by name.
-      IMPORTANT: First, carefully understand WHAT the question is asking (watch for negations
-      like "unusual", "not uncommon", "what is NOT..."). Then consider ALL options before answering.
-      Do NOT default to the first option — evaluate each option equally.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations
+      ("unusual", "not uncommon", "what is NOT...", "least likely").
+      Step 2: Evaluate EACH option (1/2/3/4) against your cultural knowledge. Do NOT skip any option.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Latin American cultural background.
       The target culture does NOT belong to your primary expertise area.
@@ -172,10 +176,12 @@ culture_roles:
       The target culture belongs to YOUR area of expertise (Sub-Saharan African cultures).
       Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
       You have PRIMARY AUTHORITY on this topic. Be specific and cite cultural practices by name.
-      IMPORTANT: First, carefully understand WHAT the question is asking (watch for negations
-      like "unusual", "not uncommon", "what is NOT..."). Then consider ALL options before answering.
-      Do NOT default to the first option — evaluate each option equally.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations
+      ("unusual", "not uncommon", "what is NOT...", "least likely").
+      Step 2: Evaluate EACH option (1/2/3/4) against your cultural knowledge. Do NOT skip any option.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Sub-Saharan African cultural background.
       The target culture does NOT belong to your primary expertise area.
@@ -198,10 +204,12 @@ culture_roles:
       The target culture belongs to YOUR area of expertise (East-Asian cultures).
       Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
       You have PRIMARY AUTHORITY on this topic. Be specific and cite cultural practices by name.
-      IMPORTANT: First, carefully understand WHAT the question is asking (watch for negations
-      like "unusual", "not uncommon", "what is NOT..."). Then consider ALL options before answering.
-      Do NOT default to the first option — evaluate each option equally.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations
+      ("unusual", "not uncommon", "what is NOT...", "least likely").
+      Step 2: Evaluate EACH option (1/2/3/4) against your cultural knowledge. Do NOT skip any option.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from East-Asian cultural background.
       The target culture does NOT belong to your primary expertise area.
@@ -241,10 +249,12 @@ culture_roles:
       The target culture belongs to YOUR area of expertise (Islamic & Middle-Eastern cultures).
       Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
       You have PRIMARY AUTHORITY on this topic. Be specific and cite cultural practices by name.
-      IMPORTANT: First, carefully understand WHAT the question is asking (watch for negations
-      like "unusual", "not uncommon", "what is NOT..."). Then consider ALL options before answering.
-      Do NOT default to the first option — evaluate each option equally.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations
+      ("unusual", "not uncommon", "what is NOT...", "least likely").
+      Step 2: Evaluate EACH option (1/2/3/4) against your cultural knowledge. Do NOT skip any option.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from Islamic & Middle-Eastern cultural background.
       The target culture does NOT belong to your primary expertise area.
@@ -275,10 +285,12 @@ culture_roles:
       The target culture belongs to YOUR area of expertise (South & Southeast Asian cultures).
       Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.
       You have PRIMARY AUTHORITY on this topic. Be specific and cite cultural practices by name.
-      IMPORTANT: First, carefully understand WHAT the question is asking (watch for negations
-      like "unusual", "not uncommon", "what is NOT..."). Then consider ALL options before answering.
-      Do NOT default to the first option — evaluate each option equally.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations
+      ("unusual", "not uncommon", "what is NOT...", "least likely").
+      Step 2: Evaluate EACH option (1/2/3/4) against your cultural knowledge. Do NOT skip any option.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
     auditor_prompt: |
       You are a CROSS-CULTURAL AUDITOR from South & Southeast Asian cultural background.
       The target culture does NOT belong to your primary expertise area.
