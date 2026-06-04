@@ -500,7 +500,7 @@ Cul/
 │   ├── train_prm_mse.py               # Stage 3a: 过程奖励模型训练（Sigmoid + 加权 MSE）
 │   └── eval_prm.py                    # PRM 评估
 └── grpo/
-    └── train_grpo_v3.py               # Stage 3b: GRPO 强化学习训练
+└── train_grpo_v3.py               # Stage 3b: GRPO 强化学习训练（含 Guardian 相似度调制信号）
 ```
 
 ### 2.8 Agent 角色设定
@@ -1499,8 +1499,13 @@ R_total = alpha * R_outcome + (1 - alpha) * Mean(R_process)
      d. Mean(R_process) = mean(scores)  // ∈ [0.1, 0.9]
      e. R_total = 0.6 * R_outcome + 0.4 * Mean(R_process)
   3. 组内计算 Advantage（RLOO baseline）
-  4. 策略梯度更新 policy 参数
-  5. 下一轮用更新后模型重新采样
+  4. [可选] Guardian 相似度调制：
+     a. 查找该 (country, query) 对应的 Guardian response
+     b. 计算 S_guardian = R_outcome^guardian * (R_guardian - mean_R_on)
+     c. 对每条 rollout 计算 Sim(y_i, y_guardian)
+     d. A_i += λ * w_culture * S_guardian * Sim(y_i, y_guardian)
+  5. 策略梯度更新 policy 参数
+  6. 下一轮用更新后模型重新采样
 ```
 
 ### 6.3 训练配置
@@ -1595,6 +1600,120 @@ deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
 | `--eval_every` | 每 N 轮评估一次 |
 
 与 `train_grpo_v3.py` 的区别：使用 DeepSpeed ZeRO-3 进行多卡并行（显存效率更高），R_total = 0.7×R_ans + 0.3×R_cultural，PRM 使用 step-level scoring（与 `train_prm_mse.py` 训练的 PRM 完全适配）。
+
+### 6.5 Guardian 相似度调制信号（Similarity-Modulated Guardian Signal）
+
+#### 问题：奖励重复计算
+
+原始 CGM-GRPO 方案中，Guardian 信号 `S_guardian` 作为统一 bonus 加到所有 on-policy rollout 的 advantage 上：
+
+```
+A_i = A_i^base + λ * w_culture * S_guardian
+```
+
+这存在"奖励重复计算"问题：一个答错的 rollout（R_outcome=0）和一个答对的 rollout（R_outcome=1）获得相同的 Guardian bonus。这违反了直觉——只有与 Guardian 推理路径相似的 rollout 才应该获得正向引导。
+
+#### 改进：相似度调制
+
+改进后的公式：
+
+```
+A_i = A_i^base + λ * w_culture * S_guardian * Sim(y_i, y_guardian)
+```
+
+其中：
+- `A_i^base`：标准 RLOO advantage（R_i - R_on_bar）
+- `S_guardian = R_outcome^guardian * (R_guardian - R̄_on)`：Guardian 信号强度
+  - `R_outcome^guardian`：Guardian 是否答对（质量门控，0 或 1）
+  - `R_guardian`：Guardian 的 reward 值
+  - `R̄_on`：on-policy 全组 R_outcome 均值
+- `Sim(y_i, y_guardian) ∈ [0, 1]`：rollout i 与 Guardian 的相似度
+- `λ`：全局引导强度（默认 0.3）
+- `w_culture`：文化权重（默认 1.0）
+
+#### Sim 计算方式
+
+支持三种模式（`--guardian_sim_mode`）：
+
+| 模式 | 计算方式 | 特点 |
+|------|----------|------|
+| `answer` | 答案一致性：rollout 答案 == Guardian 答案 → 1.0，否则 → 0.0 | 最简单，计算零开销，推荐默认 |
+| `step_overlap` | SequenceMatcher 对推理步骤序列的相似度比率 ∈ [0,1] | 软相似度，捕捉推理路径相似性 |
+| `hybrid` | 0.7 × answer_sim + 0.3 × step_overlap | 兼顾答案正确性和推理路径 |
+
+#### 信号行为分析
+
+| 场景 | S_guardian | Sim | Bonus | 效果 |
+|------|-----------|-----|-------|------|
+| Guardian 答对，rollout 也答对且路径相似 | 正 | 高 | 正（大） | 强化该 rollout |
+| Guardian 答对，rollout 答错 | 正 | 0 | 0 | 不干扰（避免重复计算） |
+| Guardian 答对，rollout 答对但路径不同 | 正 | 低 | 正（小） | 轻微引导 |
+| Guardian 答错 | 0 | - | 0 | 质量门控生效，不引导 |
+| 全组都答对（mean_R_on=1） | 0 | - | 0 | 无需引导，回退标准 GRPO |
+
+#### 运行命令
+
+**GRPO + Guardian 相似度调制（推荐配置）**
+```bash
+python Cul/grpo/train_grpo_v3.py \
+    --model_name qwen \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --prm_backbone /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
+    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --guardian_lambda 0.3 \
+    --guardian_w_culture 1.0 \
+    --guardian_sim_mode answer \
+    --output_dir /autodl-fs/data/model/qwen/normad_camad_grpo_guardian \
+    --alpha 0.6 \
+    --n_samples 10 \
+    --max_rounds 20 \
+    --eval_every 5 \
+    --lr 2e-5 \
+    --lora_r 16
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--guardian_data` | HF-CAC 推理输出 JSONL（含 Guardian response） |
+| `--guardian_lambda` | Guardian 信号强度 λ（默认 0.3，建议范围 0.1-0.5） |
+| `--guardian_w_culture` | 文化权重 w_culture（默认 1.0） |
+| `--guardian_sim_mode` | 相似度模式：answer / step_overlap / hybrid |
+
+**消融实验：不同 sim_mode 对比**
+```bash
+# answer 模式（二值，最快）
+python Cul/grpo/train_grpo_v3.py \
+    --model_name qwen \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --guardian_lambda 0.3 --guardian_sim_mode answer \
+    --output_dir /autodl-fs/data/model/qwen/grpo_guardian_sim_answer \
+    --alpha 0.6 --n_samples 10 --max_rounds 20 --eval_every 5 --lr 2e-5
+
+# hybrid 模式（0.7*answer + 0.3*step_overlap）
+python Cul/grpo/train_grpo_v3.py \
+    --model_name qwen \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --guardian_lambda 0.3 --guardian_sim_mode hybrid \
+    --output_dir /autodl-fs/data/model/qwen/grpo_guardian_sim_hybrid \
+    --alpha 0.6 --n_samples 10 --max_rounds 20 --eval_every 5 --lr 2e-5
+
+# 无 Guardian 基线（标准 GRPO，用于对比）
+python Cul/grpo/train_grpo_v3.py \
+    --model_name qwen \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --output_dir /autodl-fs/data/model/qwen/grpo_no_guardian_baseline \
+    --alpha 0.6 --n_samples 10 --max_rounds 20 --eval_every 5 --lr 2e-5
+```
 
 ### 6.6 测试 运行命令
 

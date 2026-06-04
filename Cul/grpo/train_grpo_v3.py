@@ -1,12 +1,20 @@
 """
-CAMA-D Stage 3-GRPO: GRPO with Mean(R_process) Reward — LoRA 版本（无 DeepSpeed）
+CAMA-D Stage 3-GRPO: GRPO with Mean(R_process) Reward -- LoRA (no DeepSpeed)
 
 Key innovations over old GRPO (train_grpo.py):
   - R_total = alpha * R_outcome + (1-alpha) * Mean(R_process)
   - PRM uses step-level scoring (Sigmoid at each [Step N] terminator)
-  - Mean(R_process) ∈ [0.1, 0.9] — perfectly aligned with R_outcome ∈ {0, 1}
+  - Mean(R_process) in [0.1, 0.9] -- perfectly aligned with R_outcome in {0, 1}
   - Heuristic step splitting before PRM scoring (same rules as Stage 2)
   - alpha=0.6 (outcome-dominant, process as soft constraint)
+
+Guardian Similarity-Modulated Advantage (NEW):
+  - Loads HF-CAC inference JSONL to extract Guardian responses per (country, query)
+  - Computes S_guardian = R_outcome^guardian * (R_guardian - mean_R_on)
+  - Computes Sim(y_i, y_guardian) via answer consistency + optional step overlap
+  - Final advantage: A_i = A_i^base + lambda * w_culture * S_guardian * Sim(y_i, y_guardian)
+  - Prevents "reward double-counting": only rollouts similar to Guardian get bonus
+  - Controlled by --guardian_data, --guardian_lambda, --guardian_w_culture
 
 Architecture (LoRA, no DeepSpeed):
   - Policy: base model + SFT-LoRA merged + new GRPO-LoRA (trainable)
@@ -14,7 +22,7 @@ Architecture (LoRA, no DeepSpeed):
   - PRM: loaded on cuda:1 for parallel scoring
   - Gradient checkpointing enabled for memory efficiency
 
-Hardware requirement: 2×vGPU-48GB (policy on cuda:0, PRM on cuda:1)
+Hardware requirement: 2x vGPU-48GB (policy on cuda:0, PRM on cuda:1)
 
 Usage:
     # Fast validation (no PRM, outcome-only reward)
@@ -29,12 +37,15 @@ Usage:
         --max_rounds     20 \\
         --eval_every     5
 
-    # Full training (with PRM batch scoring)
+    # Full training with Guardian similarity-modulated signal
     python Cul/grpo/train_grpo_v3.py \\
         --model_name     qwen \\
         --sft_adapter    /path/to/camad_sft_qwen/best \\
         --data_pkl       /path/to/normad_splits.pkl \\
         --prm_path       /path/to/camad_prm/best \\
+        --guardian_data  /path/to/normad_hf_cac_inference.jsonl \\
+        --guardian_lambda 0.3 \\
+        --guardian_w_culture 1.0 \\
         --output_dir     /path/to/models/camad_grpo_sft_qwen \\
         --alpha          0.6 \\
         --n_samples      5 \\
@@ -51,6 +62,8 @@ import json
 import pickle
 import argparse
 from pathlib import Path
+from collections import defaultdict
+from difflib import SequenceMatcher
 
 import torch
 import torch.nn as nn
@@ -78,6 +91,228 @@ MAX_GEN_LEN = 128
 MAX_PROMPT_LEN = 512
 KL_COEF = 0.05       # KL penalty coefficient
 DEFAULT_ALPHA = 0.6   # R_outcome weight
+DEFAULT_GUARDIAN_LAMBDA = 0.3    # Guardian signal strength
+DEFAULT_GUARDIAN_W_CULTURE = 1.0  # Cultural weight for Guardian bonus
+
+
+# ---------------------------------------------------------------------------
+# Guardian Signal: Similarity-Modulated Advantage
+# ---------------------------------------------------------------------------
+
+def load_guardian_index(guardian_jsonl_path: str) -> dict:
+    """
+    Load HF-CAC inference JSONL and build a lookup index for Guardian responses.
+
+    Returns:
+        Dict mapping (country_lower, query_prefix_lower) -> {
+            "guardian_response": str,  # Guardian's full reasoning text
+            "guardian_answer": str,    # Extracted answer digit
+            "guardian_name": str,      # Cultural role name
+        }
+    """
+    index = {}
+    count = 0
+    with open(guardian_jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            query = obj.get("query", "").strip()
+            country = obj.get("country", "").strip()
+            response = obj.get("response", "")
+            guardian_idx = obj.get("guardian_idx", -1)
+            guardian_failed = obj.get("guardian_failed", True)
+
+            if guardian_failed or guardian_idx < 0:
+                continue
+
+            # Extract Guardian's response text from formatted output
+            guardian_text = _extract_guardian_text(response)
+            if not guardian_text:
+                continue
+
+            # Extract Guardian's answer
+            guardian_answer = _extract_guardian_answer(guardian_text)
+
+            # Use first 200 chars of query as key (handles minor formatting diffs)
+            key = (country.lower(), query[:200].lower())
+            index[key] = {
+                "guardian_response": guardian_text,
+                "guardian_answer": guardian_answer,
+                "guardian_name": obj.get("guardian_name", ""),
+            }
+            count += 1
+
+    print(f"  [Guardian] Loaded {count} Guardian responses from {guardian_jsonl_path}")
+    return index
+
+
+def _extract_guardian_text(formatted_response: str) -> str:
+    """Extract Guardian's text from the formatted multi-agent response."""
+    pattern = r'===== Solution \d+ \[GUARDIAN\] =====\n(.*?)(?=\n===== Solution|\Z)'
+    match = re.search(pattern, formatted_response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _extract_guardian_answer(text: str) -> str:
+    """Extract answer digit from Guardian response text."""
+    # Guardian often starts with just the answer digit
+    first_line = text.split("\n")[0].strip()
+    m = re.match(r'^([1-4])\b', first_line)
+    if m:
+        return m.group(1)
+    # Fallback: look for answer patterns
+    m = re.search(r"Answer\s*:\s*([1-4])", text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    digits = re.findall(r"\b([1-4])\b", text)
+    return digits[0] if digits else None
+
+
+def compute_guardian_similarity(rollout_response: str, guardian_data: dict,
+                                sim_mode: str = "answer") -> float:
+    """
+    Compute Sim(y_i, y_guardian) between a rollout and the Guardian response.
+
+    Args:
+        rollout_response: The policy's generated response text.
+        guardian_data: Dict with guardian_response, guardian_answer.
+        sim_mode: "answer" (binary), "step_overlap" (soft), or "hybrid".
+
+    Returns:
+        Similarity score in [0, 1].
+    """
+    guardian_answer = guardian_data["guardian_answer"]
+    guardian_response = guardian_data["guardian_response"]
+
+    if sim_mode == "answer":
+        return _answer_consistency(rollout_response, guardian_answer)
+    elif sim_mode == "step_overlap":
+        return _step_overlap_similarity(rollout_response, guardian_response)
+    else:  # hybrid: 0.7 * answer + 0.3 * step_overlap
+        ans_sim = _answer_consistency(rollout_response, guardian_answer)
+        step_sim = _step_overlap_similarity(rollout_response, guardian_response)
+        return 0.7 * ans_sim + 0.3 * step_sim
+
+
+def _answer_consistency(rollout_response: str, guardian_answer: str) -> float:
+    """Binary: 1.0 if rollout's answer matches Guardian's answer, else 0.0."""
+    if guardian_answer is None:
+        return 0.5  # Neutral if Guardian answer not extractable
+    rollout_answer = extract_answer(rollout_response)
+    if rollout_answer is None:
+        return 0.0
+    return 1.0 if rollout_answer == guardian_answer else 0.0
+
+
+def _step_overlap_similarity(rollout_response: str, guardian_response: str) -> float:
+    """
+    Soft similarity via reasoning step overlap using SequenceMatcher.
+
+    Splits both responses into reasoning steps and computes sequence
+    similarity ratio in [0, 1].
+    """
+    rollout_steps = split_reasoning_into_steps(rollout_response)
+    guardian_steps = split_reasoning_into_steps(guardian_response)
+
+    if not rollout_steps or not guardian_steps:
+        # Fallback to raw text similarity if step splitting fails
+        return SequenceMatcher(
+            None,
+            rollout_response.lower()[:500],
+            guardian_response.lower()[:500]
+        ).ratio()
+
+    # Compare step sequences
+    rollout_text = " ".join(s.lower() for s in rollout_steps)
+    guardian_text = " ".join(s.lower() for s in guardian_steps)
+    return SequenceMatcher(None, rollout_text, guardian_text).ratio()
+
+
+def compute_guardian_advantage_bonus(
+    queries: list,
+    countries: list,
+    golds: list,
+    all_responses: list,
+    r_outcomes_flat: list,
+    guardian_index: dict,
+    guardian_lambda: float,
+    w_culture: float,
+    sim_mode: str,
+    n_samples: int,
+    device,
+) -> torch.Tensor:
+    """
+    Compute the Guardian similarity-modulated advantage bonus for a batch.
+
+    Formula per sample (pi, si):
+        bonus[pi, si] = lambda * w_culture * S_guardian * Sim(y_i, y_guardian)
+
+    Where:
+        S_guardian = R_outcome^guardian * (R_guardian - mean_R_on)
+        R_outcome^guardian = 1 if Guardian answer == gold, else 0
+        R_guardian = R_outcome^guardian (binary)
+        mean_R_on = mean of R_outcome across all n_samples for this prompt
+        Sim(y_i, y_guardian) = similarity between rollout i and Guardian
+
+    Args:
+        queries: List of query strings (batch_size,)
+        countries: List of country strings (batch_size,)
+        golds: List of gold answer strings (batch_size,)
+        all_responses: List of lists of response strings (batch_size, n_samples)
+        r_outcomes_flat: Flat list of R_outcome values (batch_size * n_samples,)
+        guardian_index: Pre-loaded Guardian lookup dict
+        guardian_lambda: Lambda coefficient
+        w_culture: Cultural weight
+        sim_mode: Similarity computation mode
+        n_samples: Number of samples per prompt
+        device: Torch device
+
+    Returns:
+        Tensor of shape (n_prompts, n_samples) with Guardian bonus values.
+    """
+    n_prompts = len(queries)
+    bonus = torch.zeros(n_prompts, n_samples, device=device)
+
+    for pi in range(n_prompts):
+        country = countries[pi]
+        query = queries[pi]
+        gold = str(golds[pi]).strip()
+
+        # Look up Guardian data for this (country, query)
+        key = (country.lower().strip(), query[:200].lower().strip())
+        guardian_data = guardian_index.get(key, None)
+
+        if guardian_data is None:
+            # No Guardian data available for this sample -- bonus stays 0
+            continue
+
+        # Compute mean R_outcome for on-policy rollouts of this prompt
+        start_idx = pi * n_samples
+        prompt_r_outcomes = r_outcomes_flat[start_idx:start_idx + n_samples]
+        mean_r_on = sum(prompt_r_outcomes) / max(len(prompt_r_outcomes), 1)
+
+        # Compute S_guardian
+        guardian_answer = guardian_data["guardian_answer"]
+        if guardian_answer is None:
+            continue
+
+        r_outcome_guardian = 1.0 if guardian_answer == gold else 0.0
+        r_guardian = r_outcome_guardian
+        s_guardian = r_outcome_guardian * (r_guardian - mean_r_on)
+
+        # If S_guardian is 0 (Guardian wrong, or same as on-policy avg), skip
+        if abs(s_guardian) < 1e-8:
+            continue
+
+        # Compute Sim for each rollout and apply modulation
+        for si, resp in enumerate(all_responses[pi]):
+            sim = compute_guardian_similarity(resp, guardian_data, sim_mode)
+            bonus[pi, si] = guardian_lambda * w_culture * s_guardian * sim
+
+    return bonus
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +329,7 @@ class CulturePRM_v3(nn.Module):
     Architecture matches train_prm_mse.py:
       - Backbone: base model + SFT-LoRA merged (same as PRM training time)
       - PRM LoRA adapter on top
-      - score_head: Linear(hidden, 1) + Sigmoid → (0, 1)
+      - score_head: Linear(hidden, 1) + Sigmoid -> (0, 1)
       - Scoring at [Step N] terminator positions
     """
 
@@ -157,7 +392,7 @@ class CulturePRM_v3(nn.Module):
           4. Return mean of all step scores
 
         Returns:
-            Mean step score ∈ [0.1, 0.9] (clamped)
+            Mean step score in [0.1, 0.9] (clamped)
         """
         enc = tokenizer(
             input_text,
@@ -173,7 +408,7 @@ class CulturePRM_v3(nn.Module):
         step_positions = self._find_step_positions(input_text, tokenizer, max_len)
 
         if not step_positions:
-            # No steps found — return neutral score
+            # No steps found -- return neutral score
             return 0.5
 
         outputs = self.model(
@@ -209,7 +444,7 @@ class CulturePRM_v3(nn.Module):
         Batch-score multiple reasoning paths in a single forward pass.
 
         Returns:
-            List of mean step scores ∈ [0.1, 0.9] for each input.
+            List of mean step scores in [0.1, 0.9] for each input.
         """
         if not input_texts:
             return []
@@ -509,9 +744,14 @@ def train(args):
 
     model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
 
-    print(f"=" * 60)
+    # ---- Load Guardian index (if provided) ----
+    guardian_index = None
+    if args.guardian_data:
+        guardian_index = load_guardian_index(args.guardian_data)
+
+    print(f"{'=' * 60}")
     print(f"CAMA-D GRPO v3: LoRA Policy + disable_adapter Reference")
-    print(f"=" * 60)
+    print(f"{'=' * 60}")
     print(f"Base model:    {model_path}")
     print(f"SFT adapter:   {args.sft_adapter or 'None (RL-only mode)'}")
     print(f"PRM path:      {args.prm_path}")
@@ -522,6 +762,12 @@ def train(args):
     print(f"KL coef:       {KL_COEF}")
     print(f"LoRA rank:     {args.lora_r}")
     print(f"Eval every:    {args.eval_every} round(s)")
+    if guardian_index is not None:
+        print(f"Guardian:      ENABLED (lambda={args.guardian_lambda}, "
+              f"w_culture={args.guardian_w_culture}, "
+              f"sim_mode={args.guardian_sim_mode})")
+    else:
+        print(f"Guardian:      DISABLED (no --guardian_data provided)")
 
     # ---- Load data from pkl ----
     print(f"Loading data splits from: {args.data_pkl}")
@@ -627,6 +873,7 @@ def train(args):
         round_r_outcome = 0.0
         round_r_process = 0.0
         round_r_total = 0.0
+        round_guardian_bonus = 0.0
         round_n = 0
 
         effective_batches = len(loader) if args.batches_per_round < 0 else min(args.batches_per_round, len(loader))
@@ -641,7 +888,8 @@ def train(args):
             n_prompts = len(queries)
 
             if batch_idx % 5 == 0:
-                print(f"  Round {rnd} | Batch {batch_idx+1}/{effective_batches} | Generating {n_prompts}×{args.n_samples} samples...", flush=True)
+                print(f"  Round {rnd} | Batch {batch_idx+1}/{effective_batches} | "
+                      f"Generating {n_prompts}x{args.n_samples} samples...", flush=True)
 
             # 1. Build prompts
             prompts = [build_prompt(q, c, tokenizer)
@@ -664,7 +912,8 @@ def train(args):
             torch.cuda.empty_cache()
 
             if batch_idx % 5 == 0 and not args.no_prm:
-                print(f"  Round {rnd} | Batch {batch_idx+1}/{effective_batches} | Scoring with PRM...", flush=True)
+                print(f"  Round {rnd} | Batch {batch_idx+1}/{effective_batches} | "
+                      f"Scoring with PRM...", flush=True)
 
             # 3. Compute rewards
             rewards = torch.zeros(n_prompts, args.n_samples, device=policy_device)
@@ -716,8 +965,27 @@ def train(args):
                     round_n += 1
                     idx += 1
 
-            # 4. RLOO advantages
+            # 4. RLOO advantages (base)
             advantages = rloo_advantages(rewards)
+
+            # 4b. Guardian similarity-modulated advantage bonus
+            #     A_i = A_i^base + lambda * w_culture * S_guardian * Sim(y_i, y_guardian)
+            if guardian_index is not None:
+                guardian_bonus = compute_guardian_advantage_bonus(
+                    queries=queries,
+                    countries=countries,
+                    golds=golds,
+                    all_responses=all_responses,
+                    r_outcomes_flat=r_outcomes,
+                    guardian_index=guardian_index,
+                    guardian_lambda=args.guardian_lambda,
+                    w_culture=args.guardian_w_culture,
+                    sim_mode=args.guardian_sim_mode,
+                    n_samples=args.n_samples,
+                    device=policy_device,
+                )
+                advantages = advantages + guardian_bonus
+                round_guardian_bonus += guardian_bonus.abs().mean().item()
 
             # 5. Policy gradient with KL penalty
             # Two-phase approach:
@@ -792,11 +1060,16 @@ def train(args):
         avg_r_process = round_r_process / max(round_n, 1)
         avg_r_total = round_r_total / max(round_n, 1)
 
+        guardian_info = ""
+        if guardian_index is not None:
+            avg_guardian = round_guardian_bonus / max(effective_batches, 1)
+            guardian_info = f" | G_bonus={avg_guardian:.4f}"
+
         print(f"Round {rnd}/{args.max_rounds} | "
               f"loss={avg_loss:.4f} | "
               f"R_outcome={avg_r_outcome:.3f} | "
               f"R_process={avg_r_process:.3f} | "
-              f"R_total={avg_r_total:.3f}")
+              f"R_total={avg_r_total:.3f}{guardian_info}")
 
         # 6. Validation
         if rnd % args.eval_every == 0:
@@ -812,7 +1085,7 @@ def train(args):
                 # Save only GRPO LoRA adapter
                 policy.save_pretrained(str(ckpt))
                 tokenizer.save_pretrained(str(ckpt))
-                print(f"  ✓ Saved best GRPO LoRA (val_acc={best_val_acc:.4f}) → {ckpt}")
+                print(f"  Saved best GRPO LoRA (val_acc={best_val_acc:.4f}) -> {ckpt}")
             else:
                 no_improve += 1
                 print(f"  No improvement ({no_improve}/3)")
@@ -825,7 +1098,7 @@ def train(args):
         ckpt = Path(args.output_dir) / "best"
         policy.save_pretrained(str(ckpt))
         tokenizer.save_pretrained(str(ckpt))
-        print(f"  Saved final GRPO LoRA (no eval performed) → {ckpt}")
+        print(f"  Saved final GRPO LoRA (no eval performed) -> {ckpt}")
 
     print(f"\nTraining complete. Best val_accuracy: {best_val_acc:.4f}")
     print(f"Best GRPO LoRA adapter: {args.output_dir}/best")
@@ -837,7 +1110,7 @@ def train(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CAMA-D Stage 3-GRPO: GRPO with Mean(R_process) — LoRA"
+        description="CAMA-D Stage 3-GRPO: GRPO with Mean(R_process) + Guardian Signal"
     )
     parser.add_argument("--model_name", type=str, required=True,
                         help="'llama', 'qwen', or full model path")
@@ -878,6 +1151,26 @@ def main():
     parser.add_argument("--no_prm", action="store_true",
                         help="Skip PRM scoring, use only R_outcome as reward. "
                              "Useful for fast pipeline validation.")
+    # Guardian signal arguments
+    parser.add_argument("--guardian_data", type=str, default=None,
+                        help="Path to HF-CAC inference JSONL file containing "
+                             "Guardian responses. If not provided, Guardian "
+                             "signal is disabled.")
+    parser.add_argument("--guardian_lambda", type=float,
+                        default=DEFAULT_GUARDIAN_LAMBDA,
+                        help="Guardian signal strength coefficient (default: 0.3). "
+                             "Controls how much the Guardian bonus affects advantage.")
+    parser.add_argument("--guardian_w_culture", type=float,
+                        default=DEFAULT_GUARDIAN_W_CULTURE,
+                        help="Cultural weight for Guardian bonus (default: 1.0). "
+                             "Can be reduced for less culturally-specific tasks.")
+    parser.add_argument("--guardian_sim_mode", type=str, default="answer",
+                        choices=["answer", "step_overlap", "hybrid"],
+                        help="Similarity mode for Guardian modulation. "
+                             "'answer': binary answer consistency (Sim=1 if match). "
+                             "'step_overlap': SequenceMatcher ratio of reasoning steps. "
+                             "'hybrid': 0.7*answer + 0.3*step_overlap. "
+                             "(default: answer)")
     args = parser.parse_args()
 
     args.model_name = MODEL_ALIASES.get(args.model_name, args.model_name)
