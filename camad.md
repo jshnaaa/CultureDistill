@@ -637,6 +637,19 @@ python Cul/evaluate.py \
 学生模型通过 `--model_name` 参数指定，支持 `llama`和 `qwen`两种基座。
 训练 10 个 epoch，损失权重 α=1.0, β=1.0, γ=0.1。评估指标为 overall accuracy。
 
+**预估运行时长**（2 × 48GB vGPU 并行，7-8B 模型 fp16）：
+
+| Step | 内容 | CultureBench (1227 samples) | NormAD (2633 samples) |
+|------|------|----------------------------|----------------------|
+| Step 0 | RECONCILE 推理数据生成（vLLM, tp=2） | ~15-20 min | ~30-40 min |
+| Step 1 | MAG 图格式转换（纯 CPU） | < 1 min | < 1 min |
+| Step 2 | 节点嵌入提取（推理，batch=32） | ~3-5 min | ~8-12 min |
+| Step 3 | MAGDi 训练（10 epochs, batch=4, grad_accum=4） | ~20-30 min | ~45-60 min |
+| Step 4 | 评估（推理，batch=16） | ~2-3 min | ~5-8 min |
+| **合计** | | **~40-60 min** | **~90-120 min** |
+
+说明：Step 0 使用 vLLM tensor_parallel_size=2 将模型分布在两卡上加速推理（每条样本需 6 次 Agent 推理 + 1 次 Judge 推理）；Step 2-4 通过 accelerate 自动设备映射实现双卡模型并行；Step 3 已启用 gradient checkpointing，每个 batch 需做两次 LLM 前向（正/负样本 margin ranking），是耗时最长的步骤。如果已有 HF-CAC 推理数据（跳过 Step 0），则 CultureBench 约 25-40 min，NormAD 约 60-80 min。
+
 **Pipeline 与运行命令**：
 
 代码位于 `MAGDi/` 目录，完整 pipeline 包含 4 步（RECONCILE 模式额外有 Step 0 自动生成推理数据）：
@@ -798,18 +811,137 @@ python ark/culture/evaluate.py \
     --output_json results/agentark_culturalbench_reconcile_qwen.json
 ```
 
+**`--no_prm` 模式运行命令**（跳过 Step 2，GRPO 仅使用 outcome reward）：
+
+```bash
+# Step 0：同质多智能体辩论数据生成（同正常模式）
+python ark/culture/generate_debate_data.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
+    --output_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
+    --model_name qwen \
+    --num_agents 5 --num_rounds 2 \
+    --use_vllm --tensor_parallel_size 2
+
+# Step 0.5：数据划分（同正常模式）
+python Cul/split_data.py \
+    --input /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
+    --output /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --seed 42
+
+# Step 1：标准 SFT（同正常模式）
+python ark/culture/train_sft.py \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --output_dir /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen \
+    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+
+# Step 2：跳过（--no_prm 模式无需 PRM 训练）
+
+# Step 3：GRPO 强化学习（--no_prm，仅使用 binary outcome reward）
+python ark/culture/train_grpo.py \
+    --model_name qwen \
+    --data_source reconcile \
+    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
+    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --output_dir /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen_noprm \
+    --alpha 0.6 --n_samples 5 --max_rounds 30 \
+    --no_prm
+
+# Step 4：评估
+python ark/culture/evaluate.py \
+    --mode sft_rl \
+    --model_name qwen \
+    --data_source reconcile \
+    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
+    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
+    --grpo_adapter /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen_noprm/best \
+    --output_json results/agentark_culturalbench_reconcile_qwen_noprm.json
+```
+
+**预估运行时长**（2×48GB vGPU，以 ~3000 样本数据集为基准）：
+
+正常模式（完整 PRM + GRPO pipeline）：
+
+| 阶段 | 显存分配 | 预估时长 | 说明 |
+|------|----------|----------|------|
+| Step 0: 辩论推理 | 双卡 TP=2 | ~2-3h | 5 agents × 2 rounds, vLLM tensor parallel 加速 |
+| Step 0.5: 数据划分 | CPU | <1min | 纯 CPU 操作 |
+| Step 1: SFT | 双卡 DDP | ~0.5-1h | 3 epochs, LoRA r=32, Accelerate DDP |
+| Step 2a: 步骤切分 | CPU | ~5min | 正则匹配，纯 CPU |
+| Step 2b: 步骤标注 | 双卡 TP=2 | ~1-1.5h | vLLM 推理标注 |
+| Step 2c: PRM 训练 | 单卡 | ~1-1.5h | 5 epochs, LoRA r=16 |
+| Step 3: GRPO | 双卡（policy cuda:0 + PRM cuda:1） | ~15-25h | 130 batches/round, early stop ~10-15 rounds |
+| Step 4: 评估 | 单卡 | ~30-45min | greedy decode test set |
+| **总计** | — | **~21-33h** | |
+
+`--no_prm` 模式（跳过 PRM，仅使用 outcome reward）：
+
+| 阶段 | 显存分配 | 预估时长 | 说明 |
+|------|----------|----------|------|
+| Step 0: 辩论推理 | 双卡 TP=2 | ~2-3h | 同上 |
+| Step 0.5: 数据划分 | CPU | <1min | 同上 |
+| Step 1: SFT | 双卡 DDP | ~0.5-1h | 同上 |
+| Step 2a/2b/2c: PRM 相关 | — | **跳过** | `--no_prm` 模式无需 PRM |
+| Step 3: GRPO (no_prm) | 单卡即可（~30-36GB） | ~8-15h | 无 PRM 评分开销，每 batch 快约 30% |
+| Step 4: 评估 | 单卡 | ~30-45min | 同上 |
+| **总计** | — | **~11-20h** | |
+
+说明：`--no_prm` 模式下 Step 3 仅使用 binary outcome reward（答对=1，答错=0），不加载 PRM 模型，因此单卡 48GB 即可运行，且每 batch 节省 PRM scoring 时间（约 10-15s/batch）。代价是丢失过程奖励信号，GRPO 对齐效果预期下降。正常模式下 GRPO 将 policy 放 cuda:0（峰值 ~30-36GB）、PRM 放 cuda:1（峰值 ~18-20GB），双卡各有余量。
+
+**与 CAMA-D 的关键差异总结**：AgentArk baseline 实现中刻意保持了"通用蒸馏方法原样迁移"的设计哲学——同质 Agent（无文化身份）、均匀损失（无 token 加权）、标准 MSE PRM（无类别加权）、无国家前缀。这些设计选择使其与 CAMA-D 的文化感知机制形成清晰的消融对照，从而验证文化特异性设计带来的增益。
+
 ## 8. 消融实验设计
 
-### 8.1 蒸馏方案对比
+### 8.1 主实验
 
-| 实验组 | 训练方式 | 预期排序 |
+| 实验组 | 方法 | NormAd |
+|--------|---------|--|
+| Base | zero-shot |  |
+| 单teacher蒸馏 | SFT |  |
+| 多智能体协作 | HF-CAC |  |
+| 多teacher蒸馏 | MAGDi |  |
+| 多teacher蒸馏 | AgentArk |  |
+| Ours | CAMAD(SFT-only) |  |
+| Ours | CAMAD(RL-only) |  |
+| Ours | CAMAD(SFT+RL) |  |
+| Ours | CAMAD(CGM-RL) |  |
+
+### 8.2 蒸馏方案对比（都使用HF-CAC的情况下）
+
+| 实验组 | NormAd | CulturalBench |
 |--------|---------|---------|
-| Base | 无训练 | 最低 |
-| SFT-only (equal weight) | 传统 SFT（无 Token 加权） | 中低 |
-| SFT-only (CAMA-D Stage 1) | Token 级加权 SFT | 中 |
-| RL-only | GRPO from base | 中高 |
-| SFT + RL (CAMA-D full) | Stage 1 → Stage 3 | 最高 |
-| MAS Oracle | 多智能体系统直接推理 | 上界 |
+| HF-CAC |  |  |
+| MAGDi(HF-CAC) | |  |
+| AgentArk(HF-CAC) | |  |
+
+### 8.3 多智能体协作方法对比
+
+| 实验组 | NormAd | CulturalBench |
+|--------|---------|---------|
+| Vanilla RECONCILE |  |  |
+| MAD | |  |
+| MACD | |  |
+| OG-MAR | |  |
+| HF-CAC |  |  |
+
+### 8.4 分析实验一：HF-CAC中的智能体的数量
+
+| 智能体数量 | NormAd | CulturalBench |
+|--------|---------|---------|
+| 6 |  |  |
+| 5 | |  |
+| 4 | |  |
+| 3 | |  |
+| 2 | |  |
+
+### 8.5 分析实验二：HF-CAC中的辩论的轮次
+
+| 辩论轮次 | NormAd | CulturalBench |
+|--------|---------|---------|
+| 0 |  |  |
+| 1 | |  |
+| 2 | |  |
+| 3 | |  |
 
 ## 9. 代码结构
 
