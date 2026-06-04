@@ -421,7 +421,8 @@ def main():
     parser.add_argument("--output_file", type=str, default=None,
                         help="Output JSONL path (auto-generated if not specified)")
     parser.add_argument("--model_name", type=str, required=True,
-                        help="Model alias (llama/qwen) or full HF path")
+                        choices=["llama", "qwen"],
+                        help="Base model to use: 'llama' (LLaMA-3.1-8B-Instruct) or 'qwen' (Qwen2.5-7B-Instruct)")
     parser.add_argument("--num_agents", type=int, default=5,
                         help="Number of debate agents (default: 5)")
     parser.add_argument("--num_rounds", type=int, default=2,
@@ -436,12 +437,12 @@ def main():
     parser.add_argument("--eval_accuracy", action="store_true", default=True)
     args = parser.parse_args()
 
-    # Model alias resolution
+    # Model alias resolution (only llama and qwen are supported)
     MODEL_ALIASES = {
         "llama": "/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
         "qwen": "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
     }
-    args.model_name = MODEL_ALIASES.get(args.model_name.lower(), args.model_name)
+    args.model_name = MODEL_ALIASES[args.model_name]
     print(f"Model: {args.model_name}")
 
     # Output path

@@ -62,6 +62,16 @@ np.random.seed(42)
 
 
 # ---------------------------------------------------------------------------
+# Model aliases
+# ---------------------------------------------------------------------------
+
+MODEL_ALIASES = {
+    "llama": "/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
+    "qwen":  "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
+}
+
+
+# ---------------------------------------------------------------------------
 # Culture-specific utility functions
 # ---------------------------------------------------------------------------
 
@@ -291,9 +301,9 @@ if __name__ == '__main__':
                         help="Output directory for checkpoints (auto-generated if empty)")
     
     # Model
-    parser.add_argument('--model_name', type=str,
-                        default='mistralai/Mistral-7B-Instruct-v0.2',
-                        help="Base student model")
+    parser.add_argument('--model_name', type=str, required=True,
+                        choices=['llama', 'qwen'],
+                        help="Base student model alias (llama or qwen)")
     parser.add_argument('--cache_dir', type=str, default='',
                         help="Model cache directory")
     
@@ -337,6 +347,9 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
+    # Resolve model alias to full path
+    model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
+    
     # Determine max_node_num based on data source
     if args.data_source == 'hf_cac':
         max_node_num = 7  # 6 agents + 1 judge
@@ -353,7 +366,7 @@ if __name__ == '__main__':
     print(f"  Dataset: {args.dataset}")
     print(f"  Data source: {args.data_source}")
     print(f"  Max nodes per MAG: {max_node_num}")
-    print(f"  Model: {args.model_name}")
+    print(f"  Model: {args.model_name} -> {model_path}")
     print(f"  Output: {args.output_dir}")
     print(f"  Loss weights: alpha={args.alpha}, beta={args.beta}, gamma={args.gamma}")
     print(f"=" * 60)
@@ -378,7 +391,7 @@ if __name__ == '__main__':
     # Initialize model
     print("\nInitializing MAGDi model...")
     model = MAGDi(
-        model_name=args.model_name,
+        model_name=model_path,
         gcn_in_channels=args.gcn_in_channels,
         gcn_hidden_channels=args.gcn_hidden_channels,
         gcn_out_channels=args.gcn_out_channels,
@@ -397,7 +410,7 @@ if __name__ == '__main__':
     
     # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name,
+        model_path,
         padding_side='left',
         add_eos_token=True
     )

@@ -61,7 +61,7 @@ MAX_NEW_TOKENS = 512
 
 def load_model(args):
     """Load model according to the specified mode."""
-    model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
+    model_path = MODEL_ALIASES[args.model_name]
     print(f"Base model: {model_path}")
     print(f"Mode: {args.mode}")
     print(f"Data source: {args.data_source}")
@@ -215,7 +215,8 @@ def main():
                         choices=["sft", "rl", "sft_rl"],
                         help="Model mode: sft, rl, or sft_rl")
     parser.add_argument("--model_name", type=str, required=True,
-                        help="'llama', 'qwen', or full model path")
+                        choices=["llama", "qwen"],
+                        help="Base model: 'llama' (LLaMA-3.1-8B-Instruct) or 'qwen' (Qwen2.5-7B-Instruct)")
     parser.add_argument("--data_source", type=str, default="reconcile",
                         choices=["reconcile", "hf_cac"],
                         help="Data source used for training (for logging)")

@@ -52,6 +52,16 @@ from peft import PeftModel
 
 
 # ---------------------------------------------------------------------------
+# Model aliases
+# ---------------------------------------------------------------------------
+
+MODEL_ALIASES = {
+    "llama": "/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
+    "qwen":  "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
+}
+
+
+# ---------------------------------------------------------------------------
 # Answer extraction
 # ---------------------------------------------------------------------------
 
@@ -261,9 +271,9 @@ def main():
                         help="Alternative: direct path to test JSONL file")
     
     # Model
-    parser.add_argument('--base_model', type=str,
-                        default='mistralai/Mistral-7B-Instruct-v0.2',
-                        help="Base model path")
+    parser.add_argument('--base_model', type=str, required=True,
+                        choices=['llama', 'qwen'],
+                        help="Base model alias (llama or qwen)")
     parser.add_argument('--lora_model', type=str, default='',
                         help="Path to MAGDi LoRA checkpoint")
     parser.add_argument('--no_lora', action='store_true',
@@ -290,6 +300,9 @@ def main():
     
     args = parser.parse_args()
     
+    # Resolve model alias to full path
+    model_path = MODEL_ALIASES.get(args.base_model, args.base_model)
+    
     # Validate args
     if not args.data_pkl and not args.test_file:
         raise ValueError("Must provide either --data_pkl or --test_file")
@@ -301,7 +314,7 @@ def main():
     print(f"{'=' * 60}")
     print(f"  Dataset: {args.dataset}")
     print(f"  Data source: {args.data_source}")
-    print(f"  Base model: {args.base_model}")
+    print(f"  Base model: {args.base_model} -> {model_path}")
     print(f"  LoRA model: {args.lora_model if not args.no_lora else '(none - zero-shot)'}")
     print(f"  Prompt format: {args.prompt_format}")
     print(f"{'=' * 60}")
@@ -332,7 +345,7 @@ def main():
     if args.no_lora:
         # Zero-shot baseline
         model = AutoModelForCausalLM.from_pretrained(
-            args.base_model,
+            model_path,
             device_map='auto',
             torch_dtype=torch.float16,
             cache_dir=cache_dir
@@ -340,7 +353,7 @@ def main():
     else:
         # MAGDi distilled model (base + LoRA)
         model = AutoModelForCausalLM.from_pretrained(
-            args.base_model,
+            model_path,
             device_map='auto',
             torch_dtype=torch.float16,
             cache_dir=cache_dir
@@ -354,7 +367,7 @@ def main():
     device = next(model.parameters()).device
     
     tokenizer = AutoTokenizer.from_pretrained(
-        args.base_model,
+        model_path,
         padding_side='left',
         add_eos_token=False
     )
@@ -391,7 +404,7 @@ def main():
             'method': 'MAGDi',
             'dataset': args.dataset,
             'data_source': args.data_source,
-            'base_model': args.base_model,
+            'base_model': model_path,
             'lora_model': args.lora_model if not args.no_lora else None,
             'prompt_format': args.prompt_format,
             'temperature': args.temperature,

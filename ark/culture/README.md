@@ -45,14 +45,25 @@ This enables ablation: same data → different training method.
 | `evaluate.py` | Stage 4: Test set evaluation |
 | `run_pipeline.sh` | Unified pipeline entry point |
 
+## Supported Base Models
+
+Only two base models are supported (specified via `--model_name` parameter):
+
+| Alias | Model | Path |
+|-------|-------|------|
+| `qwen` | Qwen2.5-7B-Instruct | `/root/autodl-tmp/base/Qwen2.5-7B-Instruct` |
+| `llama` | Meta-Llama-3.1-8B-Instruct | `/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct` |
+
+No other models are accepted — argparse will reject any value other than `qwen` or `llama`.
+
 ## Quick Start
 
 ```bash
 # Full pipeline: RECONCILE data + NormAD + Qwen
 bash ark/culture/run_pipeline.sh reconcile normad qwen
 
-# Full pipeline: HF-CAC data + CulturalBench + Qwen
-bash ark/culture/run_pipeline.sh hf_cac culturalbench qwen
+# Full pipeline: HF-CAC data + CulturalBench + LLaMA
+bash ark/culture/run_pipeline.sh hf_cac culturalbench llama
 
 # Run specific stage only (e.g., only SFT)
 START_STAGE=1 END_STAGE=1 bash ark/culture/run_pipeline.sh reconcile normad qwen

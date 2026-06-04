@@ -27,6 +27,16 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
+# ---------------------------------------------------------------------------
+# Model aliases
+# ---------------------------------------------------------------------------
+
+MODEL_ALIASES = {
+    "llama": "/root/autodl-tmp/base/Meta-Llama-3.1-8B-Instruct",
+    "qwen":  "/root/autodl-tmp/base/Qwen2.5-7B-Instruct",
+}
+
+
 def generate_ordered_list_culture(all_result: list, data_source: str):
     """
     Generate ordered list of reasoning chains and their correctness labels
@@ -102,9 +112,9 @@ def main():
     )
     parser.add_argument('--mag_file', type=str, required=True,
                         help="Path to MAG JSON file")
-    parser.add_argument('--model_name', type=str,
-                        default='mistralai/Mistral-7B-Instruct-v0.2',
-                        help="Base model for embedding extraction")
+    parser.add_argument('--model_name', type=str, required=True,
+                        choices=['llama', 'qwen'],
+                        help="Base model alias (llama or qwen)")
     parser.add_argument('--output_file', type=str, required=True,
                         help="Output pickle file for node embeddings")
     parser.add_argument('--data_source', type=str, required=True,
@@ -118,6 +128,9 @@ def main():
                         help="Model cache directory")
     
     args = parser.parse_args()
+    
+    # Resolve model alias to full path
+    model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
     
     # Load MAG data
     print(f"Loading MAG data from: {args.mag_file}")
@@ -138,10 +151,10 @@ def main():
     print(f"  Total nodes to embed: {len(ordered_list)}")
     
     # Load model and tokenizer
-    print(f"Loading model: {args.model_name}")
+    print(f"Loading model: {args.model_name} -> {model_path}")
     cache_dir = args.cache_dir if args.cache_dir else None
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
+        model_path,
         device_map="auto",
         torch_dtype=torch.float16,
         cache_dir=cache_dir
@@ -149,7 +162,7 @@ def main():
     model.eval()
     
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name,
+        model_path,
         padding_side='left',
         add_eos_token=True
     )

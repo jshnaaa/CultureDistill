@@ -1597,7 +1597,7 @@ python Cul/grpo/eval_cgm_grpo.py \
 
 **实验设置**：
 
-数据集使用与 CAMAD 完全相同的 train/test 划分（由 `split_data.py` 生成的 pkl 文件），确保公平对比。学生模型使用 Mistral-7B-Instruct（与原始 MAGDi 一致），训练 10 个 epoch，损失权重 α=1.0, β=1.0, γ=0.1。评估指标为 overall accuracy 和 per-country accuracy，与 CAMAD 评估脚本对齐。
+数据集使用与 CAMAD 完全相同的 train/test 划分（由 `split_data.py` 生成的 pkl 文件），确保公平对比。学生模型通过 `--model_name` 参数指定，支持 `llama`（Llama-3.1-8B-Instruct）和 `qwen`（Qwen2.5-7B-Instruct）两种基座，与 CAMAD 使用相同的基座模型以确保对比公平。训练 10 个 epoch，损失权重 α=1.0, β=1.0, γ=0.1。评估指标为 overall accuracy 和 per-country accuracy，与 CAMAD 评估脚本对齐。
 
 **Pipeline 与运行命令**：
 
@@ -1607,57 +1607,57 @@ python Cul/grpo/eval_cgm_grpo.py \
 # 运行完整 pipeline（一键执行）
 cd MAGDi
 
-# 主实验：MAGDi + RECONCILE（CultureBench）
-DATASET=culturalbench DATA_SOURCE=reconcile bash run_magdi_culture.sh
+# 主实验：MAGDi + RECONCILE（CultureBench，Qwen 基座）
+DATASET=culturalbench DATA_SOURCE=reconcile MODEL_NAME=qwen bash run_magdi_culture.sh
 
-# 消融实验：MAGDi + HF-CAC（CultureBench）
-DATASET=culturalbench DATA_SOURCE=hf_cac bash run_magdi_culture.sh
+# 消融实验：MAGDi + HF-CAC（CultureBench，Qwen 基座）
+DATASET=culturalbench DATA_SOURCE=hf_cac MODEL_NAME=qwen bash run_magdi_culture.sh
 
-# NormAD 数据集
-DATASET=normad DATA_SOURCE=reconcile bash run_magdi_culture.sh
-DATASET=normad DATA_SOURCE=hf_cac bash run_magdi_culture.sh
+# NormAD 数据集（Llama 基座）
+DATASET=normad DATA_SOURCE=reconcile MODEL_NAME=llama bash run_magdi_culture.sh
+DATASET=normad DATA_SOURCE=hf_cac MODEL_NAME=llama bash run_magdi_culture.sh
 ```
 
 Pipeline 各步骤：
 
 ```bash
 # Step 0（仅 RECONCILE 模式，自动触发）：生成对称多智能体推理数据
-python MAGDi/generate_reconcile_data.py \
+python generate_reconcile_data.py \
     --input_file ../Cul/data/culturalBench_mas.json \
     --output_file /autodl-fs/data/qwen/culturalbench_reconcile_inference.jsonl \
     --config_file ../Cul/configs/reconcile_config.yaml \
     --model_name qwen --use_vllm --tensor_parallel_size 2
 
 # Step 1：将推理数据转换为 MAG 图格式
-python MAGDi/generate_mag_data.py \
+python generate_mag_data.py \
     --data_source reconcile \
     --input_file /autodl-fs/data/qwen/culturalbench_reconcile_inference.jsonl \
     --dataset culturalbench \
     --output_file MAG/culturalbench_reconcile.json
 
 # Step 2：提取节点嵌入（加权平均池化 last hidden states）
-python MAGDi/get_node_emb_culture.py \
+python get_node_emb_culture.py \
     --mag_file MAG/culturalbench_reconcile.json \
-    --model_name mistralai/Mistral-7B-Instruct-v0.2 \
+    --model_name qwen \
     --output_file node_emb/culturalbench_reconcile_node_emb.pkl \
     --data_source reconcile
 
 # Step 3：训练 MAGDi（NTP + Margin Ranking + GCN 三目标）
-python MAGDi/train_culture.py \
+python train_culture.py \
     --dataset culturalbench --data_source reconcile \
     --mag_file MAG/culturalbench_reconcile.json \
     --node_emb_file node_emb/culturalbench_reconcile_node_emb.pkl \
-    --model_name mistralai/Mistral-7B-Instruct-v0.2 \
-    --output_dir /autodl-fs/data/model/magdi/MAGDi_culturalbench_reconcile \
+    --model_name qwen \
+    --output_dir /autodl-fs/data/model/magdi/MAGDi_culturalbench_reconcile_qwen \
     --num_epochs 10 --lr 5e-6 --alpha 1.0 --beta 1.0 --gamma 0.1
 
 # Step 4：评估（使用与 CAMAD 相同的 test split）
-python MAGDi/test_culture.py \
+python test_culture.py \
     --dataset culturalbench --data_source reconcile \
     --data_pkl /autodl-fs/data/qwen/culturalbench_splits.pkl \
-    --base_model mistralai/Mistral-7B-Instruct-v0.2 \
-    --lora_model /autodl-fs/data/model/magdi/MAGDi_culturalbench_reconcile \
-    --output_json results/magdi_culturalbench_reconcile.json
+    --base_model qwen \
+    --lora_model /autodl-fs/data/model/magdi/MAGDi_culturalbench_reconcile_qwen \
+    --output_json results/magdi_culturalbench_reconcile_qwen.json
 ```
 
 **作为 CAMAD 基线的定位**：MAGDi 对所有 Agent 一视同仁（对称交互、平等投票），不区分哪个 Agent 对目标文化更具权威性，也缺乏过程级质量控制。这正是 CAMAD 通过 HF-CAC 主场机制和 PRM 过程奖励所解决的问题。因此 MAGDi 作为"通用多智能体蒸馏 vs 文化感知蒸馏"的对比基线是合理的。
@@ -1709,7 +1709,7 @@ AgentArk 原本设计用于数学推理、问答摘要和常识推理任务，�
 
 **实验设置**：
 
-实验覆盖两个数据集（NormAd 三分类、CultureBench 四分类）和两种数据来源（通过 `--data_source reconcile|hf_cac` 参数切换）。数据以 pkl 格式存储，结构为 `{"train": [...], "val": [...], "test": [...]}`。默认基座模型为 Qwen2.5-7B-Instruct，SFT 和 GRPO 各训练 3 epoch，学习率 2e-5，LoRA rank=64。PRM 训练 5 epoch，学习率 1e-5。GRPO 每条样本生成 4 条候选（group_size=4）。
+实验覆盖两个数据集（NormAd 三分类、CultureBench 四分类）和两种数据来源（通过 `--data_source reconcile|hf_cac` 参数切换）。基座模型限定为两种：Qwen2.5-7B-Instruct（`--model_name qwen`）和 LLaMA-3.1-8B-Instruct（`--model_name llama`），不支持其他模型。数据以 pkl 格式存储，结构为 `{"train": [...], "val": [...], "test": [...]}`。SFT 和 GRPO 各训练 3 epoch，学习率 2e-5，LoRA rank=64。PRM 训练 5 epoch，学习率 1e-5。GRPO 每条样本生成 4 条候选（group_size=4）。
 
 **运行命令**：
 

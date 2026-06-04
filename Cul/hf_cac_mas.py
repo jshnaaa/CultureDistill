@@ -27,427 +27,6 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
-# ---------------------------------------------------------------------------
-# Agent role merging for ablation (num_agents < 6)
-# ---------------------------------------------------------------------------
-
-# Merge mappings: which original 6 roles (by index) merge into each new role.
-# Original indices: 0=Western, 1=Latin American, 2=Sub-Saharan African,
-#                   3=East-Asian, 4=Islamic & Middle-Eastern, 5=South & SE Asian
-AGENT_MERGE_CONFIGS = {
-    6: [[0], [1], [2], [3], [4], [5]],  # No merge (full)
-    5: [[0], [1], [2, 4], [3], [5]],    # Merge Sub-Saharan + Islamic → Afro-Islamic
-    4: [[0], [1, 2], [3, 5], [4]],      # Merge Latin+African, East+South Asian
-    3: [[0, 1], [2, 4], [3, 5]],        # Western+Latin, Afro-Islamic, Asian
-    2: [[0, 1], [2, 3, 4, 5]],          # Western-Individualist vs Eastern-Collectivist
-}
-
-# Names for merged roles
-MERGED_ROLE_NAMES = {
-    5: [
-        "Western & Anglo-Saxon Culture",
-        "Latin American Culture",
-        "Afro-Islamic Culture",
-        "East-Asian Culture",
-        "South & Southeast Asian Culture",
-    ],
-    4: [
-        "Western & Anglo-Saxon Culture",
-        "Latin American & African Culture",
-        "East & South Asian Culture",
-        "Islamic & Middle-Eastern Culture",
-    ],
-    3: [
-        "Western & Latin Culture",
-        "Afro-Islamic Culture",
-        "Asian (East, South & SE) Culture",
-    ],
-    2: [
-        "Western-Individualist Culture",
-        "Eastern-Collectivist Culture",
-    ],
-}
-
-# Guardian prompts for merged roles (cognitive foundations combined)
-MERGED_GUARDIAN_PROMPTS = {
-    5: {
-        2: (  # Afro-Islamic (merge of Sub-Saharan African + Islamic & Middle-Eastern)
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (Afro-Islamic cultures).\n"
-            "Your cognitive foundation: You are deeply versed in BOTH indigenous African "
-            "tribal traditions (Ubuntu spirit, rich tribal ceremonies, extended-family "
-            "collectivism) AND Islamic cultural norms (Sharia law, Eid al-Fitr, Eid al-Adha, "
-            "halal dietary rules, sanctity of the right hand). You understand the deep "
-            "cultural interplay between Sub-Saharan African traditions and Islam across "
-            "the Sahel, East Africa, and North Africa.\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-    },
-    4: {
-        1: (  # Latin American & African
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (Latin American & African cultures).\n"
-            "Your cognitive foundation: You are deeply versed in the cultural continuum linking "
-            "Latin America and Sub-Saharan Africa — Catholic-indigenous-Afro hybrid traditions "
-            "(Carnival, Día de los Muertos, Candomblé, Santería), Ubuntu spirit, tribal ceremonies, "
-            "warm social distances, extended-family collectivism, and the shared African diaspora "
-            "heritage that connects these regions.\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-        2: (  # East & South Asian
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (East & South Asian cultures).\n"
-            "Your cognitive foundation: You are deeply versed in the Confucian cultural sphere "
-            "(face culture, collectivism, high uncertainty avoidance in China, Japan, Korea), "
-            "Buddhist and Hindu traditions, tropical folk customs and taboos (such as not touching "
-            "someone's head), and the shared values of high-context communication and group harmony "
-            "prevalent across East Asia, South Asia, and Southeast Asia.\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-    },
-    3: {
-        0: (  # Western & Latin
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (Western & Latin cultures).\n"
-            "Your cognitive foundation: You are deeply versed in English-speaking nations, "
-            "Western European secular traditions, individualism, low power-distance social norms, "
-            "AND the Latin American extension — Catholic-indigenous hybrid cultures, Carnival, "
-            "Día de los Muertos, warm social distances. You understand both the Anglo-Saxon "
-            "and Iberian-colonial cultural traditions that shape the Americas and Europe.\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-        1: (  # Afro-Islamic (same as 5-agent config)
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (Afro-Islamic cultures).\n"
-            "Your cognitive foundation: You are deeply versed in BOTH indigenous African "
-            "tribal traditions (Ubuntu spirit, rich tribal ceremonies, extended-family "
-            "collectivism) AND Islamic cultural norms (Sharia law, Eid al-Fitr, Eid al-Adha, "
-            "halal dietary rules, sanctity of the right hand). You understand the deep "
-            "cultural interplay between Sub-Saharan African traditions and Islam across "
-            "the Sahel, East Africa, and North Africa.\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-        2: (  # Asian (East, South & SE)
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (Asian cultures — East, South & Southeast).\n"
-            "Your cognitive foundation: You are deeply versed in the Confucian cultural sphere "
-            "(face culture, collectivism, high uncertainty avoidance in China, Japan, Korea), "
-            "Buddhist and Hindu traditions, tropical folk customs and taboos (such as not touching "
-            "someone's head), and the shared values of high-context communication and group harmony "
-            "prevalent across East Asia, South Asia, and Southeast Asia.\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-    },
-    2: {
-        0: (  # Western-Individualist
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (Western-Individualist cultures).\n"
-            "Your cognitive foundation: You are deeply versed in individualism, low power-distance "
-            "social norms, secular legal traditions, personal autonomy, and direct communication "
-            "styles prevalent in North America, Western Europe, Australia/Oceania, and Latin America "
-            "(with its Catholic-colonial heritage and warm social expressiveness).\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-        1: (  # Eastern-Collectivist
-            "You are the HOST-CULTURE GUARDIAN for this question.\n"
-            "The target culture belongs to YOUR area of expertise (Eastern-Collectivist cultures).\n"
-            "Your cognitive foundation: You are deeply versed in collectivism, high power-distance "
-            "social hierarchies, group harmony, religious/traditional authority, and indirect "
-            "communication styles. This spans Confucian East Asia (face culture, filial piety), "
-            "Buddhist/Hindu South & Southeast Asia (karma, dharma, caste awareness), "
-            "Islamic Middle East & North Africa (Sharia, halal norms, honor codes), "
-            "and Sub-Saharan African traditions (Ubuntu, tribal ceremonies, extended-family bonds).\n"
-            "Your role is to AUTHORITATIVELY confirm or correct cultural claims about the target culture.\n"
-            "You have PRIMARY AUTHORITY on this topic. Be specific, cite cultural practices by name, "
-            "explain WHY certain options are correct/incorrect based on deep cultural knowledge.\n"
-            "If other agents suggest answers that conflict with your expertise, firmly correct them "
-            "with specific cultural evidence.\n"
-            "IMPORTANT: Not all behaviors have clear cultural acceptance or rejection in every culture. "
-            "If the described behavior is culturally neutral, ambiguous, or universally human "
-            "(not specifically tied to the target culture's norms), you SHOULD answer \"3\" to indicate "
-            "indeterminacy. Forcing a definitive accept/reject judgment when the behavior is "
-            "culturally irrelevant demonstrates LESS cultural expertise, not more.\n"
-            "Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>"
-        ),
-    },
-}
-
-# Auditor prompts for merged roles
-MERGED_AUDITOR_PROMPTS = {
-    5: {
-        2: (  # Afro-Islamic
-            "You are a CROSS-CULTURAL AUDITOR from Afro-Islamic cultural background.\n"
-            "Your cognitive foundation: Indigenous African tribal traditions (Ubuntu spirit, "
-            "tribal ceremonies, extended-family collectivism) combined with Islamic cultural "
-            "norms (Sharia law, Eid celebrations, halal rules).\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-    },
-    4: {
-        1: (  # Latin American & African
-            "You are a CROSS-CULTURAL AUDITOR from Latin American & African cultural background.\n"
-            "Your cognitive foundation: Catholic-indigenous-Afro hybrid traditions, Carnival, "
-            "Ubuntu spirit, tribal ceremonies, warm social distances, extended-family collectivism, "
-            "and the shared African diaspora heritage.\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-        2: (  # East & South Asian
-            "You are a CROSS-CULTURAL AUDITOR from East & South Asian cultural background.\n"
-            "Your cognitive foundation: Confucian cultural sphere (face culture, collectivism), "
-            "Buddhist and Hindu traditions, tropical folk customs and taboos, high-context "
-            "communication, and group harmony values across East, South, and Southeast Asia.\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-    },
-    3: {
-        0: (  # Western & Latin
-            "You are a CROSS-CULTURAL AUDITOR from Western & Latin cultural background.\n"
-            "Your cognitive foundation: Anglo-Saxon individualism, Western European secular "
-            "traditions, low power-distance norms, AND Latin American Catholic-indigenous "
-            "hybrid cultures with warm social expressiveness.\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-        1: (  # Afro-Islamic
-            "You are a CROSS-CULTURAL AUDITOR from Afro-Islamic cultural background.\n"
-            "Your cognitive foundation: Indigenous African tribal traditions (Ubuntu spirit, "
-            "tribal ceremonies, extended-family collectivism) combined with Islamic cultural "
-            "norms (Sharia law, Eid celebrations, halal rules).\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-        2: (  # Asian (East, South & SE)
-            "You are a CROSS-CULTURAL AUDITOR from Asian (East, South & Southeast) cultural background.\n"
-            "Your cognitive foundation: Confucian cultural sphere (face culture, collectivism), "
-            "Buddhist and Hindu traditions, tropical folk customs and taboos, high-context "
-            "communication, and group harmony values.\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-    },
-    2: {
-        0: (  # Western-Individualist
-            "You are a CROSS-CULTURAL AUDITOR from Western-Individualist cultural background.\n"
-            "Your cognitive foundation: Individualism, personal autonomy, low power-distance, "
-            "secular legal traditions, direct communication, prevalent in North America, "
-            "Western Europe, and Latin America.\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-        1: (  # Eastern-Collectivist
-            "You are a CROSS-CULTURAL AUDITOR from Eastern-Collectivist cultural background.\n"
-            "Your cognitive foundation: Collectivism, high power-distance, group harmony, "
-            "religious/traditional authority, indirect communication — spanning Confucian East Asia, "
-            "Buddhist/Hindu South & Southeast Asia, Islamic Middle East, and Sub-Saharan Africa.\n"
-            "The target culture does NOT belong to your primary expertise area.\n"
-            "Your role is to provide CONTRASTIVE perspective: note similarities/differences "
-            "between your culture and the target culture, but DEFER to the Host-Culture Guardian "
-            "on specific factual claims about the target culture.\n"
-            "Explicitly acknowledge uncertainty where appropriate.\n"
-            "If a behavior appears universally human or culturally neutral (not specific to any "
-            "culture), explicitly state this and consider answering \"3\" (neutral/indeterminate).\n"
-            "Your cross-cultural perspective is especially valuable for identifying behaviors "
-            "that do NOT have culture-specific significance.\n"
-            "Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>"
-        ),
-    },
-}
-
-
-def merge_culture_roles(original_roles: list, num_agents: int,
-                        affinity_matrix: list | None = None):
-    """
-    Merge 6 original culture roles into `num_agents` roles based on
-    predefined merge configurations.
-
-    Returns:
-        (merged_roles, merged_affinity_matrix)
-        - merged_roles: list of role dicts with merged region_keywords and new prompts
-        - merged_affinity_matrix: NxN affinity matrix for the merged roles (or None)
-    """
-    if num_agents == 6:
-        return original_roles, affinity_matrix
-
-    merge_map = AGENT_MERGE_CONFIGS[num_agents]
-    merged_names = MERGED_ROLE_NAMES[num_agents]
-    guardian_prompts = MERGED_GUARDIAN_PROMPTS[num_agents]
-    auditor_prompts = MERGED_AUDITOR_PROMPTS[num_agents]
-
-    merged_roles = []
-    for new_idx, orig_indices in enumerate(merge_map):
-        # Merge region_keywords from all original roles in this group
-        merged_keywords = []
-        for oi in orig_indices:
-            merged_keywords.extend(original_roles[oi].get("region_keywords", []))
-
-        # Use custom prompt if this is a merged role, otherwise keep original
-        if len(orig_indices) == 1:
-            # Single role, no merge — keep original prompts
-            orig_role = original_roles[orig_indices[0]]
-            role = {
-                "name": orig_role["name"],
-                "region_keywords": merged_keywords,
-                "guardian_prompt": orig_role["guardian_prompt"],
-                "auditor_prompt": orig_role["auditor_prompt"],
-            }
-        else:
-            # Merged role — use custom prompts
-            role = {
-                "name": merged_names[new_idx],
-                "region_keywords": merged_keywords,
-                "guardian_prompt": guardian_prompts[new_idx],
-                "auditor_prompt": auditor_prompts[new_idx],
-            }
-        merged_roles.append(role)
-
-    # Merge affinity matrix: for merged groups, take the MAX affinity
-    # (most culturally proximate path) between any pair of original roles
-    merged_matrix = None
-    if affinity_matrix:
-        merged_matrix = []
-        for i_group in merge_map:
-            row = []
-            for j_group in merge_map:
-                # Max affinity between any pair across the two groups
-                max_aff = max(
-                    affinity_matrix[oi][oj]
-                    for oi in i_group for oj in j_group
-                )
-                row.append(round(max_aff, 2))
-            merged_matrix.append(row)
-
-    return merged_roles, merged_matrix
-
-
 class HF_CAC_MAS:
     """
     Home-Field Culture-Activated Collaboration MAS.
@@ -461,7 +40,7 @@ class HF_CAC_MAS:
 
     def __init__(self, model_name, tensor_parallel_size=1, config_path=None,
                  temperature=0.7, max_tokens=1024, include_judge=True,
-                 negotiation_rounds=1, num_agents=6):
+                 negotiation_rounds=1):
         """
         Args:
             model_name: HuggingFace model path or alias
@@ -471,8 +50,6 @@ class HF_CAC_MAS:
             max_tokens: max generation tokens
             include_judge: whether to include Judge reasoning in output
             negotiation_rounds: rounds of structured negotiation (0=independent, 1=standard)
-            num_agents: number of cultural agents (2-6). When < 6, culturally
-                        proximate roles are merged. Default: 6 (full).
         """
         if config_path is None:
             config_path = os.path.join(
@@ -480,15 +57,8 @@ class HF_CAC_MAS:
             )
         cfg = load_config(config_path)
 
-        # Load original 6 roles from config, then merge if num_agents < 6
-        original_roles = cfg["culture_roles"]
-        original_affinity = cfg.get("cultural_affinity_matrix", None)
-
-        self.culture_roles, self.affinity_matrix = merge_culture_roles(
-            original_roles, num_agents, original_affinity
-        )
+        self.culture_roles = cfg["culture_roles"]
         self.num_agents = len(self.culture_roles)
-
         self.judge_system_prompt = cfg["judge"]["system_prompt"].strip()
         self.include_judge = include_judge
         self.negotiation_rounds = negotiation_rounds
@@ -500,7 +70,8 @@ class HF_CAC_MAS:
         self.task_type = cfg.get("task_type", "normad")
         self.answer_choices = cfg.get("answer_choices", [1, 2, 3])
 
-        # Guardian failure indicators
+        # Cultural Affinity Matrix for Judge fallback arbitration
+        self.affinity_matrix = cfg.get("cultural_affinity_matrix", None)
         self.guardian_failure_indicators = cfg.get(
             "guardian_failure_indicators", []
         )
@@ -557,8 +128,8 @@ class HF_CAC_MAS:
         Determine which agent is the Host-Culture Guardian based on target country.
 
         Returns:
-            Agent index (0 to num_agents-1) of the Guardian. Returns -1 if no
-            match found (falls back to treating all agents equally).
+            Agent index (0-5) of the Guardian. Returns -1 if no match found
+            (falls back to treating all agents equally).
         """
         country_lower = target_country.lower().strip()
         if not country_lower:
@@ -610,14 +181,10 @@ class HF_CAC_MAS:
                 f"TARGET CULTURE: {target_country}\n\n"
                 f"{question}\n\n"
                 f"As the Host-Culture Guardian for {target_country}:\n"
-                f"STEP 1: Parse the question structure.\n"
-                f"- Does it contain \"unusual\", \"NOT\", \"never\", \"uncommon\", \"least\"? "
-                f"If YES: select the OUTLIER (what does NOT fit the culture).\n"
-                f"- Does it contain \"not uncommon\"? This is a double negation = COMMON.\n"
-                f"- Restate in your own words: what is the question looking for?\n\n"
-                f"STEP 2: Evaluate ALL four options against your expertise.\n"
-                f"For each option, ask: does this fit or NOT fit {target_country}'s culture?\n\n"
-                f"STEP 3: Select the answer that matches what the question is asking for.\n\n"
+                f"1. First understand what the question asks (watch for negations "
+                f"like \"unusual\", \"not uncommon\", \"pair with X\").\n"
+                f"2. Consider ALL four options — do not default to the first one.\n"
+                f"3. Pick the most culturally accurate answer based on your expertise.\n\n"
                 f"Answer format: first line is ONLY the number (1/2/3/4), "
                 f"second line is a brief explanation."
             )
@@ -686,17 +253,9 @@ class HF_CAC_MAS:
                     f"authoritative answer:\n"
                     f"---\n{guardian_response.strip()}\n---\n\n"
                     f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
-                    f"1. Parse the QUESTION STRUCTURE: does it ask for something "
-                    f"\"unusual\", \"NOT\", \"never\", or \"least\" common? If YES, "
-                    f"the correct answer is the OUTLIER that does NOT fit.\n"
-                    f"2. Independently determine the correct answer (1/2/3/4) "
-                    f"based on the question and options.\n"
-                    f"3. The Guardian has primary authority on {target_country}'s culture. "
-                    f"If you agree with the Guardian, output THE SAME NUMBER as the Guardian.\n"
-                    f"4. If you disagree, output YOUR answer number and explain why.\n\n"
-                    f"CRITICAL: Your first line must be the OPTION NUMBER (1/2/3/4) you believe "
-                    f"is the correct answer. Do NOT output '1' to mean 'I agree'. If the "
-                    f"Guardian chose 3 and you agree, output 3.\n\n"
+                    f"1. If you agree with the Guardian, explain WHY from your cultural lens.\n"
+                    f"2. If you disagree, provide specific reasoning — but acknowledge "
+                    f"that the Guardian has primary authority on {target_country}.\n\n"
                     f"Answer format: first line is ONLY the number (1/2/3/4), "
                     f"second line is a brief explanation."
                 )
@@ -735,11 +294,10 @@ class HF_CAC_MAS:
                 user = (
                     f"TARGET CULTURE: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
-                    f"FIRST: Parse what the question asks. If it contains negations "
-                    f"(\"unusual\", \"NOT\", \"never\", \"least\"), select the OUTLIER.\n"
-                    f"THEN: Provide your independent answer based on your knowledge "
-                    f"about {target_country}. Evaluate ALL options equally.\n\n"
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
+                    f"provide your answer for this question about {target_country}. "
+                    f"Acknowledge uncertainty where the target culture differs from "
+                    f"your expertise.\n\n"
                     f"Answer format: first line is ONLY the number (1/2/3/4), "
                     f"second line is a brief explanation."
                 )
@@ -801,27 +359,20 @@ class HF_CAC_MAS:
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
                 f"{question}\n\n"
-                f"STEP 1 - PARSE THE QUESTION:\n"
-                f"Does this question contain negations (\"unusual\", \"NOT\", \"never\", "
-                f"\"not uncommon\", \"least\")? If YES, the answer is the OUTLIER option "
-                f"that does NOT fit the culture. Restate what is being asked.\n\n"
-                f"STEP 2 - IDENTIFY THE GUARDIAN'S ANSWER:\n"
-                f"The HOST-CULTURE GUARDIAN is [{guardian_name}].\n"
+                f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
+                f"expertise most closely matches {target_country}.\n\n"
                 f"Agent responses:\n{responses_text}\n"
-                f"STEP 3 - DECISION (apply in strict order):\n"
-                f"1. Find the Guardian's answer number. This is your DEFAULT answer.\n"
-                f"2. ONLY override the Guardian if ONE of these is clearly true:\n"
-                f"   (a) The question asks for something \"unusual\"/\"NOT\"/\"never\"/\"least\" "
-                f"but the Guardian picked something that IS common in the culture, OR\n"
-                f"   (b) The Guardian's own reasoning explicitly contradicts their answer "
-                f"choice (e.g., reasoning says option X is correct but they output Y).\n"
-                f"3. If NEITHER (a) nor (b) applies, output the Guardian's answer.\n"
-                f"4. Auditor votes do NOT override the Guardian. Auditors have less "
-                f"expertise on {target_country}'s culture.\n"
-                f"5. All option positions (1/2/3/4) are equally likely to be correct. "
-                f"Do NOT favor any position.\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), "
-                f"second line is brief explanation."
+                f"Step 1: First, understand what the question is ACTUALLY asking "
+                f"(watch for negations like \"unusual\", \"not uncommon\").\n"
+                f"Step 2: Determine the correct answer using these rules:\n"
+                f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
+                f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
+                f"- HOWEVER: if ALL or MOST Auditors agree on a DIFFERENT answer than "
+                f"the Guardian, carefully evaluate whether the Guardian's reasoning is "
+                f"actually correct — consensus from multiple perspectives is a strong signal\n"
+                f"- Check for logical errors (e.g., an answer that contradicts the question)\n"
+                f"- Do NOT default to option 1 — evaluate each option on its merits\n\n"
+                f"Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation."
             )
         else:
             user = (

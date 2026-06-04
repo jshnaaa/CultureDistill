@@ -336,7 +336,7 @@ def train(args):
     accelerator.print(f"LoRA rank: {args.lora_r}, LoRA alpha: {args.lora_alpha}")
     accelerator.print(f"Eval every {args.eval_every_n_epochs} epoch(s)")
 
-    model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
+    model_path = MODEL_ALIASES[args.model_name]
     accelerator.print(f"Base model: {model_path}")
 
     # Load data from pkl
@@ -491,7 +491,8 @@ def main():
         description="AgentArk Baseline — Stage 1: Standard SFT (LoRA, Uniform Loss)"
     )
     parser.add_argument("--model_name", type=str, required=True,
-                        help="'llama', 'qwen', or full model path")
+                        choices=["llama", "qwen"],
+                        help="Base model: 'llama' (LLaMA-3.1-8B-Instruct) or 'qwen' (Qwen2.5-7B-Instruct)")
     parser.add_argument("--data_pkl", type=str, required=True,
                         help="Path to splits pkl file (from split_data.py)")
     parser.add_argument("--output_dir", type=str, required=True,

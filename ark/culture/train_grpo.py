@@ -426,7 +426,7 @@ def train(args):
     policy_device = torch.device("cuda:0")
     prm_device = torch.device("cuda:1" if torch.cuda.device_count() > 1 else "cuda:0")
 
-    model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
+    model_path = args.model_name  # Already resolved by main()
 
     print(f"{'='*60}")
     print(f"AgentArk GRPO — data_source={args.data_source}")
@@ -715,7 +715,8 @@ def main():
         description="AgentArk Baseline — Stage 3: GRPO Training"
     )
     parser.add_argument("--model_name", type=str, required=True,
-                        help="'llama', 'qwen', or full model path")
+                        choices=["llama", "qwen"],
+                        help="Base model: 'llama' (LLaMA-3.1-8B-Instruct) or 'qwen' (Qwen2.5-7B-Instruct)")
     parser.add_argument("--data_source", type=str, required=True,
                         choices=["reconcile", "hf_cac"],
                         help="Data source: 'reconcile' (homogeneous debate) or "
@@ -746,7 +747,7 @@ def main():
                         help="Skip PRM, use outcome-only reward")
     args = parser.parse_args()
 
-    args.model_name = MODEL_ALIASES.get(args.model_name, args.model_name)
+    args.model_name = MODEL_ALIASES[args.model_name]
     train(args)
 
 
