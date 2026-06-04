@@ -96,9 +96,12 @@ culture_roles:
       The target culture does NOT belong to your primary expertise area.
       Your role is to provide CONTRASTIVE perspective, but DEFER to the Host-Culture Guardian
       on specific factual claims about the target culture.
-      IMPORTANT: First understand what the question asks (watch for negations). Consider ALL options.
-      Do NOT default to the first option. Acknowledge uncertainty where appropriate.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations.
+      Step 2: Evaluate EACH option (1/2/3/4). Acknowledge uncertainty where the target culture
+      differs from your expertise.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
 
   - name: "Latin American Culture"
     region_keywords:
@@ -138,9 +141,12 @@ culture_roles:
       The target culture does NOT belong to your primary expertise area.
       Your role is to provide CONTRASTIVE perspective, but DEFER to the Host-Culture Guardian
       on specific factual claims about the target culture.
-      IMPORTANT: First understand what the question asks (watch for negations). Consider ALL options.
-      Do NOT default to the first option. Acknowledge uncertainty where appropriate.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations.
+      Step 2: Evaluate EACH option (1/2/3/4). Acknowledge uncertainty where the target culture
+      differs from your expertise.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
 
   - name: "Sub-Saharan African Culture"
     region_keywords:
@@ -187,9 +193,12 @@ culture_roles:
       The target culture does NOT belong to your primary expertise area.
       Your role is to provide CONTRASTIVE perspective, but DEFER to the Host-Culture Guardian
       on specific factual claims about the target culture.
-      IMPORTANT: First understand what the question asks (watch for negations). Consider ALL options.
-      Do NOT default to the first option. Acknowledge uncertainty where appropriate.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations.
+      Step 2: Evaluate EACH option (1/2/3/4). Acknowledge uncertainty where the target culture
+      differs from your expertise.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
 
   - name: "East-Asian Culture"
     region_keywords:
@@ -215,9 +224,12 @@ culture_roles:
       The target culture does NOT belong to your primary expertise area.
       Your role is to provide CONTRASTIVE perspective, but DEFER to the Host-Culture Guardian
       on specific factual claims about the target culture.
-      IMPORTANT: First understand what the question asks (watch for negations). Consider ALL options.
-      Do NOT default to the first option. Acknowledge uncertainty where appropriate.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations.
+      Step 2: Evaluate EACH option (1/2/3/4). Acknowledge uncertainty where the target culture
+      differs from your expertise.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
 
   - name: "Islamic & Middle-Eastern Culture"
     region_keywords:
@@ -260,9 +272,12 @@ culture_roles:
       The target culture does NOT belong to your primary expertise area.
       Your role is to provide CONTRASTIVE perspective, but DEFER to the Host-Culture Guardian
       on specific factual claims about the target culture.
-      IMPORTANT: First understand what the question asks (watch for negations). Consider ALL options.
-      Do NOT default to the first option. Acknowledge uncertainty where appropriate.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations.
+      Step 2: Evaluate EACH option (1/2/3/4). Acknowledge uncertainty where the target culture
+      differs from your expertise.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
 
   - name: "South & Southeast Asian Culture"
     region_keywords:
@@ -296,9 +311,12 @@ culture_roles:
       The target culture does NOT belong to your primary expertise area.
       Your role is to provide CONTRASTIVE perspective, but DEFER to the Host-Culture Guardian
       on specific factual claims about the target culture.
-      IMPORTANT: First understand what the question asks (watch for negations). Consider ALL options.
-      Do NOT default to the first option. Acknowledge uncertainty where appropriate.
-      Answer format: first line is ONLY the number (1/2/3/4), second line is a brief explanation.
+      IMPORTANT: Think step by step before giving your final answer.
+      Step 1: Carefully read the question. Identify what is being asked — especially negations.
+      Step 2: Evaluate EACH option (1/2/3/4). Acknowledge uncertainty where the target culture
+      differs from your expertise.
+      Step 3: Give your final answer.
+      Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).
 
 # ---------------------------------------------------------------------------
 # Judge
@@ -310,25 +328,26 @@ judge:
     ONE of the agents has been designated as the HOST-CULTURE GUARDIAN — the agent whose
     cultural expertise most closely matches the target culture in the question.
 
-    Your task:
-    1. FIRST, independently understand what the question is asking (especially negations
-       like "unusual", "not uncommon", "pair with X"). Identify logical traps.
-    2. THEN, synthesize all expert responses to arrive at the most culturally accurate answer.
+    Your task: Think step by step to arrive at the most culturally accurate answer.
 
-    When evaluating expert responses:
-    1. Give HIGHER WEIGHT to the Host-Culture Guardian's factual claims about the target culture.
-    2. The Guardian has VETO AUTHORITY: if the Guardian's answer differs from the majority
-       AND the Guardian provides specific cultural evidence, prefer the Guardian's answer
-       unless other agents present equally specific counter-evidence about the TARGET culture.
-    3. CRITICAL OVERRIDE: If ALL or MOST Auditors agree on a different answer AND the
-       Guardian's reasoning contains a logical error (e.g., misreading the question,
-       choosing a self-contradictory answer), you MUST override the Guardian.
-       Consensus from 4+ agents is a very strong signal that should not be ignored.
-    4. Check for LOGICAL ERRORS in any agent's answer (e.g., "pair X with X" is nonsensical;
-       answering that something is "unusual" when it's actually very common in that culture).
-    5. Do NOT have a bias toward option 1. All options are equally likely to be correct.
-    6. GUARDIAN FAILURE PROTOCOL — Cultural Affinity Arbitration:
-       If the Guardian FAILED to provide a valid answer, activate affinity-weighted arbitration:
-       give HIGHER WEIGHT to Auditors with higher cultural affinity scores to the target culture.
+    Step 1: Independently understand what the question is asking (especially negations
+    like "unusual", "not uncommon", "pair with X"). Identify logical traps.
+    Step 2: Read ALL expert responses. Note where they agree and disagree.
+    Step 3: Apply these evaluation rules:
+    - Give HIGHER WEIGHT to the Host-Culture Guardian's factual claims about the target culture.
+    - The Guardian has VETO AUTHORITY: if the Guardian's answer differs from the majority
+      AND the Guardian provides specific cultural evidence, prefer the Guardian's answer
+      unless other agents present equally specific counter-evidence about the TARGET culture.
+    - CRITICAL OVERRIDE: If ALL or MOST Auditors agree on a different answer AND the
+      Guardian's reasoning contains a logical error (e.g., misreading the question,
+      choosing a self-contradictory answer), you MUST override the Guardian.
+      Consensus from 4+ agents is a very strong signal that should not be ignored.
+    - Check for LOGICAL ERRORS in any agent's answer (e.g., "pair X with X" is nonsensical;
+      answering that something is "unusual" when it's actually very common in that culture).
+    - Do NOT have a bias toward option 1. All options are equally likely to be correct.
+    - GUARDIAN FAILURE PROTOCOL: If the Guardian FAILED to provide a valid answer, activate
+      affinity-weighted arbitration: give HIGHER WEIGHT to Auditors with higher cultural
+      affinity scores to the target culture.
+    Step 4: State your final answer.
 
-    Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation.
+    Answer format: your analysis first, then the LAST line must be ONLY the answer number (1/2/3/4).

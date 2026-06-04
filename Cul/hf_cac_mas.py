@@ -100,9 +100,10 @@ class HF_CAC_MAS:
             stop=stop_tokens,
         )
         # Auditor: higher temperature for diverse perspectives (asymmetry)
+        # CulturalBench: think-then-answer needs more tokens for step-by-step reasoning
         if self.task_type == "culturalbench":
             auditor_temp = 0.7
-            aud_max_tokens = 256
+            aud_max_tokens = 512
         else:
             auditor_temp = 0.9
             aud_max_tokens = self.max_tokens
@@ -112,7 +113,8 @@ class HF_CAC_MAS:
             stop=stop_tokens,
         )
         # Judge: very low temperature for stable, deterministic arbitration
-        judge_max_tokens = 256 if self.task_type == "culturalbench" else self.max_tokens
+        # CulturalBench: think-then-answer needs more tokens for step-by-step reasoning
+        judge_max_tokens = 512 if self.task_type == "culturalbench" else self.max_tokens
         self.judge_sampling = SamplingParams(
             temperature=0.1,
             max_tokens=judge_max_tokens,
@@ -252,12 +254,14 @@ class HF_CAC_MAS:
                     f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
                     f"authoritative answer:\n"
                     f"---\n{guardian_response.strip()}\n---\n\n"
-                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
-                    f"1. If you agree with the Guardian, explain WHY from your cultural lens.\n"
-                    f"2. If you disagree, provide specific reasoning — but acknowledge "
-                    f"that the Guardian has primary authority on {target_country}.\n\n"
-                    f"Answer format: first line is ONLY the number (1/2/3/4), "
-                    f"second line is a brief explanation."
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
+                    f"think step by step:\n"
+                    f"Step 1: What is this question actually asking? (watch for negations)\n"
+                    f"Step 2: Evaluate the Guardian's reasoning. Do you agree or disagree? Why?\n"
+                    f"Step 3: Evaluate each option (1/2/3/4) against your own knowledge. "
+                    f"Acknowledge uncertainty where the target culture differs from your expertise.\n"
+                    f"Step 4: State your final answer.\n\n"
+                    f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
                 )
             else:
                 user = (
@@ -295,11 +299,12 @@ class HF_CAC_MAS:
                     f"TARGET CULTURE: {target_country}\n\n"
                     f"{question}\n\n"
                     f"As a Cross-Cultural Auditor from [{agent_name}] background, "
-                    f"provide your answer for this question about {target_country}. "
-                    f"Acknowledge uncertainty where the target culture differs from "
-                    f"your expertise.\n\n"
-                    f"Answer format: first line is ONLY the number (1/2/3/4), "
-                    f"second line is a brief explanation."
+                    f"think step by step:\n"
+                    f"Step 1: What is this question actually asking? (watch for negations)\n"
+                    f"Step 2: Evaluate each option (1/2/3/4) against your knowledge. "
+                    f"Acknowledge uncertainty where the target culture differs from your expertise.\n"
+                    f"Step 3: State your final answer.\n\n"
+                    f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
                 )
             else:
                 user = (
@@ -362,17 +367,20 @@ class HF_CAC_MAS:
                 f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
                 f"expertise most closely matches {target_country}.\n\n"
                 f"Agent responses:\n{responses_text}\n"
-                f"Step 1: First, understand what the question is ACTUALLY asking "
-                f"(watch for negations like \"unusual\", \"not uncommon\").\n"
-                f"Step 2: Determine the correct answer using these rules:\n"
+                f"Think step by step:\n"
+                f"Step 1: What is this question ACTUALLY asking? "
+                f"(watch for negations like \"unusual\", \"not uncommon\", \"least likely\")\n"
+                f"Step 2: Summarize each agent's answer and reasoning.\n"
+                f"Step 3: Apply the evaluation rules:\n"
                 f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
                 f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
                 f"- HOWEVER: if ALL or MOST Auditors agree on a DIFFERENT answer than "
                 f"the Guardian, carefully evaluate whether the Guardian's reasoning is "
                 f"actually correct — consensus from multiple perspectives is a strong signal\n"
                 f"- Check for logical errors (e.g., an answer that contradicts the question)\n"
-                f"- Do NOT default to option 1 — evaluate each option on its merits\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation."
+                f"- Do NOT default to option 1 — evaluate each option on its merits\n"
+                f"Step 4: State your final answer.\n\n"
+                f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
             )
         else:
             user = (
@@ -410,17 +418,17 @@ class HF_CAC_MAS:
             max_choice = 3
         pattern = f"[1-{max_choice}]"
 
-        # For culturalbench: check LAST line first (think-then-answer format for Guardian),
-        # then fall back to first line (answer-first format for Auditors/Judge)
+        # For culturalbench (think-then-answer format): all agents put answer on LAST line.
+        # Also check first line as fallback for edge cases.
         if self.task_type == "culturalbench":
             lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
-            # Check last line (Guardian think-then-answer)
+            # Check last line (primary: think-then-answer)
             if lines:
                 last_line = lines[-1]
                 m = re.match(rf"^({pattern})$", last_line)
                 if m:
                     return m.group(1)
-            # Check first line (Auditor/Judge answer-first)
+            # Check first line (fallback)
             if lines:
                 first_line = lines[0]
                 m = re.match(rf"^({pattern})$", first_line)
@@ -543,8 +551,9 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             user += (
-                f"IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation."
+                f"Think step by step. Evaluate each Auditor's reasoning based on their "
+                f"affinity score and evidence quality, then state your final answer.\n\n"
+                f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
             )
         else:
             user += (
