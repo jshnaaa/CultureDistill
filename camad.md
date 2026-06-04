@@ -478,58 +478,127 @@ python Cul/evaluate.py \
 
 CGM-GRPO（Culture-Guided Mixed-Policy GRPO）是 CAMAD 框架的核心创新训练算法，在标准 GRPO 的 advantage estimation 中注入来自 HF-CAC Guardian 的文化专家引导信号，实现「文化难度感知的混合策略强化学习」。
 
-**核心思想**：保持 RLOO 对 on-policy 轨迹的计算完全不变，额外叠加一个 Guardian 引导项作为 advantage 增强。引导强度由三因子文化难度系数 $w_{culture}$ 动态调制。Guardian 不参与 policy gradient 的梯度计算（不需要 importance sampling），只通过自身的 reward 值影响 on-policy 轨迹被鼓励/抑制的程度。
+**核心思想**：保持 RLOO 对 on-policy 轨迹的计算完全不变，额外叠加一个 Guardian 引导项作为 advantage 增强（uniform bonus，对同一 prompt 的所有 rollout 施加相同偏移）。引导强度由三因子文化难度系数 $w_{culture}$ 动态调制。Guardian 不参与 policy gradient 的梯度计算（不需要 importance sampling），也不参与 RLOO baseline 计算，只通过自身的 reward 值影响 on-policy 轨迹被鼓励/抑制的程度。
 
 **核心公式**：
 
-$$A_i = A_i^{base} + \lambda \cdot w_{culture} \cdot S_{guardian} \cdot Sim(y_i, y_{guardian})$$
+$$A_i = A_i^{base} + \lambda \cdot w_{culture} \cdot S_{guardian}$$
 
 其中：
 
-- $A_i^{base} = R_i - \bar{R}_{on}$：标准 RLOO advantage（leave-one-out baseline）
+- $A_i^{base} = R_i - \bar{R}_{on}$：标准 RLOO advantage（leave-one-out baseline，仅在 on-policy 轨迹之间计算）
 - $S_{guardian} = R_{outcome}^{guardian} \cdot (R_{guardian} - \bar{R}_{on}^{full})$：质量门控的 Guardian 信号
-- $R_{guardian} = \alpha \cdot R_{outcome}^{guardian} + (1-\alpha) \cdot Mean(R_{process}^{guardian})$：Guardian 的综合奖励（使用 PRM 评分）
-- $Sim(y_i, y_{guardian})$：rollout 与 Guardian 的相似度调制（answer/step_overlap/hybrid 模式）
-- $\lambda$：全局引导强度超参（默认 0.5）
+- $R_{guardian} = 1.0$（Guardian 已通过质量门控过滤，只有答对时才参与计算）
+- $\bar{R}_{on}^{full}$：当前 prompt 所有 on-policy rollout 的 $R_{total}$ 均值
+- $\lambda$：全局引导强度超参（默认 0.5，建议搜索 {0.3, 0.5, 0.7}）
+- bonus 对同一 prompt 的所有 $n\_samples$ 个 rollout 统一施加，起到整体抬升/压低 advantage 的效果
 
-**三因子文化难度系数**：
+**三因子文化难度系数**（支持三种模式）：
 
-$$w_{culture} = \lambda_1 \cdot (1 - hit\_rate) + \lambda_2 \cdot rarity_i + \lambda_3 \cdot (1 - affinity_i)$$
+$$w_{culture} = \lambda_1 \cdot (1 - hit\_rate) + \lambda_2 \cdot rarity_i + \lambda_3 \cdot isolation_i$$
 
-推荐系数 $\lambda_1=0.6, \lambda_2=0.3, \lambda_3=0.1$。三个因子分别捕捉：动态模型能力（hit_rate 越低越需要引导）、静态数据稀缺度（长尾文化圈 rarity 高）、文化迁移难度（孤立文化 affinity 低）。支持三种模式：`hit_only`（MVP）、`hit_rarity`（标准）、`full`（三因子）。
+- `hit_only` 模式（MVP）：$w = 1 - hit\_rate$
+- `hit_rarity` 模式（标准推荐）：$w = 0.67 \cdot (1 - hit\_rate) + 0.33 \cdot rarity_i$
+- `full` 模式（三因子）：$w = 0.6 \cdot (1 - hit\_rate) + 0.3 \cdot rarity_i + 0.1 \cdot isolation_i$
+
+其中 $hit\_rate$ 为当前 prompt 的 on-policy 正确率，$rarity_i = 1 - freq_i$ 为文化圈在训练集中的稀缺度，$isolation_i = 1 - avg\_affinity_i$ 为文化圈的孤立度（从 `hf_cac_config.yaml` 的 6×6 亲缘矩阵计算）。
 
 **门控机制**：
 
-- 质量门控：Guardian 答错时 $S_{guardian}=0$，引导项自动消失
-- 必要性门控：$hit\_rate \geq 0.8$ 时跳过引导（模型已足够好）
+- 质量门控：Guardian 答错时 $R_{outcome}^{guardian}=0$，整个 $S_{guardian}=0$，引导项自动消失
+- 必要性门控：$hit\_rate \geq 0.8$ 时强制 $w_{culture}=0$（模型对该 prompt 已足够好，无需外部引导）
 
-**与标准 GRPO 的关键区别**：Guardian 轨迹不参与 RLOO baseline 计算，不参与 policy gradient 的 backward，不需要 importance sampling。它只是一个标量信号叠加到 on-policy 轨迹的 advantage 上。
+**性能优化**（已实现于代码中）：
 
-**代码位置**：`Cul/grpo/train_cgm_grpo.py`（训练）、`Cul/grpo/eval_cgm_grpo.py`（评估）
+- Batch Generate（优化 1）：将 `prompt_batch` 个 prompt 按 `gen_mini_batch`（默认 4）分组，每组一次 `model.generate()` 调用同时产出 `mini_batch × n_samples` 个序列。左 padding + `num_return_sequences` 批量采样，GPU 利用率从 ~30% 提升至 ~85%，生成阶段加速 50-70%。
+- Batch LogProb（优化 2）：Phase A（reference log-prob，无梯度）以 `logprob_mini_batch=8` 批量 forward；Phase B（policy log-prob，有梯度）以 `logprob_mini_batch_grad=4` 分组 forward+backward，配合 gradient accumulation。使用 `gather + logsumexp` 代替完整 log_softmax 避免 vocab 维度大矩阵，log-prob 计算阶段加速 80%+。
 
-**训练命令**（双卡，SFT+CGM-GRPO 模式）：
+**显存布局**（2×48GB vGPU）：
+
+- cuda:0（Policy）：base model bf16 ~15GB + LoRA ~0.2GB + KV cache（20 seq × 640 tok）~4.5GB + 梯度/激活（gradient checkpointing）~8-12GB → 峰值 ~32-38GB
+- cuda:1（PRM）：base model bf16 ~15GB + score_head ~0.01GB + 推理激活 ~2-3GB → 峰值 ~18-20GB
+- Guardian 引导不增加任何 GPU 开销（纯 CPU 查表 + 标量运算）
+
+**与标准 GRPO 的关键区别**：Guardian 轨迹不参与 RLOO baseline 计算，不参与 policy gradient 的 backward，不需要 importance sampling，不需要 Sim 相似度调制。它只是一个标量 bonus 统一叠加到 on-policy 轨迹的 advantage 上。
+
+**代码位置**：`Cul/grpo/train_grpo_mixed_policy.py`
+
+**训练命令**（双卡，SFT+CGM-GRPO 模式，少数样本快速验证）：
 
 ```bash
-python Cul/grpo/train_cgm_grpo.py \
+python Cul/grpo/train_grpo_mixed_policy.py \
     --model_name     qwen \
     --sft_adapter    /autodl-fs/data/model/qwen/normad_camad_sft/best \
     --data_pkl       /autodl-fs/data/qwen/normad_splits.pkl \
     --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm/best \
     --guardian_data  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --affinity_config Cul/configs/hf_cac_config.yaml \
     --output_dir     /autodl-fs/data/model/qwen/normad_camad_cgm_grpo \
-    --w_culture_mode hit_rarity \
-    --lambda_guide   0.5 \
-    --alpha          0.6 \
+    --max_train_samples 10 \
+    --max_rounds     3 \
     --n_samples      5 \
+    --prompt_batch   4 \
+    --guardian_lambda 0.5 \
+    --w_culture_mode hit_only \
+    --gen_mini_batch 4 \
+    --logprob_mini_batch 8 \
+    --logprob_mini_batch_grad 4
+```
+
+**训练命令**（双卡，SFT+CGM-GRPO 模式，全量训练）：
+
+```bash
+python Cul/grpo/train_grpo_mixed_policy.py \
+    --model_name     qwen \
+    --sft_adapter    /autodl-fs/data/model/qwen/normad_camad_sft/best \
+    --data_pkl       /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm/best \
+    --guardian_data  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --affinity_config Cul/configs/hf_cac_config.yaml \
+    --output_dir     /autodl-fs/data/model/qwen/normad_camad_cgm_grpo \
+    --max_train_samples 0 \
     --max_rounds     20 \
+    --n_samples      5 \
+    --prompt_batch   8 \
+    --guardian_lambda 0.5 \
+    --w_culture_mode hit_rarity \
+    --alpha          0.6 \
+    --lr             2e-5 \
+    --lora_r         16 \
+    --batches_per_round 130 \
+    --eval_every     5 \
+    --gen_mini_batch 4 \
+    --logprob_mini_batch 8 \
+    --logprob_mini_batch_grad 4
+```
+
+**RL-only 模式**（不使用 SFT adapter，从 base model 出发）：
+
+```bash
+python Cul/grpo/train_grpo_mixed_policy.py \
+    --model_name     qwen \
+    --data_pkl       /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
+    --guardian_data  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --affinity_config Cul/configs/hf_cac_config.yaml \
+    --output_dir     /autodl-fs/data/model/qwen/normad_camad_cgm_grpo_rl_only \
+    --max_train_samples 0 \
+    --max_rounds     30 \
+    --n_samples      5 \
+    --prompt_batch   8 \
+    --guardian_lambda 0.5 \
+    --w_culture_mode hit_rarity \
+    --alpha          0.6 \
+    --lr             5e-5 \
+    --lora_r         16 \
     --batches_per_round 130 \
     --eval_every     5
 ```
 
-**评估命令**（双卡）：
+**评估命令**：
 
 ```bash
-python Cul/grpo/eval_cgm_grpo.py \
+python Cul/evaluate.py \
     --mode sft_rl \
     --model_name qwen \
     --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
@@ -542,12 +611,15 @@ python Cul/grpo/eval_cgm_grpo.py \
 
 | 参数 | 说明 |
 |------|------|
-| `--guardian_data` | HF-CAC 推理 JSONL 文件路径（必需）|
-| `--lambda_guide` | Guardian 引导强度（默认 0.5，建议搜索 {0.3, 0.5, 0.7}）|
-| `--w_culture_mode` | 文化难度系数模式：`hit_only`/`hit_rarity`/`full` |
-| `--affinity_config` | 亲缘度矩阵配置路径（仅 `full` 模式需要）|
-| `--guardian_sim_mode` | 相似度模式：`answer`/`step_overlap`/`hybrid` |
-| `--hit_rate_threshold` | 必要性门控阈值（默认 0.8）|
+| `--guardian_data` | HF-CAC 推理 JSONL 文件路径（包含 Guardian 响应，必需）|
+| `--guardian_lambda` | Guardian 引导强度（默认 0.5，建议搜索 {0.3, 0.5, 0.7}）|
+| `--w_culture_mode` | 文化难度系数模式：`hit_only`（MVP）/ `hit_rarity`（推荐）/ `full`（三因子）|
+| `--affinity_config` | 亲缘度矩阵配置路径（`hit_rarity` 和 `full` 模式需要，指向 hf_cac_config.yaml）|
+| `--max_train_samples` | 训练样本数限制：0=全部，N=只用前 N 条（调试用）|
+| `--gen_mini_batch` | Batch Generate 每批 prompt 数（默认 4，OOM 时降为 2）|
+| `--logprob_mini_batch` | Phase A ref log-prob 每批样本数（默认 8，无梯度）|
+| `--logprob_mini_batch_grad` | Phase B policy log-prob 每批样本数（默认 4，有梯度，OOM 时降为 2）|
+| `--no_prm` | 禁用 PRM 评分（R_total = R_outcome，单卡即可运行）|
 
 ---
 
