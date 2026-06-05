@@ -87,7 +87,7 @@ python Cul/generate_hf_cac_data.py \
     --output_file /autodl-fs/data/qwen/culturalBench_hf_cac_3agents.jsonl \
     --model_name qwen \
     --use_vllm --tensor_parallel_size 2 \
-    --num_agents 3 \
+    --max_samples 0 --num_agents 3 \
     --negotiation_rounds 1 \
     --include_judge true
       
