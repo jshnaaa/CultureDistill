@@ -50,7 +50,9 @@ class HF_CAC_MAS:
             max_tokens: max generation tokens
             include_judge: whether to include Judge reasoning in output
             negotiation_rounds: rounds of structured negotiation (0=independent, 1=standard)
-            num_agents: ignored (determined by config culture_roles length)
+            num_agents: number of agents to use (None=all from config).
+                        For culturalbench, fewer agents (2-3) with structured debate
+                        can outperform many agents.
         """
         if config_path is None:
             config_path = os.path.join(
@@ -59,7 +61,11 @@ class HF_CAC_MAS:
         cfg = load_config(config_path)
 
         self.culture_roles = cfg["culture_roles"]
-        self.num_agents = len(self.culture_roles)
+        # Support dynamic agent count: if num_agents specified, use subset
+        if num_agents is not None and num_agents < len(self.culture_roles):
+            self.num_agents = num_agents
+        else:
+            self.num_agents = len(self.culture_roles)
         self.judge_system_prompt = cfg["judge"]["system_prompt"].strip()
         self.include_judge = include_judge
         self.negotiation_rounds = negotiation_rounds
@@ -88,10 +94,10 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Guardian: lower temperature for precise, authoritative responses
-        # CulturalBench: think-then-answer needs more tokens for step-by-step reasoning
+        # CulturalBench: slightly lower overall but SAME asymmetry pattern
         if self.task_type == "culturalbench":
             guardian_temp = 0.3
-            cb_max_tokens = 512
+            cb_max_tokens = 256
         else:
             guardian_temp = 0.5
             cb_max_tokens = self.max_tokens
@@ -101,10 +107,9 @@ class HF_CAC_MAS:
             stop=stop_tokens,
         )
         # Auditor: higher temperature for diverse perspectives (asymmetry)
-        # CulturalBench: think-then-answer needs more tokens for step-by-step reasoning
         if self.task_type == "culturalbench":
             auditor_temp = 0.7
-            aud_max_tokens = 512
+            aud_max_tokens = 256
         else:
             auditor_temp = 0.9
             aud_max_tokens = self.max_tokens
@@ -114,8 +119,7 @@ class HF_CAC_MAS:
             stop=stop_tokens,
         )
         # Judge: very low temperature for stable, deterministic arbitration
-        # CulturalBench: think-then-answer needs more tokens for step-by-step reasoning
-        judge_max_tokens = 512 if self.task_type == "culturalbench" else self.max_tokens
+        judge_max_tokens = 256 if self.task_type == "culturalbench" else self.max_tokens
         self.judge_sampling = SamplingParams(
             temperature=0.1,
             max_tokens=judge_max_tokens,
@@ -180,16 +184,16 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             # CulturalBench: factual cultural knowledge MCQ (4-way)
-            # Guardian uses think-then-answer format for deeper reasoning
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
                 f"{question}\n\n"
-                f"As the Host-Culture Guardian for {target_country}, think step by step:\n"
-                f"Step 1: What is this question ACTUALLY asking? "
-                f"(Identify negations like \"unusual\", \"not uncommon\", \"least likely\")\n"
-                f"Step 2: Evaluate each option (1/2/3/4) against your cultural expertise.\n"
-                f"Step 3: State your final answer.\n\n"
-                f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
+                f"As the Host-Culture Guardian for {target_country}:\n"
+                f"1. First understand what the question asks (watch for negations "
+                f"like \"unusual\", \"not uncommon\", \"pair with X\").\n"
+                f"2. Consider ALL four options — do not default to the first one.\n"
+                f"3. Pick the most culturally accurate answer based on your expertise.\n\n"
+                f"Answer format: first line is ONLY the number (1/2/3/4), "
+                f"second line is a brief explanation."
             )
         else:
             # NormAD: behavior acceptability (3-way 1/2/3)
@@ -255,14 +259,12 @@ class HF_CAC_MAS:
                     f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
                     f"authoritative answer:\n"
                     f"---\n{guardian_response.strip()}\n---\n\n"
-                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
-                    f"think step by step:\n"
-                    f"Step 1: What is this question actually asking? (watch for negations)\n"
-                    f"Step 2: Evaluate the Guardian's reasoning. Do you agree or disagree? Why?\n"
-                    f"Step 3: Evaluate each option (1/2/3/4) against your own knowledge. "
-                    f"Acknowledge uncertainty where the target culture differs from your expertise.\n"
-                    f"Step 4: State your final answer.\n\n"
-                    f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
+                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
+                    f"1. If you agree with the Guardian, explain WHY from your cultural lens.\n"
+                    f"2. If you disagree, provide specific reasoning — but acknowledge "
+                    f"that the Guardian has primary authority on {target_country}.\n\n"
+                    f"Answer format: first line is ONLY the number (1/2/3/4), "
+                    f"second line is a brief explanation."
                 )
             else:
                 user = (
@@ -300,12 +302,11 @@ class HF_CAC_MAS:
                     f"TARGET CULTURE: {target_country}\n\n"
                     f"{question}\n\n"
                     f"As a Cross-Cultural Auditor from [{agent_name}] background, "
-                    f"think step by step:\n"
-                    f"Step 1: What is this question actually asking? (watch for negations)\n"
-                    f"Step 2: Evaluate each option (1/2/3/4) against your knowledge. "
-                    f"Acknowledge uncertainty where the target culture differs from your expertise.\n"
-                    f"Step 3: State your final answer.\n\n"
-                    f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
+                    f"provide your answer for this question about {target_country}. "
+                    f"Acknowledge uncertainty where the target culture differs from "
+                    f"your expertise.\n\n"
+                    f"Answer format: first line is ONLY the number (1/2/3/4), "
+                    f"second line is a brief explanation."
                 )
             else:
                 user = (
@@ -368,20 +369,17 @@ class HF_CAC_MAS:
                 f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
                 f"expertise most closely matches {target_country}.\n\n"
                 f"Agent responses:\n{responses_text}\n"
-                f"Think step by step:\n"
-                f"Step 1: What is this question ACTUALLY asking? "
-                f"(watch for negations like \"unusual\", \"not uncommon\", \"least likely\")\n"
-                f"Step 2: Summarize each agent's answer and reasoning.\n"
-                f"Step 3: Apply the evaluation rules:\n"
+                f"Step 1: First, understand what the question is ACTUALLY asking "
+                f"(watch for negations like \"unusual\", \"not uncommon\").\n"
+                f"Step 2: Determine the correct answer using these rules:\n"
                 f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
                 f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
                 f"- HOWEVER: if ALL or MOST Auditors agree on a DIFFERENT answer than "
                 f"the Guardian, carefully evaluate whether the Guardian's reasoning is "
                 f"actually correct — consensus from multiple perspectives is a strong signal\n"
                 f"- Check for logical errors (e.g., an answer that contradicts the question)\n"
-                f"- Do NOT default to option 1 — evaluate each option on its merits\n"
-                f"Step 4: State your final answer.\n\n"
-                f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
+                f"- Do NOT default to option 1 — evaluate each option on its merits\n\n"
+                f"Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation."
             )
         else:
             user = (
@@ -419,22 +417,12 @@ class HF_CAC_MAS:
             max_choice = 3
         pattern = f"[1-{max_choice}]"
 
-        # For culturalbench (think-then-answer format): all agents put answer on LAST line.
-        # Also check first line as fallback for edge cases.
+        # For culturalbench (answer-first format): check first line first
         if self.task_type == "culturalbench":
-            lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
-            # Check last line (primary: think-then-answer)
-            if lines:
-                last_line = lines[-1]
-                m = re.match(rf"^({pattern})$", last_line)
-                if m:
-                    return m.group(1)
-            # Check first line (fallback)
-            if lines:
-                first_line = lines[0]
-                m = re.match(rf"^({pattern})$", first_line)
-                if m:
-                    return m.group(1)
+            first_line = text.strip().split("\n")[0].strip()
+            m = re.match(rf"^({pattern})$", first_line)
+            if m:
+                return m.group(1)
 
         m = re.search(rf"Answer\s*:\s*({pattern})", text, re.IGNORECASE)
         if m:
@@ -552,9 +540,8 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             user += (
-                f"Think step by step. Evaluate each Auditor's reasoning based on their "
-                f"affinity score and evidence quality, then state your final answer.\n\n"
-                f"Format: Write your analysis, then on the LAST line put ONLY the answer number (1/2/3/4)."
+                f"IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.\n\n"
+                f"Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation."
             )
         else:
             user += (
@@ -603,6 +590,207 @@ class HF_CAC_MAS:
         return counts.most_common(1)[0][0]
 
     # ------------------------------------------------------------------
+    # Auditor selection (dynamic subset when num_agents < total roles)
+    # ------------------------------------------------------------------
+
+    def _select_auditor_indices(self, guardian_idx: int) -> list[int]:
+        """
+        Select which auditor indices to use based on self.num_agents.
+
+        Strategy: pick the (num_agents - 1) auditors with HIGHEST cultural
+        affinity to the guardian's culture (i.e., most relevant perspectives).
+        """
+        all_auditors = [i for i in range(len(self.culture_roles)) if i != guardian_idx]
+        num_auditors_needed = self.num_agents - 1
+
+        if num_auditors_needed >= len(all_auditors):
+            return all_auditors
+
+        # Use affinity matrix to pick most relevant auditors
+        if self.affinity_matrix is not None:
+            affinities = self.affinity_matrix[guardian_idx]
+            # Sort auditors by affinity score (descending), pick top N
+            ranked = sorted(all_auditors, key=lambda i: affinities[i], reverse=True)
+            return ranked[:num_auditors_needed]
+        else:
+            # No affinity matrix: just take first N
+            return all_auditors[:num_auditors_needed]
+
+    # ------------------------------------------------------------------
+    # Debate feedback prompt (MAD-inspired Stage 2)
+    # ------------------------------------------------------------------
+
+    def _build_feedback_prompt(self, agent_idx: int, question: str,
+                               target_country: str, is_guardian: bool,
+                               own_response: str,
+                               other_responses: list[tuple[str, str]]) -> str:
+        """
+        Build a feedback prompt (MAD Stage 2 equivalent).
+
+        Each agent sees the other agents' responses and provides feedback.
+        Keeps responses concise: "less than three sentences" (MAD's key insight).
+
+        Args:
+            agent_idx: index of this agent
+            question: the question text
+            target_country: target culture/country
+            is_guardian: whether this agent is the Guardian
+            own_response: this agent's initial response
+            other_responses: list of (agent_name, response_text) from other agents
+        """
+        if is_guardian:
+            system = self.culture_roles[agent_idx]["guardian_prompt"].strip()
+        else:
+            system = self.culture_roles[agent_idx]["auditor_prompt"].strip()
+
+        agent_name = self.culture_roles[agent_idx]["name"]
+
+        # Build discussion context
+        discussion = ""
+        for name, resp in other_responses:
+            discussion += f"  [{name}]: {resp.strip()}\n"
+
+        if self.task_type == "culturalbench":
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"Your initial answer:\n  [{agent_name}]: {own_response.strip()}\n\n"
+                f"Other experts' answers:\n{discussion}\n"
+                f"Respond to the other experts by providing any relevant feedback. "
+                f"If you disagree with anyone, explain why with cultural evidence. "
+                f"Respond in less than three sentences.\n"
+                f"Response:"
+            )
+        else:
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"Your initial answer:\n  [{agent_name}]: {own_response.strip()}\n\n"
+                f"Other experts' answers:\n{discussion}\n"
+                f"Respond by providing any relevant feedback. "
+                f"If you disagree, explain why with cultural evidence. "
+                f"Respond in less than three sentences.\n"
+                f"Response:"
+            )
+        return self._apply_chat(system, user)
+
+    # ------------------------------------------------------------------
+    # Final decision prompt (MAD Stage 3 equivalent)
+    # ------------------------------------------------------------------
+
+    def _build_final_decision_prompt(self, agent_idx: int, question: str,
+                                      target_country: str, is_guardian: bool,
+                                      own_response: str,
+                                      other_responses: list[tuple[str, str]],
+                                      own_feedback: str,
+                                      other_feedbacks: list[tuple[str, str]]) -> str:
+        """
+        Build final decision prompt after feedback exchange (MAD Stage 3).
+        Agent reconsiders their answer after seeing all feedback.
+        """
+        if is_guardian:
+            system = self.culture_roles[agent_idx]["guardian_prompt"].strip()
+        else:
+            system = self.culture_roles[agent_idx]["auditor_prompt"].strip()
+
+        agent_name = self.culture_roles[agent_idx]["name"]
+
+        # Build discussion context
+        others_text = ""
+        for name, resp in other_responses:
+            others_text += f"  [{name}]: {resp.strip()}\n"
+
+        feedback_text = f"  [{agent_name}] (you): {own_feedback.strip()}\n"
+        for name, fb in other_feedbacks:
+            feedback_text += f"  [{name}]: {fb.strip()}\n"
+
+        if self.task_type == "culturalbench":
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"=== Discussion Summary ===\n"
+                f"Your initial answer:\n  [{agent_name}]: {own_response.strip()}\n\n"
+                f"Other experts' answers:\n{others_text}\n"
+                f"Feedback from all experts:\n{feedback_text}\n"
+                f"=== End Discussion ===\n\n"
+                f"Based on the above discussion, critically think and make "
+                f"your final decision. Respond with the correct option number "
+                f"(1, 2, 3, or 4).\n"
+                f"Answer (1, 2, 3, or 4):"
+            )
+        else:
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"=== Discussion Summary ===\n"
+                f"Your initial answer:\n  [{agent_name}]: {own_response.strip()}\n\n"
+                f"Other experts' answers:\n{others_text}\n"
+                f"Feedback from all experts:\n{feedback_text}\n"
+                f"=== End Discussion ===\n\n"
+                f"Based on the above discussion, critically think and make "
+                f"your final decision.\n"
+                f"Answer:"
+            )
+        return self._apply_chat(system, user)
+
+    # ------------------------------------------------------------------
+    # Disagreement-only Judge prompt (MAD Stage 4 equivalent)
+    # ------------------------------------------------------------------
+
+    def _build_judge_disagreement_prompt(self, question: str, target_country: str,
+                                          guardian_idx: int,
+                                          agent_final_responses: list[tuple[str, str, bool]],
+                                          agent_feedbacks: list[tuple[str, str]]) -> str:
+        """
+        Build Judge prompt that is ONLY invoked when agents disagree on final answer.
+        This mirrors MAD's Stage 4: Judge resolves disagreement based on debate history.
+        """
+        guardian_name = self.culture_roles[guardian_idx]["name"]
+
+        # Build debate history
+        debate_text = ""
+        for name, resp, is_guard in agent_final_responses:
+            role_tag = "HOST-CULTURE GUARDIAN" if is_guard else "Cross-Cultural Auditor"
+            debate_text += f"  [{name}] ({role_tag}) final answer: {resp.strip()}\n"
+
+        feedback_text = ""
+        for name, fb in agent_feedbacks:
+            feedback_text += f"  [{name}]: {fb.strip()}\n"
+
+        if self.task_type == "culturalbench":
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"You are a judge resolving a disagreement between cultural experts "
+                f"about this question. The HOST-CULTURE GUARDIAN is [{guardian_name}] "
+                f"— their expertise most closely matches {target_country}.\n\n"
+                f"*** Debate feedback ***\n{feedback_text}\n"
+                f"*** Final decisions ***\n{debate_text}\n"
+                f"Rules:\n"
+                f"- Base your decision on the debate evidence, not independent judgment\n"
+                f"- Give HIGHER WEIGHT to the Guardian's cultural claims\n"
+                f"- BUT if the other expert(s) provide strong counter-evidence, "
+                f"consider it carefully\n"
+                f"- Evaluate the factual accuracy of each argument\n\n"
+                f"Answer format: first line is ONLY the number (1/2/3/4), "
+                f"second line is brief explanation."
+            )
+        else:
+            user = (
+                f"TARGET CULTURE: {target_country}\n\n"
+                f"{question}\n\n"
+                f"You are a judge resolving a disagreement. "
+                f"The HOST-CULTURE GUARDIAN is [{guardian_name}].\n\n"
+                f"*** Debate feedback ***\n{feedback_text}\n"
+                f"*** Final decisions ***\n{debate_text}\n"
+                f"Base your decision on the debate evidence. "
+                f"Give higher weight to the Guardian.\n\n"
+                f"Reasoning: <brief reasoning>\n"
+                f"Answer: <number>"
+            )
+        return self._apply_chat(self.judge_system_prompt, user)
+
+    # ------------------------------------------------------------------
     # Single-sample inference
     # ------------------------------------------------------------------
 
@@ -616,63 +804,142 @@ class HF_CAC_MAS:
             guardian_idx = 0  # fallback: first agent
 
         guardian_name = self.culture_roles[guardian_idx]["name"]
-        agent_responses = [""] * self.num_agents
 
-        # Step 2: Phase 1 — Guardian generates first (authoritative)
+        # Step 2: Select auditors (dynamic subset based on num_agents)
+        auditor_indices = self._select_auditor_indices(guardian_idx)
+        active_indices = [guardian_idx] + auditor_indices
+        num_active = len(active_indices)
+
+        # Initialize response storage
+        initial_responses = {}  # agent_idx -> response text
+        feedbacks = {}          # agent_idx -> feedback text
+        final_responses = {}    # agent_idx -> final response text
+
+        # ---- Stage 1: All agents generate initial decisions independently ----
+        # (MAD-inspired: both agents start independently for diversity)
+        all_initial_prompts = []
+        all_initial_indices = []
+
+        # Guardian prompt
         guardian_prompt = self._build_guardian_prompt(
             guardian_idx, question, target_country
         )
-        guardian_output = self.llm.generate([guardian_prompt], self.guardian_sampling)
-        agent_responses[guardian_idx] = guardian_output[0].outputs[0].text.strip()
+        all_initial_prompts.append(guardian_prompt)
+        all_initial_indices.append(guardian_idx)
 
-        # Step 3: Phase 2 — Auditors generate with Guardian context
-        auditor_indices = [i for i in range(self.num_agents) if i != guardian_idx]
+        # Auditor prompts (independent, no Guardian context in Stage 1)
+        for ai in auditor_indices:
+            prompt = self._build_auditor_prompt(
+                ai, question, target_country, guardian_name, None
+            )
+            all_initial_prompts.append(prompt)
+            all_initial_indices.append(ai)
 
+        # Generate all initial responses in one batch
+        initial_outputs = self.llm.generate(all_initial_prompts, self.guardian_sampling)
+        for idx, out in zip(all_initial_indices, initial_outputs):
+            initial_responses[idx] = out.outputs[0].text.strip()
+
+        # ---- Stage 2: Feedback exchange (MAD-inspired) ----
         if self.negotiation_rounds > 0:
-            # Structured negotiation: Auditors SEE Guardian's response
-            auditor_prompts = [
-                self._build_auditor_prompt(
-                    i, question, target_country,
-                    guardian_name, agent_responses[guardian_idx]
+            feedback_prompts = []
+            feedback_indices = []
+
+            for agent_idx in active_indices:
+                is_guardian = (agent_idx == guardian_idx)
+                own_resp = initial_responses[agent_idx]
+                other_resps = [
+                    (self.culture_roles[i]["name"], initial_responses[i])
+                    for i in active_indices if i != agent_idx
+                ]
+                prompt = self._build_feedback_prompt(
+                    agent_idx, question, target_country,
+                    is_guardian, own_resp, other_resps
                 )
-                for i in auditor_indices
-            ]
+                feedback_prompts.append(prompt)
+                feedback_indices.append(agent_idx)
+
+            feedback_outputs = self.llm.generate(feedback_prompts, self.auditor_sampling)
+            for idx, out in zip(feedback_indices, feedback_outputs):
+                feedbacks[idx] = out.outputs[0].text.strip()
+
+            # ---- Stage 3: Final decisions after seeing feedback ----
+            final_prompts = []
+            final_indices = []
+
+            for agent_idx in active_indices:
+                is_guardian = (agent_idx == guardian_idx)
+                own_resp = initial_responses[agent_idx]
+                other_resps = [
+                    (self.culture_roles[i]["name"], initial_responses[i])
+                    for i in active_indices if i != agent_idx
+                ]
+                own_fb = feedbacks[agent_idx]
+                other_fbs = [
+                    (self.culture_roles[i]["name"], feedbacks[i])
+                    for i in active_indices if i != agent_idx
+                ]
+                prompt = self._build_final_decision_prompt(
+                    agent_idx, question, target_country,
+                    is_guardian, own_resp, other_resps, own_fb, other_fbs
+                )
+                final_prompts.append(prompt)
+                final_indices.append(agent_idx)
+
+            final_outputs = self.llm.generate(final_prompts, self.guardian_sampling)
+            for idx, out in zip(final_indices, final_outputs):
+                final_responses[idx] = out.outputs[0].text.strip()
         else:
-            # Independent mode (negotiation_rounds=0): Auditors don't see Guardian
-            auditor_prompts = [
-                self._build_auditor_prompt(
-                    i, question, target_country, guardian_name, None
-                )
-                for i in auditor_indices
-            ]
+            # No negotiation: initial responses ARE final responses
+            final_responses = dict(initial_responses)
 
-        auditor_outputs = self.llm.generate(auditor_prompts, self.auditor_sampling)
-        for ai, out in zip(auditor_indices, auditor_outputs):
-            agent_responses[ai] = out.outputs[0].text.strip()
+        # ---- Stage 4: Judge ONLY on disagreement (MAD-inspired) ----
+        # Extract all agents' final answers
+        final_answers = {}
+        for idx in active_indices:
+            final_answers[idx] = self._extract_answer(final_responses[idx], question)
 
-        # Step 4: Detect Guardian failure and choose Judge strategy
-        guardian_failed = self._detect_guardian_failure(
-            agent_responses[guardian_idx]
-        )
+        # Check for consensus
+        valid_answers = [a for a in final_answers.values() if a is not None]
+        guardian_answer = final_answers.get(guardian_idx)
+        has_consensus = len(set(valid_answers)) <= 1 if valid_answers else False
 
         judge_response = ""
-        if self.include_judge:
-            judge_input = [
-                (self.culture_roles[i]["name"], agent_responses[i], i == guardian_idx)
-                for i in range(self.num_agents)
-            ]
+        guardian_failed = self._detect_guardian_failure(
+            final_responses.get(guardian_idx, "")
+        )
 
+        if has_consensus and not guardian_failed:
+            # All agents agree → use consensus, no Judge needed
+            judge_response = f"[CONSENSUS] All agents agree. Answer: {valid_answers[0]}"
+        elif self.include_judge:
+            # Disagreement or guardian failure → invoke Judge
             if guardian_failed:
-                # Guardian failed → activate Cultural Affinity Arbitration
+                # Guardian failed → affinity-based arbitration
+                agent_input = [
+                    (self.culture_roles[i]["name"], final_responses.get(i, ""),
+                     i == guardian_idx)
+                    for i in active_indices
+                ]
                 affinity_scores = self._get_affinity_scores(guardian_idx)
                 judge_prompt = self._build_judge_fallback_prompt(
                     question, target_country, guardian_idx,
-                    judge_input, affinity_scores
+                    agent_input, affinity_scores
                 )
             else:
-                # Guardian valid → standard Judge deliberation
-                judge_prompt = self._build_judge_prompt(
-                    question, target_country, guardian_idx, judge_input
+                # Disagreement → debate-based Judge (MAD Stage 4)
+                agent_final_input = [
+                    (self.culture_roles[i]["name"], final_responses.get(i, ""),
+                     i == guardian_idx)
+                    for i in active_indices
+                ]
+                agent_feedback_input = [
+                    (self.culture_roles[i]["name"], feedbacks.get(i, ""))
+                    for i in active_indices
+                ]
+                judge_prompt = self._build_judge_disagreement_prompt(
+                    question, target_country, guardian_idx,
+                    agent_final_input, agent_feedback_input
                 )
 
             judge_output = self.llm.generate([judge_prompt], self.judge_sampling)
@@ -680,24 +947,44 @@ class HF_CAC_MAS:
 
             judge_answer = self._extract_answer(judge_response, question)
             if judge_answer is None:
-                # Last resort: if Judge ALSO fails to parse, use weighted vote
-                all_answers = [self._extract_answer(r, question) for r in agent_responses]
+                # Fallback: guardian-weighted vote
+                all_ans_list = [final_answers.get(i) for i in active_indices]
+                # Map active indices to positions for the vote function
+                guardian_pos = active_indices.index(guardian_idx)
                 fallback = self._majority_vote_with_guardian_veto(
-                    all_answers, guardian_idx
+                    all_ans_list, guardian_pos
                 )
                 judge_response += f"\n[Fallback guardian-weighted vote]: {fallback}"
 
-        # Step 5: Format output (compatible with AgentArk pipeline)
+        # ---- Format output (compatible with AgentArk pipeline) ----
         formatted = ""
-        for i, resp in enumerate(agent_responses):
+        sol_num = 0
+        for i in active_indices:
+            sol_num += 1
             role_tag = "[GUARDIAN]" if i == guardian_idx else "[AUDITOR]"
             if i == guardian_idx and guardian_failed:
                 role_tag = "[GUARDIAN-FAILED]"
-            formatted += f"===== Solution {i + 1} {role_tag} =====\n{resp}\n"
-        if self.include_judge:
-            judge_mode = "[JUDGE-AFFINITY-ARBITRATION]" if guardian_failed else "[JUDGE]"
+            # Include both initial and final response for debugging
+            if self.negotiation_rounds > 0 and i in final_responses:
+                resp_text = (
+                    f"[Initial]: {initial_responses.get(i, '')}\n"
+                    f"[Feedback]: {feedbacks.get(i, '')}\n"
+                    f"[Final]: {final_responses.get(i, '')}"
+                )
+            else:
+                resp_text = initial_responses.get(i, "")
+            formatted += f"===== Solution {sol_num} {role_tag} =====\n{resp_text}\n"
+
+        if self.include_judge or has_consensus:
+            sol_num += 1
+            if has_consensus:
+                judge_mode = "[JUDGE-CONSENSUS]"
+            elif guardian_failed:
+                judge_mode = "[JUDGE-AFFINITY-ARBITRATION]"
+            else:
+                judge_mode = "[JUDGE-DISAGREEMENT]"
             formatted += (
-                f"===== Solution {self.num_agents + 1} {judge_mode} =====\n"
+                f"===== Solution {sol_num} {judge_mode} =====\n"
                 f"{judge_response}\n"
             )
 
@@ -714,104 +1001,193 @@ class HF_CAC_MAS:
 
     def inference_batch(self, samples: list[dict]) -> list[dict]:
         """
-        Batch inference with two-phase generation:
-          Phase 1: All Guardians in parallel
-          Phase 2: All Auditors in parallel (with Guardian context if negotiation_rounds>0)
-          Phase 3: All Judges in parallel
+        Batch inference with MAD-inspired 4-stage generation:
+          Stage 1: All agents generate initial decisions independently
+          Stage 2: All agents provide feedback on others' responses
+          Stage 3: All agents make final decisions incorporating feedback
+          Stage 4: Judge resolves ONLY disagreements
         """
         n = len(samples)
         questions = [s["query"] for s in samples]
         countries = [s.get("country", "") for s in samples]
 
-        # Detect Guardians for all samples
+        # Detect Guardians and select auditors for all samples
         guardian_indices = []
-        for country in countries:
+        active_indices_per_sample = []  # list of list
+        for si, country in enumerate(countries):
             g_idx = self.detect_guardian(country)
-            guardian_indices.append(g_idx if g_idx >= 0 else 0)
+            g_idx = g_idx if g_idx >= 0 else 0
+            guardian_indices.append(g_idx)
+            auditor_idxs = self._select_auditor_indices(g_idx)
+            active_indices_per_sample.append([g_idx] + auditor_idxs)
 
-        agent_responses = [[""] * self.num_agents for _ in range(n)]
+        # Per-sample storage
+        initial_responses = [{} for _ in range(n)]  # si -> {agent_idx: text}
+        feedbacks = [{} for _ in range(n)]
+        final_responses = [{} for _ in range(n)]
 
-        # ---- Phase 1: Generate all Guardian responses ----
-        guardian_prompts = []
-        guardian_meta = []  # (sample_idx,)
-        for si in range(n):
-            g_idx = guardian_indices[si]
-            prompt = self._build_guardian_prompt(g_idx, questions[si], countries[si])
-            guardian_prompts.append(prompt)
-            guardian_meta.append(si)
-
-        guardian_outputs = self.llm.generate(guardian_prompts, self.guardian_sampling)
-        for out, si in zip(guardian_outputs, guardian_meta):
-            g_idx = guardian_indices[si]
-            agent_responses[si][g_idx] = out.outputs[0].text.strip()
-
-        # ---- Phase 2: Generate all Auditor responses ----
-        auditor_prompts = []
-        auditor_meta = []  # (sample_idx, agent_idx)
+        # ---- Stage 1: All agents generate initial decisions independently ----
+        stage1_prompts = []
+        stage1_meta = []  # (sample_idx, agent_idx)
         for si in range(n):
             g_idx = guardian_indices[si]
             g_name = self.culture_roles[g_idx]["name"]
-            g_response = agent_responses[si][g_idx] if self.negotiation_rounds > 0 else None
-
-            for ai in range(self.num_agents):
+            for ai in active_indices_per_sample[si]:
                 if ai == g_idx:
-                    continue
-                prompt = self._build_auditor_prompt(
-                    ai, questions[si], countries[si], g_name, g_response
-                )
-                auditor_prompts.append(prompt)
-                auditor_meta.append((si, ai))
+                    prompt = self._build_guardian_prompt(ai, questions[si], countries[si])
+                else:
+                    # Independent: no Guardian context
+                    prompt = self._build_auditor_prompt(
+                        ai, questions[si], countries[si], g_name, None
+                    )
+                stage1_prompts.append(prompt)
+                stage1_meta.append((si, ai))
 
-        auditor_outputs = self.llm.generate(auditor_prompts, self.auditor_sampling)
-        for out, (si, ai) in zip(auditor_outputs, auditor_meta):
-            agent_responses[si][ai] = out.outputs[0].text.strip()
+        stage1_outputs = self.llm.generate(stage1_prompts, self.guardian_sampling)
+        for out, (si, ai) in zip(stage1_outputs, stage1_meta):
+            initial_responses[si][ai] = out.outputs[0].text.strip()
 
-        # ---- Detect Guardian failures for all samples ----
-        guardian_failures = [
-            self._detect_guardian_failure(agent_responses[si][guardian_indices[si]])
-            for si in range(n)
-        ]
-
-        # ---- Phase 3: Generate all Judge responses ----
-        judge_responses = [""] * n
-        if self.include_judge:
-            judge_prompts = []
+        # ---- Stage 2: Feedback exchange ----
+        if self.negotiation_rounds > 0:
+            stage2_prompts = []
+            stage2_meta = []
             for si in range(n):
                 g_idx = guardian_indices[si]
-                judge_input = [
-                    (self.culture_roles[ai]["name"], agent_responses[si][ai],
-                     ai == g_idx)
-                    for ai in range(self.num_agents)
-                ]
+                for ai in active_indices_per_sample[si]:
+                    is_guardian = (ai == g_idx)
+                    own_resp = initial_responses[si][ai]
+                    other_resps = [
+                        (self.culture_roles[j]["name"], initial_responses[si][j])
+                        for j in active_indices_per_sample[si] if j != ai
+                    ]
+                    prompt = self._build_feedback_prompt(
+                        ai, questions[si], countries[si],
+                        is_guardian, own_resp, other_resps
+                    )
+                    stage2_prompts.append(prompt)
+                    stage2_meta.append((si, ai))
 
+            stage2_outputs = self.llm.generate(stage2_prompts, self.auditor_sampling)
+            for out, (si, ai) in zip(stage2_outputs, stage2_meta):
+                feedbacks[si][ai] = out.outputs[0].text.strip()
+
+            # ---- Stage 3: Final decisions ----
+            stage3_prompts = []
+            stage3_meta = []
+            for si in range(n):
+                g_idx = guardian_indices[si]
+                for ai in active_indices_per_sample[si]:
+                    is_guardian = (ai == g_idx)
+                    own_resp = initial_responses[si][ai]
+                    other_resps = [
+                        (self.culture_roles[j]["name"], initial_responses[si][j])
+                        for j in active_indices_per_sample[si] if j != ai
+                    ]
+                    own_fb = feedbacks[si][ai]
+                    other_fbs = [
+                        (self.culture_roles[j]["name"], feedbacks[si][j])
+                        for j in active_indices_per_sample[si] if j != ai
+                    ]
+                    prompt = self._build_final_decision_prompt(
+                        ai, questions[si], countries[si],
+                        is_guardian, own_resp, other_resps, own_fb, other_fbs
+                    )
+                    stage3_prompts.append(prompt)
+                    stage3_meta.append((si, ai))
+
+            stage3_outputs = self.llm.generate(stage3_prompts, self.guardian_sampling)
+            for out, (si, ai) in zip(stage3_outputs, stage3_meta):
+                final_responses[si][ai] = out.outputs[0].text.strip()
+        else:
+            # No negotiation: initial responses ARE final responses
+            for si in range(n):
+                final_responses[si] = dict(initial_responses[si])
+
+        # ---- Stage 4: Judge ONLY on disagreement ----
+        # First, detect consensus/disagreement for each sample
+        guardian_failures = []
+        consensus_flags = []
+        final_answers_per_sample = []
+
+        for si in range(n):
+            g_idx = guardian_indices[si]
+            failed = self._detect_guardian_failure(
+                final_responses[si].get(g_idx, "")
+            )
+            guardian_failures.append(failed)
+
+            # Extract answers
+            answers = {}
+            for ai in active_indices_per_sample[si]:
+                answers[ai] = self._extract_answer(
+                    final_responses[si].get(ai, ""), questions[si]
+                )
+            final_answers_per_sample.append(answers)
+
+            valid_ans = [a for a in answers.values() if a is not None]
+            has_consensus = len(set(valid_ans)) <= 1 if valid_ans else False
+            consensus_flags.append(has_consensus and not failed)
+
+        # Build Judge prompts only for disagreements
+        judge_responses = [""] * n
+        judge_prompt_list = []
+        judge_sample_indices = []
+
+        for si in range(n):
+            if consensus_flags[si]:
+                # Consensus: no Judge needed
+                valid_ans = [a for a in final_answers_per_sample[si].values()
+                             if a is not None]
+                judge_responses[si] = (
+                    f"[CONSENSUS] All agents agree. Answer: {valid_ans[0]}"
+                )
+            elif self.include_judge:
+                g_idx = guardian_indices[si]
                 if guardian_failures[si]:
-                    # Guardian failed → affinity-based arbitration prompt
+                    agent_input = [
+                        (self.culture_roles[ai]["name"],
+                         final_responses[si].get(ai, ""),
+                         ai == g_idx)
+                        for ai in active_indices_per_sample[si]
+                    ]
                     affinity_scores = self._get_affinity_scores(g_idx)
                     prompt = self._build_judge_fallback_prompt(
                         questions[si], countries[si], g_idx,
-                        judge_input, affinity_scores
+                        agent_input, affinity_scores
                     )
                 else:
-                    # Guardian valid → standard Judge prompt
-                    prompt = self._build_judge_prompt(
-                        questions[si], countries[si], g_idx, judge_input
+                    agent_final_input = [
+                        (self.culture_roles[ai]["name"],
+                         final_responses[si].get(ai, ""),
+                         ai == g_idx)
+                        for ai in active_indices_per_sample[si]
+                    ]
+                    agent_feedback_input = [
+                        (self.culture_roles[ai]["name"],
+                         feedbacks[si].get(ai, ""))
+                        for ai in active_indices_per_sample[si]
+                    ]
+                    prompt = self._build_judge_disagreement_prompt(
+                        questions[si], countries[si], g_idx,
+                        agent_final_input, agent_feedback_input
                     )
-                judge_prompts.append(prompt)
+                judge_prompt_list.append(prompt)
+                judge_sample_indices.append(si)
 
-            judge_outputs = self.llm.generate(judge_prompts, self.judge_sampling)
-
-            for si in range(n):
-                judge_resp = judge_outputs[si].outputs[0].text.strip()
+        # Generate Judge responses in batch (only for disagreements)
+        if judge_prompt_list:
+            judge_outputs = self.llm.generate(judge_prompt_list, self.judge_sampling)
+            for out, si in zip(judge_outputs, judge_sample_indices):
+                judge_resp = out.outputs[0].text.strip()
                 judge_answer = self._extract_answer(judge_resp, questions[si])
 
                 if judge_answer is None:
-                    # Last resort: if Judge ALSO fails to parse
-                    all_answers = [
-                        self._extract_answer(agent_responses[si][ai], questions[si])
-                        for ai in range(self.num_agents)
-                    ]
+                    # Fallback: guardian-weighted vote
+                    active = active_indices_per_sample[si]
+                    all_ans_list = [final_answers_per_sample[si].get(ai) for ai in active]
+                    guardian_pos = active.index(guardian_indices[si])
                     fallback = self._majority_vote_with_guardian_veto(
-                        all_answers, guardian_indices[si]
+                        all_ans_list, guardian_pos
                     )
                     judge_resp += f"\n[Fallback guardian-weighted vote]: {fallback}"
 
@@ -822,21 +1198,39 @@ class HF_CAC_MAS:
         for si in range(n):
             g_idx = guardian_indices[si]
             failed = guardian_failures[si]
+            has_consensus = consensus_flags[si]
+            active = active_indices_per_sample[si]
+
             formatted = ""
-            for ai in range(self.num_agents):
+            sol_num = 0
+            for ai in active:
+                sol_num += 1
                 role_tag = "[GUARDIAN]" if ai == g_idx else "[AUDITOR]"
                 if ai == g_idx and failed:
                     role_tag = "[GUARDIAN-FAILED]"
+                if self.negotiation_rounds > 0 and ai in final_responses[si]:
+                    resp_text = (
+                        f"[Initial]: {initial_responses[si].get(ai, '')}\n"
+                        f"[Feedback]: {feedbacks[si].get(ai, '')}\n"
+                        f"[Final]: {final_responses[si].get(ai, '')}"
+                    )
+                else:
+                    resp_text = initial_responses[si].get(ai, "")
                 formatted += (
-                    f"===== Solution {ai + 1} {role_tag} =====\n"
-                    f"{agent_responses[si][ai]}\n"
+                    f"===== Solution {sol_num} {role_tag} =====\n"
+                    f"{resp_text}\n"
                 )
-            if self.include_judge:
-                judge_mode = (
-                    "[JUDGE-AFFINITY-ARBITRATION]" if failed else "[JUDGE]"
-                )
+
+            if self.include_judge or has_consensus:
+                sol_num += 1
+                if has_consensus:
+                    judge_mode = "[JUDGE-CONSENSUS]"
+                elif failed:
+                    judge_mode = "[JUDGE-AFFINITY-ARBITRATION]"
+                else:
+                    judge_mode = "[JUDGE-DISAGREEMENT]"
                 formatted += (
-                    f"===== Solution {self.num_agents + 1} {judge_mode} =====\n"
+                    f"===== Solution {sol_num} {judge_mode} =====\n"
                     f"{judge_responses[si]}\n"
                 )
 

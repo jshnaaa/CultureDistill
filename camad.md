@@ -28,25 +28,12 @@ HF-CAC 生成的多智能体对话数据中，包含了 Guardian（主场守护�
 
 ### 3.3 运行命令
 
-单卡训练：
-
-```bash
-python Cul/sft/train_sft_weighted.py \
-    --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --output_dir /root/autodl-tmp/model/qwen/normad_camad_sft \
-    --alpha 2.0 \
-    --epochs 5 \
-    --batch_size 4 \
-    --lr 2e-4 \
-    --lora_r 32 \
-    --eval_every_n_epochs 1 \
-    --max_samples 0
-```
-
 双卡 DDP 并行训练（推荐）：
 
 ```bash
+cd autodl-tmp/distill
+source /etc/network_turbo
+sh git.sh
 accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
     --model_name qwen \
     --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
@@ -69,6 +56,23 @@ accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
 | `--eval_every_n_epochs` | 每 N 个 epoch 在验证集上评估一次（默认 1）|
 | `--batch_size` | 每张卡的 batch size（默认 4，双卡时全局有效 batch size = 4×2 = 8）|
 | `--grad_accum_steps` | 梯度累积步数（默认 1，可增大以模拟更大 batch）|
+
+
+单卡训练：
+
+```bash
+python Cul/sft/train_sft_weighted.py \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --output_dir /root/autodl-tmp/model/qwen/normad_camad_sft \
+    --alpha 2.0 \
+    --epochs 5 \
+    --batch_size 4 \
+    --lr 2e-4 \
+    --lora_r 32 \
+    --eval_every_n_epochs 1 \
+    --max_samples 0
+```
 
 ---
 
@@ -917,12 +921,12 @@ python ark/culture/evaluate.py \
 ### 8.3 多智能体协作方法对比
 
 | 实验组 | NormAd | CulturalBench |
-|--------|---------|---------|
-| Vanilla RECONCILE |  |  |
-| MAD | |  |
-| MACD | |  |
-| OG-MAR | |  |
-| HF-CAC |  |  |
+|--------|--------|---------|
+| Vanilla RECONCILE |        |  |
+| MAD |        |  |
+| MACD |        |  |
+| OG-MAR |        |  |
+| HF-CAC |        |  |
 
 ### 8.4 分析实验一：HF-CAC中的智能体的数量
 

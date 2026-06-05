@@ -411,21 +411,39 @@ def _extract_first_digit(text: str, pattern: str) -> str | None:
 
 def extract_judge_answer(response_text: str, max_choice: int = 3,
                          question: str = ""):
-    """Extract Judge's final answer from response text."""
+    """Extract Judge's final answer from response text.
+
+    Handles multiple judge modes:
+      - [JUDGE-CONSENSUS]: consensus answer directly stated
+      - [JUDGE-DISAGREEMENT]: Judge resolves disagreement
+      - [JUDGE-AFFINITY-ARBITRATION]: fallback arbitration
+      - [JUDGE]: legacy format
+    """
     judge_match = re.search(
-        r'===== Solution \d+ \[JUDGE.*?\] =====\n(.*?)$',
+        r'===== Solution \d+ \[JUDGE[^\]]*\] =====\n(.*?)$',
         response_text, re.DOTALL
     )
     if not judge_match:
         return None
     judge_text = judge_match.group(1)
     pattern = f'[1-{max_choice}]'
+
+    # Check for consensus format: "[CONSENSUS] All agents agree. Answer: X"
+    consensus_match = re.search(r'\[CONSENSUS\].*?Answer:\s*(' + pattern + r')',
+                                judge_text)
+    if consensus_match:
+        return consensus_match.group(1)
+
     return _extract_first_digit(judge_text, pattern)
 
 
 def extract_guardian_answer(response_text: str, max_choice: int = 3,
                             question: str = ""):
-    """Extract Guardian's answer from response text."""
+    """Extract Guardian's final answer from response text.
+
+    Handles both new format (with [Initial]/[Feedback]/[Final] sections)
+    and legacy format (direct response).
+    """
     guardian_match = re.search(
         r'===== Solution \d+ \[GUARDIAN\] =====\n(.*?)(?=\n===== Solution)',
         response_text, re.DOTALL
@@ -434,6 +452,16 @@ def extract_guardian_answer(response_text: str, max_choice: int = 3,
         return None
     guardian_text = guardian_match.group(1)
     pattern = f'[1-{max_choice}]'
+
+    # New format: look for [Final]: line first
+    final_match = re.search(r'\[Final\]:\s*(.*?)(?:\n|$)', guardian_text)
+    if final_match:
+        final_text = final_match.group(1)
+        result = _extract_first_digit(final_text, pattern)
+        if result:
+            return result
+
+    # Legacy or simple format: extract from full text
     return _extract_first_digit(guardian_text, pattern)
 
 
