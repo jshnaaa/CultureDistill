@@ -40,7 +40,7 @@ class HF_CAC_MAS:
 
     def __init__(self, model_name, tensor_parallel_size=1, config_path=None,
                  temperature=0.7, max_tokens=1024, include_judge=True,
-                 negotiation_rounds=1):
+                 negotiation_rounds=1, num_agents=None):
         """
         Args:
             model_name: HuggingFace model path or alias
@@ -50,6 +50,7 @@ class HF_CAC_MAS:
             max_tokens: max generation tokens
             include_judge: whether to include Judge reasoning in output
             negotiation_rounds: rounds of structured negotiation (0=independent, 1=standard)
+            num_agents: ignored (determined by config culture_roles length)
         """
         if config_path is None:
             config_path = os.path.join(
