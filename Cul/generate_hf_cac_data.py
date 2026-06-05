@@ -415,6 +415,7 @@ def extract_judge_answer(response_text: str, max_choice: int = 3,
 
     Handles multiple judge modes:
       - [JUDGE-CONSENSUS]: consensus answer directly stated
+      - [JUDGE-GUARDIAN-MAJORITY]: Guardian answer accepted (Guardian + auditor agree)
       - [JUDGE-DISAGREEMENT]: Judge resolves disagreement
       - [JUDGE-AFFINITY-ARBITRATION]: fallback arbitration
       - [JUDGE]: legacy format
@@ -434,6 +435,13 @@ def extract_judge_answer(response_text: str, max_choice: int = 3,
     if consensus_match:
         return consensus_match.group(1)
 
+    # Check for guardian-majority format: "[GUARDIAN-MAJORITY] ... Answer: X"
+    guardian_maj_match = re.search(
+        r'\[GUARDIAN-MAJORITY\].*?Answer:\s*(' + pattern + r')', judge_text
+    )
+    if guardian_maj_match:
+        return guardian_maj_match.group(1)
+
     return _extract_first_digit(judge_text, pattern)
 
 
@@ -441,8 +449,9 @@ def extract_guardian_answer(response_text: str, max_choice: int = 3,
                             question: str = ""):
     """Extract Guardian's final answer from response text.
 
-    Handles both new format (with [Initial]/[Feedback]/[Final] sections)
-    and legacy format (direct response).
+    Handles multiple output formats:
+      - Direct response (current Guardian-First flow)
+      - Legacy format with [Initial]/[Feedback]/[Final] sections
     """
     guardian_match = re.search(
         r'===== Solution \d+ \[GUARDIAN\] =====\n(.*?)(?=\n===== Solution)',
@@ -453,7 +462,7 @@ def extract_guardian_answer(response_text: str, max_choice: int = 3,
     guardian_text = guardian_match.group(1)
     pattern = f'[1-{max_choice}]'
 
-    # New format: look for [Final]: line first
+    # Legacy format: look for [Final]: line first
     final_match = re.search(r'\[Final\]:\s*(.*?)(?:\n|$)', guardian_text)
     if final_match:
         final_text = final_match.group(1)
@@ -461,7 +470,7 @@ def extract_guardian_answer(response_text: str, max_choice: int = 3,
         if result:
             return result
 
-    # Legacy or simple format: extract from full text
+    # Direct response format: extract from full text
     return _extract_first_digit(guardian_text, pattern)
 
 

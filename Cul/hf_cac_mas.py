@@ -6,10 +6,13 @@ Extension of RECONCILE framework with dynamic authority activation:
      "Host-Culture Guardian" based on target country in the question.
   2. Asymmetric Prompting: Guardian uses authoritative confirmation/correction prompt;
      other agents use cross-cultural auditor prompt (contrastive, deferential).
-  3. Structured Negotiation: Guardian generates first (priority), then Auditors
-     respond with awareness of Guardian's position.
-  4. Authority-Aware Judge: Judge explicitly weights Guardian's claims higher,
-     with veto mechanism when Guardian provides specific evidence.
+  3. Guardian-First Flow: Guardian generates first (priority), then Auditors
+     respond with awareness of Guardian's position (one-directional influence).
+  4. Conditional Judge: Judge is ONLY invoked when agents disagree AND Guardian
+     lacks majority support. When Guardian + at least one Auditor agree,
+     their consensus is accepted directly, avoiding unnecessary Judge overrides.
+  5. Temperature Diversity: Guardian uses low temp (0.3) for precision,
+     Auditors use higher temp (0.7) for diverse perspectives (MAD-inspired).
 
 Output format mirrors AgentArk LLM Debate (===== Solution N =====) for pipeline compatibility.
 """
@@ -791,7 +794,7 @@ class HF_CAC_MAS:
         return self._apply_chat(self.judge_system_prompt, user)
 
     # ------------------------------------------------------------------
-    # Single-sample inference
+    # Single-sample inference (Guardian-First + Conditional Judge)
     # ------------------------------------------------------------------
 
     def inference(self, sample: dict) -> dict:
@@ -808,118 +811,96 @@ class HF_CAC_MAS:
         # Step 2: Select auditors (dynamic subset based on num_agents)
         auditor_indices = self._select_auditor_indices(guardian_idx)
         active_indices = [guardian_idx] + auditor_indices
-        num_active = len(active_indices)
 
-        # Initialize response storage
-        initial_responses = {}  # agent_idx -> response text
-        feedbacks = {}          # agent_idx -> feedback text
-        final_responses = {}    # agent_idx -> final response text
-
-        # ---- Stage 1: All agents generate initial decisions independently ----
-        # (MAD-inspired: both agents start independently for diversity)
-        all_initial_prompts = []
-        all_initial_indices = []
-
-        # Guardian prompt
+        # ---- Phase 1: Guardian generates first (authoritative, low temp) ----
         guardian_prompt = self._build_guardian_prompt(
             guardian_idx, question, target_country
         )
-        all_initial_prompts.append(guardian_prompt)
-        all_initial_indices.append(guardian_idx)
+        guardian_output = self.llm.generate([guardian_prompt], self.guardian_sampling)
+        guardian_response = guardian_output[0].outputs[0].text.strip()
 
-        # Auditor prompts (independent, no Guardian context in Stage 1)
-        for ai in auditor_indices:
-            prompt = self._build_auditor_prompt(
-                ai, question, target_country, guardian_name, None
-            )
-            all_initial_prompts.append(prompt)
-            all_initial_indices.append(ai)
-
-        # Generate all initial responses in one batch
-        initial_outputs = self.llm.generate(all_initial_prompts, self.guardian_sampling)
-        for idx, out in zip(all_initial_indices, initial_outputs):
-            initial_responses[idx] = out.outputs[0].text.strip()
-
-        # ---- Stage 2: Feedback exchange (MAD-inspired) ----
+        # ---- Phase 2: Auditors generate WITH Guardian context (high temp) ----
+        auditor_responses = {}  # agent_idx -> response text
         if self.negotiation_rounds > 0:
-            feedback_prompts = []
-            feedback_indices = []
-
-            for agent_idx in active_indices:
-                is_guardian = (agent_idx == guardian_idx)
-                own_resp = initial_responses[agent_idx]
-                other_resps = [
-                    (self.culture_roles[i]["name"], initial_responses[i])
-                    for i in active_indices if i != agent_idx
-                ]
-                prompt = self._build_feedback_prompt(
-                    agent_idx, question, target_country,
-                    is_guardian, own_resp, other_resps
+            # Auditors SEE Guardian's response (one-directional influence)
+            auditor_prompts = []
+            for ai in auditor_indices:
+                prompt = self._build_auditor_prompt(
+                    ai, question, target_country, guardian_name, guardian_response
                 )
-                feedback_prompts.append(prompt)
-                feedback_indices.append(agent_idx)
-
-            feedback_outputs = self.llm.generate(feedback_prompts, self.auditor_sampling)
-            for idx, out in zip(feedback_indices, feedback_outputs):
-                feedbacks[idx] = out.outputs[0].text.strip()
-
-            # ---- Stage 3: Final decisions after seeing feedback ----
-            final_prompts = []
-            final_indices = []
-
-            for agent_idx in active_indices:
-                is_guardian = (agent_idx == guardian_idx)
-                own_resp = initial_responses[agent_idx]
-                other_resps = [
-                    (self.culture_roles[i]["name"], initial_responses[i])
-                    for i in active_indices if i != agent_idx
-                ]
-                own_fb = feedbacks[agent_idx]
-                other_fbs = [
-                    (self.culture_roles[i]["name"], feedbacks[i])
-                    for i in active_indices if i != agent_idx
-                ]
-                prompt = self._build_final_decision_prompt(
-                    agent_idx, question, target_country,
-                    is_guardian, own_resp, other_resps, own_fb, other_fbs
+                auditor_prompts.append(prompt)
+            if auditor_prompts:
+                auditor_outputs = self.llm.generate(
+                    auditor_prompts, self.auditor_sampling
                 )
-                final_prompts.append(prompt)
-                final_indices.append(agent_idx)
-
-            final_outputs = self.llm.generate(final_prompts, self.guardian_sampling)
-            for idx, out in zip(final_indices, final_outputs):
-                final_responses[idx] = out.outputs[0].text.strip()
+                for ai, out in zip(auditor_indices, auditor_outputs):
+                    auditor_responses[ai] = out.outputs[0].text.strip()
         else:
-            # No negotiation: initial responses ARE final responses
-            final_responses = dict(initial_responses)
+            # Independent mode: Auditors don't see Guardian
+            auditor_prompts = []
+            for ai in auditor_indices:
+                prompt = self._build_auditor_prompt(
+                    ai, question, target_country, guardian_name, None
+                )
+                auditor_prompts.append(prompt)
+            if auditor_prompts:
+                auditor_outputs = self.llm.generate(
+                    auditor_prompts, self.auditor_sampling
+                )
+                for ai, out in zip(auditor_indices, auditor_outputs):
+                    auditor_responses[ai] = out.outputs[0].text.strip()
 
-        # ---- Stage 4: Judge ONLY on disagreement (MAD-inspired) ----
-        # Extract all agents' final answers
-        final_answers = {}
-        for idx in active_indices:
-            final_answers[idx] = self._extract_answer(final_responses[idx], question)
+        # ---- Phase 3: Conditional Judge (only on disagreement) ----
+        guardian_answer = self._extract_answer(guardian_response, question)
+        auditor_answers = {}
+        for ai in auditor_indices:
+            auditor_answers[ai] = self._extract_answer(
+                auditor_responses.get(ai, ""), question
+            )
 
-        # Check for consensus
-        valid_answers = [a for a in final_answers.values() if a is not None]
-        guardian_answer = final_answers.get(guardian_idx)
-        has_consensus = len(set(valid_answers)) <= 1 if valid_answers else False
+        all_answers = {guardian_idx: guardian_answer, **auditor_answers}
+        valid_answers = [a for a in all_answers.values() if a is not None]
+
+        guardian_failed = self._detect_guardian_failure(guardian_response)
+
+        # Determine consensus levels:
+        # Level 1: Full consensus (all agents agree)
+        # Level 2: Guardian-majority (Guardian + at least one Auditor agree)
+        # Level 3: Real disagreement → invoke Judge
+        guardian_has_support = False
+        if guardian_answer and not guardian_failed:
+            supporters = sum(
+                1 for a in auditor_answers.values() if a == guardian_answer
+            )
+            guardian_has_support = (supporters >= 1)
+
+        has_full_consensus = (
+            len(set(valid_answers)) <= 1 if valid_answers else False
+        ) and not guardian_failed
 
         judge_response = ""
-        guardian_failed = self._detect_guardian_failure(
-            final_responses.get(guardian_idx, "")
-        )
 
-        if has_consensus and not guardian_failed:
-            # All agents agree → use consensus, no Judge needed
-            judge_response = f"[CONSENSUS] All agents agree. Answer: {valid_answers[0]}"
+        if has_full_consensus:
+            # All agents agree → accept consensus directly
+            judge_response = (
+                f"[CONSENSUS] All agents agree. Answer: {valid_answers[0]}"
+            )
+        elif guardian_has_support:
+            # Guardian + at least one Auditor agree → accept Guardian
+            judge_response = (
+                f"[GUARDIAN-MAJORITY] Guardian supported by auditor(s). "
+                f"Answer: {guardian_answer}"
+            )
         elif self.include_judge:
-            # Disagreement or guardian failure → invoke Judge
+            # Real disagreement → invoke Judge
             if guardian_failed:
-                # Guardian failed → affinity-based arbitration
                 agent_input = [
-                    (self.culture_roles[i]["name"], final_responses.get(i, ""),
-                     i == guardian_idx)
-                    for i in active_indices
+                    (self.culture_roles[guardian_idx]["name"],
+                     guardian_response, True)
+                ] + [
+                    (self.culture_roles[ai]["name"],
+                     auditor_responses.get(ai, ""), False)
+                    for ai in auditor_indices
                 ]
                 affinity_scores = self._get_affinity_scores(guardian_idx)
                 judge_prompt = self._build_judge_fallback_prompt(
@@ -927,19 +908,16 @@ class HF_CAC_MAS:
                     agent_input, affinity_scores
                 )
             else:
-                # Disagreement → debate-based Judge (MAD Stage 4)
-                agent_final_input = [
-                    (self.culture_roles[i]["name"], final_responses.get(i, ""),
-                     i == guardian_idx)
-                    for i in active_indices
+                agent_input = [
+                    (self.culture_roles[guardian_idx]["name"],
+                     guardian_response, True)
+                ] + [
+                    (self.culture_roles[ai]["name"],
+                     auditor_responses.get(ai, ""), False)
+                    for ai in auditor_indices
                 ]
-                agent_feedback_input = [
-                    (self.culture_roles[i]["name"], feedbacks.get(i, ""))
-                    for i in active_indices
-                ]
-                judge_prompt = self._build_judge_disagreement_prompt(
-                    question, target_country, guardian_idx,
-                    agent_final_input, agent_feedback_input
+                judge_prompt = self._build_judge_prompt(
+                    question, target_country, guardian_idx, agent_input
                 )
 
             judge_output = self.llm.generate([judge_prompt], self.judge_sampling)
@@ -948,45 +926,43 @@ class HF_CAC_MAS:
             judge_answer = self._extract_answer(judge_response, question)
             if judge_answer is None:
                 # Fallback: guardian-weighted vote
-                all_ans_list = [final_answers.get(i) for i in active_indices]
-                # Map active indices to positions for the vote function
-                guardian_pos = active_indices.index(guardian_idx)
+                all_ans_list = [all_answers.get(i) for i in active_indices]
                 fallback = self._majority_vote_with_guardian_veto(
-                    all_ans_list, guardian_pos
+                    all_ans_list, 0  # Guardian is always at position 0
                 )
-                judge_response += f"\n[Fallback guardian-weighted vote]: {fallback}"
+                judge_response += (
+                    f"\n[Fallback guardian-weighted vote]: {fallback}"
+                )
 
         # ---- Format output (compatible with AgentArk pipeline) ----
         formatted = ""
-        sol_num = 0
-        for i in active_indices:
-            sol_num += 1
-            role_tag = "[GUARDIAN]" if i == guardian_idx else "[AUDITOR]"
-            if i == guardian_idx and guardian_failed:
-                role_tag = "[GUARDIAN-FAILED]"
-            # Include both initial and final response for debugging
-            if self.negotiation_rounds > 0 and i in final_responses:
-                resp_text = (
-                    f"[Initial]: {initial_responses.get(i, '')}\n"
-                    f"[Feedback]: {feedbacks.get(i, '')}\n"
-                    f"[Final]: {final_responses.get(i, '')}"
-                )
-            else:
-                resp_text = initial_responses.get(i, "")
-            formatted += f"===== Solution {sol_num} {role_tag} =====\n{resp_text}\n"
+        sol_num = 1
+        role_tag = "[GUARDIAN]" if not guardian_failed else "[GUARDIAN-FAILED]"
+        formatted += (
+            f"===== Solution {sol_num} {role_tag} =====\n"
+            f"{guardian_response}\n"
+        )
 
-        if self.include_judge or has_consensus:
+        for ai in auditor_indices:
             sol_num += 1
-            if has_consensus:
-                judge_mode = "[JUDGE-CONSENSUS]"
-            elif guardian_failed:
-                judge_mode = "[JUDGE-AFFINITY-ARBITRATION]"
-            else:
-                judge_mode = "[JUDGE-DISAGREEMENT]"
             formatted += (
-                f"===== Solution {sol_num} {judge_mode} =====\n"
-                f"{judge_response}\n"
+                f"===== Solution {sol_num} [AUDITOR] =====\n"
+                f"{auditor_responses.get(ai, '')}\n"
             )
+
+        sol_num += 1
+        if has_full_consensus:
+            judge_mode = "[JUDGE-CONSENSUS]"
+        elif guardian_has_support:
+            judge_mode = "[JUDGE-GUARDIAN-MAJORITY]"
+        elif guardian_failed:
+            judge_mode = "[JUDGE-AFFINITY-ARBITRATION]"
+        else:
+            judge_mode = "[JUDGE-DISAGREEMENT]"
+        formatted += (
+            f"===== Solution {sol_num} {judge_mode} =====\n"
+            f"{judge_response}\n"
+        )
 
         return {
             "response": formatted,
@@ -1001,11 +977,11 @@ class HF_CAC_MAS:
 
     def inference_batch(self, samples: list[dict]) -> list[dict]:
         """
-        Batch inference with MAD-inspired 4-stage generation:
-          Stage 1: All agents generate initial decisions independently
-          Stage 2: All agents provide feedback on others' responses
-          Stage 3: All agents make final decisions incorporating feedback
-          Stage 4: Judge resolves ONLY disagreements
+        Batch inference with Guardian-First + Conditional Judge:
+          Phase 1: All Guardians generate first (low temp, authoritative)
+          Phase 2: All Auditors generate with Guardian context (high temp, diverse)
+          Phase 3: Conditional Judge — only invoked for real disagreements
+                   (Guardian without auditor support)
         """
         n = len(samples)
         questions = [s["query"] for s in samples]
@@ -1013,142 +989,127 @@ class HF_CAC_MAS:
 
         # Detect Guardians and select auditors for all samples
         guardian_indices = []
-        active_indices_per_sample = []  # list of list
+        auditor_indices_per_sample = []
+        active_indices_per_sample = []
         for si, country in enumerate(countries):
             g_idx = self.detect_guardian(country)
             g_idx = g_idx if g_idx >= 0 else 0
             guardian_indices.append(g_idx)
             auditor_idxs = self._select_auditor_indices(g_idx)
+            auditor_indices_per_sample.append(auditor_idxs)
             active_indices_per_sample.append([g_idx] + auditor_idxs)
 
         # Per-sample storage
-        initial_responses = [{} for _ in range(n)]  # si -> {agent_idx: text}
-        feedbacks = [{} for _ in range(n)]
-        final_responses = [{} for _ in range(n)]
+        guardian_responses = [""] * n
+        auditor_responses = [{} for _ in range(n)]  # si -> {agent_idx: text}
 
-        # ---- Stage 1: All agents generate initial decisions independently ----
-        stage1_prompts = []
-        stage1_meta = []  # (sample_idx, agent_idx)
+        # ---- Phase 1: All Guardians generate independently (low temp) ----
+        guardian_prompts = []
+        for si in range(n):
+            prompt = self._build_guardian_prompt(
+                guardian_indices[si], questions[si], countries[si]
+            )
+            guardian_prompts.append(prompt)
+
+        guardian_outputs = self.llm.generate(guardian_prompts, self.guardian_sampling)
+        for si, out in enumerate(guardian_outputs):
+            guardian_responses[si] = out.outputs[0].text.strip()
+
+        # ---- Phase 2: All Auditors generate with Guardian context (high temp) ----
+        auditor_prompts = []
+        auditor_meta = []  # (sample_idx, agent_idx)
         for si in range(n):
             g_idx = guardian_indices[si]
             g_name = self.culture_roles[g_idx]["name"]
-            for ai in active_indices_per_sample[si]:
-                if ai == g_idx:
-                    prompt = self._build_guardian_prompt(ai, questions[si], countries[si])
-                else:
-                    # Independent: no Guardian context
-                    prompt = self._build_auditor_prompt(
-                        ai, questions[si], countries[si], g_name, None
-                    )
-                stage1_prompts.append(prompt)
-                stage1_meta.append((si, ai))
+            g_resp = guardian_responses[si] if self.negotiation_rounds > 0 else None
+            for ai in auditor_indices_per_sample[si]:
+                prompt = self._build_auditor_prompt(
+                    ai, questions[si], countries[si], g_name, g_resp
+                )
+                auditor_prompts.append(prompt)
+                auditor_meta.append((si, ai))
 
-        stage1_outputs = self.llm.generate(stage1_prompts, self.guardian_sampling)
-        for out, (si, ai) in zip(stage1_outputs, stage1_meta):
-            initial_responses[si][ai] = out.outputs[0].text.strip()
+        if auditor_prompts:
+            auditor_outputs = self.llm.generate(
+                auditor_prompts, self.auditor_sampling
+            )
+            for out, (si, ai) in zip(auditor_outputs, auditor_meta):
+                auditor_responses[si][ai] = out.outputs[0].text.strip()
 
-        # ---- Stage 2: Feedback exchange ----
-        if self.negotiation_rounds > 0:
-            stage2_prompts = []
-            stage2_meta = []
-            for si in range(n):
-                g_idx = guardian_indices[si]
-                for ai in active_indices_per_sample[si]:
-                    is_guardian = (ai == g_idx)
-                    own_resp = initial_responses[si][ai]
-                    other_resps = [
-                        (self.culture_roles[j]["name"], initial_responses[si][j])
-                        for j in active_indices_per_sample[si] if j != ai
-                    ]
-                    prompt = self._build_feedback_prompt(
-                        ai, questions[si], countries[si],
-                        is_guardian, own_resp, other_resps
-                    )
-                    stage2_prompts.append(prompt)
-                    stage2_meta.append((si, ai))
-
-            stage2_outputs = self.llm.generate(stage2_prompts, self.auditor_sampling)
-            for out, (si, ai) in zip(stage2_outputs, stage2_meta):
-                feedbacks[si][ai] = out.outputs[0].text.strip()
-
-            # ---- Stage 3: Final decisions ----
-            stage3_prompts = []
-            stage3_meta = []
-            for si in range(n):
-                g_idx = guardian_indices[si]
-                for ai in active_indices_per_sample[si]:
-                    is_guardian = (ai == g_idx)
-                    own_resp = initial_responses[si][ai]
-                    other_resps = [
-                        (self.culture_roles[j]["name"], initial_responses[si][j])
-                        for j in active_indices_per_sample[si] if j != ai
-                    ]
-                    own_fb = feedbacks[si][ai]
-                    other_fbs = [
-                        (self.culture_roles[j]["name"], feedbacks[si][j])
-                        for j in active_indices_per_sample[si] if j != ai
-                    ]
-                    prompt = self._build_final_decision_prompt(
-                        ai, questions[si], countries[si],
-                        is_guardian, own_resp, other_resps, own_fb, other_fbs
-                    )
-                    stage3_prompts.append(prompt)
-                    stage3_meta.append((si, ai))
-
-            stage3_outputs = self.llm.generate(stage3_prompts, self.guardian_sampling)
-            for out, (si, ai) in zip(stage3_outputs, stage3_meta):
-                final_responses[si][ai] = out.outputs[0].text.strip()
-        else:
-            # No negotiation: initial responses ARE final responses
-            for si in range(n):
-                final_responses[si] = dict(initial_responses[si])
-
-        # ---- Stage 4: Judge ONLY on disagreement ----
-        # First, detect consensus/disagreement for each sample
+        # ---- Phase 3: Conditional Judge (only for real disagreements) ----
+        # Extract answers and determine consensus for each sample
         guardian_failures = []
-        consensus_flags = []
-        final_answers_per_sample = []
+        consensus_types = []  # "full", "guardian_majority", "disagreement"
+        all_answers_per_sample = []
 
         for si in range(n):
             g_idx = guardian_indices[si]
-            failed = self._detect_guardian_failure(
-                final_responses[si].get(g_idx, "")
-            )
+            g_resp = guardian_responses[si]
+
+            failed = self._detect_guardian_failure(g_resp)
             guardian_failures.append(failed)
 
-            # Extract answers
-            answers = {}
-            for ai in active_indices_per_sample[si]:
-                answers[ai] = self._extract_answer(
-                    final_responses[si].get(ai, ""), questions[si]
+            # Extract all answers
+            g_answer = self._extract_answer(g_resp, questions[si])
+            a_answers = {}
+            for ai in auditor_indices_per_sample[si]:
+                a_answers[ai] = self._extract_answer(
+                    auditor_responses[si].get(ai, ""), questions[si]
                 )
-            final_answers_per_sample.append(answers)
+            all_ans = {g_idx: g_answer, **a_answers}
+            all_answers_per_sample.append(all_ans)
 
-            valid_ans = [a for a in answers.values() if a is not None]
-            has_consensus = len(set(valid_ans)) <= 1 if valid_ans else False
-            consensus_flags.append(has_consensus and not failed)
+            valid_ans = [a for a in all_ans.values() if a is not None]
 
-        # Build Judge prompts only for disagreements
+            # Determine consensus type
+            has_full_consensus = (
+                len(set(valid_ans)) <= 1 if valid_ans else False
+            ) and not failed
+
+            guardian_has_support = False
+            if g_answer and not failed:
+                supporters = sum(
+                    1 for a in a_answers.values() if a == g_answer
+                )
+                guardian_has_support = (supporters >= 1)
+
+            if has_full_consensus:
+                consensus_types.append("full")
+            elif guardian_has_support:
+                consensus_types.append("guardian_majority")
+            else:
+                consensus_types.append("disagreement")
+
+        # Build Judge prompts only for real disagreements
         judge_responses = [""] * n
         judge_prompt_list = []
         judge_sample_indices = []
 
         for si in range(n):
-            if consensus_flags[si]:
-                # Consensus: no Judge needed
-                valid_ans = [a for a in final_answers_per_sample[si].values()
-                             if a is not None]
+            g_idx = guardian_indices[si]
+            g_answer = all_answers_per_sample[si].get(g_idx)
+            valid_ans = [a for a in all_answers_per_sample[si].values()
+                         if a is not None]
+
+            if consensus_types[si] == "full":
                 judge_responses[si] = (
                     f"[CONSENSUS] All agents agree. Answer: {valid_ans[0]}"
                 )
+            elif consensus_types[si] == "guardian_majority":
+                judge_responses[si] = (
+                    f"[GUARDIAN-MAJORITY] Guardian supported by auditor(s). "
+                    f"Answer: {g_answer}"
+                )
             elif self.include_judge:
-                g_idx = guardian_indices[si]
+                # Real disagreement → need Judge
                 if guardian_failures[si]:
                     agent_input = [
+                        (self.culture_roles[g_idx]["name"],
+                         guardian_responses[si], True)
+                    ] + [
                         (self.culture_roles[ai]["name"],
-                         final_responses[si].get(ai, ""),
-                         ai == g_idx)
-                        for ai in active_indices_per_sample[si]
+                         auditor_responses[si].get(ai, ""), False)
+                        for ai in auditor_indices_per_sample[si]
                     ]
                     affinity_scores = self._get_affinity_scores(g_idx)
                     prompt = self._build_judge_fallback_prompt(
@@ -1156,27 +1117,25 @@ class HF_CAC_MAS:
                         agent_input, affinity_scores
                     )
                 else:
-                    agent_final_input = [
+                    agent_input = [
+                        (self.culture_roles[g_idx]["name"],
+                         guardian_responses[si], True)
+                    ] + [
                         (self.culture_roles[ai]["name"],
-                         final_responses[si].get(ai, ""),
-                         ai == g_idx)
-                        for ai in active_indices_per_sample[si]
+                         auditor_responses[si].get(ai, ""), False)
+                        for ai in auditor_indices_per_sample[si]
                     ]
-                    agent_feedback_input = [
-                        (self.culture_roles[ai]["name"],
-                         feedbacks[si].get(ai, ""))
-                        for ai in active_indices_per_sample[si]
-                    ]
-                    prompt = self._build_judge_disagreement_prompt(
-                        questions[si], countries[si], g_idx,
-                        agent_final_input, agent_feedback_input
+                    prompt = self._build_judge_prompt(
+                        questions[si], countries[si], g_idx, agent_input
                     )
                 judge_prompt_list.append(prompt)
                 judge_sample_indices.append(si)
 
         # Generate Judge responses in batch (only for disagreements)
         if judge_prompt_list:
-            judge_outputs = self.llm.generate(judge_prompt_list, self.judge_sampling)
+            judge_outputs = self.llm.generate(
+                judge_prompt_list, self.judge_sampling
+            )
             for out, si in zip(judge_outputs, judge_sample_indices):
                 judge_resp = out.outputs[0].text.strip()
                 judge_answer = self._extract_answer(judge_resp, questions[si])
@@ -1184,12 +1143,15 @@ class HF_CAC_MAS:
                 if judge_answer is None:
                     # Fallback: guardian-weighted vote
                     active = active_indices_per_sample[si]
-                    all_ans_list = [final_answers_per_sample[si].get(ai) for ai in active]
-                    guardian_pos = active.index(guardian_indices[si])
+                    all_ans_list = [
+                        all_answers_per_sample[si].get(ai) for ai in active
+                    ]
                     fallback = self._majority_vote_with_guardian_veto(
-                        all_ans_list, guardian_pos
+                        all_ans_list, 0  # Guardian always at position 0
                     )
-                    judge_resp += f"\n[Fallback guardian-weighted vote]: {fallback}"
+                    judge_resp += (
+                        f"\n[Fallback guardian-weighted vote]: {fallback}"
+                    )
 
                 judge_responses[si] = judge_resp
 
@@ -1198,41 +1160,36 @@ class HF_CAC_MAS:
         for si in range(n):
             g_idx = guardian_indices[si]
             failed = guardian_failures[si]
-            has_consensus = consensus_flags[si]
-            active = active_indices_per_sample[si]
 
             formatted = ""
-            sol_num = 0
-            for ai in active:
+            sol_num = 1
+            role_tag = "[GUARDIAN]" if not failed else "[GUARDIAN-FAILED]"
+            formatted += (
+                f"===== Solution {sol_num} {role_tag} =====\n"
+                f"{guardian_responses[si]}\n"
+            )
+
+            for ai in auditor_indices_per_sample[si]:
                 sol_num += 1
-                role_tag = "[GUARDIAN]" if ai == g_idx else "[AUDITOR]"
-                if ai == g_idx and failed:
-                    role_tag = "[GUARDIAN-FAILED]"
-                if self.negotiation_rounds > 0 and ai in final_responses[si]:
-                    resp_text = (
-                        f"[Initial]: {initial_responses[si].get(ai, '')}\n"
-                        f"[Feedback]: {feedbacks[si].get(ai, '')}\n"
-                        f"[Final]: {final_responses[si].get(ai, '')}"
-                    )
-                else:
-                    resp_text = initial_responses[si].get(ai, "")
                 formatted += (
-                    f"===== Solution {sol_num} {role_tag} =====\n"
-                    f"{resp_text}\n"
+                    f"===== Solution {sol_num} [AUDITOR] =====\n"
+                    f"{auditor_responses[si].get(ai, '')}\n"
                 )
 
-            if self.include_judge or has_consensus:
-                sol_num += 1
-                if has_consensus:
-                    judge_mode = "[JUDGE-CONSENSUS]"
-                elif failed:
-                    judge_mode = "[JUDGE-AFFINITY-ARBITRATION]"
-                else:
-                    judge_mode = "[JUDGE-DISAGREEMENT]"
-                formatted += (
-                    f"===== Solution {sol_num} {judge_mode} =====\n"
-                    f"{judge_responses[si]}\n"
-                )
+            sol_num += 1
+            ctype = consensus_types[si]
+            if ctype == "full":
+                judge_mode = "[JUDGE-CONSENSUS]"
+            elif ctype == "guardian_majority":
+                judge_mode = "[JUDGE-GUARDIAN-MAJORITY]"
+            elif failed:
+                judge_mode = "[JUDGE-AFFINITY-ARBITRATION]"
+            else:
+                judge_mode = "[JUDGE-DISAGREEMENT]"
+            formatted += (
+                f"===== Solution {sol_num} {judge_mode} =====\n"
+                f"{judge_responses[si]}\n"
+            )
 
             results.append({
                 "response": formatted,
