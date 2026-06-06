@@ -96,38 +96,48 @@ class HF_CAC_MAS:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
-        # Guardian: lower temperature for precise, authoritative responses
-        # CulturalBench: MAD-inspired settings — shorter outputs, proper token budget
+        # Temperature strategy:
+        # - CulturalBench (factual QA): ALL agents use low temp (0.3) for
+        #   self-consistency style voting. Diversity comes from different
+        #   agent roles/perspectives, not temperature randomness.
+        # - Other tasks: asymmetric temperature for role-based diversity.
         if self.task_type == "culturalbench":
             guardian_temp = 0.3
-            cb_max_tokens = 512  # MAD uses 512; needs room for reasoning
+            auditor_temp = 0.3   # Same as Guardian — self-consistency for factual QA
+            cb_max_tokens = 512
+            self.guardian_sampling = SamplingParams(
+                temperature=guardian_temp,
+                max_tokens=cb_max_tokens,
+                stop=stop_tokens,
+            )
+            self.auditor_sampling = SamplingParams(
+                temperature=auditor_temp,
+                max_tokens=cb_max_tokens,
+                stop=stop_tokens,
+            )
+            self.judge_sampling = SamplingParams(
+                temperature=0.1,
+                max_tokens=cb_max_tokens,
+                stop=stop_tokens,
+            )
         else:
             guardian_temp = 0.5
-            cb_max_tokens = self.max_tokens
-        self.guardian_sampling = SamplingParams(
-            temperature=guardian_temp,
-            max_tokens=cb_max_tokens,
-            stop=stop_tokens,
-        )
-        # Auditor: higher temperature for diverse perspectives (asymmetry)
-        if self.task_type == "culturalbench":
-            auditor_temp = 0.6  # Closer to MAD's 0.6 (was 0.7)
-            aud_max_tokens = 512
-        else:
             auditor_temp = 0.9
-            aud_max_tokens = self.max_tokens
-        self.auditor_sampling = SamplingParams(
-            temperature=auditor_temp,
-            max_tokens=aud_max_tokens,
-            stop=stop_tokens,
-        )
-        # Judge: very low temperature for stable, deterministic arbitration
-        judge_max_tokens = 512 if self.task_type == "culturalbench" else self.max_tokens
-        self.judge_sampling = SamplingParams(
-            temperature=0.1,
-            max_tokens=judge_max_tokens,
-            stop=stop_tokens,
-        )
+            self.guardian_sampling = SamplingParams(
+                temperature=guardian_temp,
+                max_tokens=self.max_tokens,
+                stop=stop_tokens,
+            )
+            self.auditor_sampling = SamplingParams(
+                temperature=auditor_temp,
+                max_tokens=self.max_tokens,
+                stop=stop_tokens,
+            )
+            self.judge_sampling = SamplingParams(
+                temperature=0.1,
+                max_tokens=self.max_tokens,
+                stop=stop_tokens,
+            )
 
     # ------------------------------------------------------------------
     # Home-Field Detection
@@ -829,10 +839,10 @@ class HF_CAC_MAS:
         guardian_output = self.llm.generate([guardian_prompt], self.guardian_sampling)
         guardian_response = guardian_output[0].outputs[0].text.strip()
 
-        # ---- Phase 2: Auditors generate WITH Guardian context (high temp) ----
+        # ---- Phase 2: Auditors generate ----
         auditor_responses = {}  # agent_idx -> response text
-        if self.negotiation_rounds > 0:
-            # Auditors SEE Guardian's response (one-directional influence)
+        if self.negotiation_rounds > 0 and self.task_type != "culturalbench":
+            # Non-culturalbench: Auditors SEE Guardian's response (one-directional)
             auditor_prompts = []
             for ai in auditor_indices:
                 prompt = self._build_auditor_prompt(
@@ -846,7 +856,7 @@ class HF_CAC_MAS:
                 for ai, out in zip(auditor_indices, auditor_outputs):
                     auditor_responses[ai] = out.outputs[0].text.strip()
         else:
-            # Independent mode: Auditors don't see Guardian
+            # Independent mode: Auditors don't see Guardian (CulturalBench always starts independent)
             auditor_prompts = []
             for ai in auditor_indices:
                 prompt = self._build_auditor_prompt(
@@ -859,6 +869,71 @@ class HF_CAC_MAS:
                 )
                 for ai, out in zip(auditor_indices, auditor_outputs):
                     auditor_responses[ai] = out.outputs[0].text.strip()
+
+        # ---- Phase 2.5: MAD-style debate for CulturalBench ----
+        # When negotiation_rounds > 0 AND culturalbench: do feedback + final decision
+        # This lets agents reconsider after seeing others' answers (can fix minority-correct cases)
+        if self.negotiation_rounds > 0 and self.task_type == "culturalbench":
+            # All initial responses (Guardian + Auditors)
+            all_initial = {guardian_idx: guardian_response, **auditor_responses}
+
+            # Stage 2: Each agent gives feedback on others' responses
+            feedback_prompts = []
+            feedback_meta = []  # (agent_idx, is_guardian)
+            for idx in active_indices:
+                is_guard = (idx == guardian_idx)
+                own_resp = all_initial[idx]
+                other_resps = [
+                    (self.culture_roles[j]["name"], all_initial[j])
+                    for j in active_indices if j != idx
+                ]
+                prompt = self._build_feedback_prompt(
+                    idx, question, target_country, is_guard,
+                    own_resp, other_resps
+                )
+                feedback_prompts.append(prompt)
+                feedback_meta.append((idx, is_guard))
+
+            feedback_outputs = self.llm.generate(
+                feedback_prompts, self.auditor_sampling
+            )
+            agent_feedbacks = {}  # idx -> feedback text
+            for out, (idx, _) in zip(feedback_outputs, feedback_meta):
+                agent_feedbacks[idx] = out.outputs[0].text.strip()
+
+            # Stage 3: Each agent makes final decision
+            final_prompts = []
+            final_meta = []
+            for idx in active_indices:
+                is_guard = (idx == guardian_idx)
+                own_resp = all_initial[idx]
+                other_resps = [
+                    (self.culture_roles[j]["name"], all_initial[j])
+                    for j in active_indices if j != idx
+                ]
+                own_fb = agent_feedbacks.get(idx, "")
+                other_fbs = [
+                    (self.culture_roles[j]["name"], agent_feedbacks.get(j, ""))
+                    for j in active_indices if j != idx
+                ]
+                prompt = self._build_final_decision_prompt(
+                    idx, question, target_country, is_guard,
+                    own_resp, other_resps, own_fb, other_fbs
+                )
+                final_prompts.append(prompt)
+                final_meta.append((idx, is_guard))
+
+            final_outputs = self.llm.generate(
+                final_prompts, self.guardian_sampling  # Low temp for final decision
+            )
+
+            # Replace initial responses with final decisions for voting
+            for out, (idx, _) in zip(final_outputs, final_meta):
+                final_text = out.outputs[0].text.strip()
+                if idx == guardian_idx:
+                    guardian_response = final_text
+                else:
+                    auditor_responses[idx] = final_text
 
         # ---- Phase 3: Conditional Judge (only on disagreement) ----
         guardian_answer = self._extract_answer(guardian_response, question)

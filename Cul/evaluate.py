@@ -106,6 +106,12 @@ def load_model(args):
     model = model.to(device)
     model.eval()
 
+    # Reset generation_config to avoid conflicts from adapter's saved config
+    model.generation_config.top_k = None
+    model.generation_config.top_p = None
+    model.generation_config.temperature = None
+    model.generation_config.do_sample = False
+
     return model, tokenizer, device
 
 
@@ -163,6 +169,7 @@ def evaluate_on_test(model, tokenizer, test_samples: list[dict], device,
             do_sample=False,
             temperature=None,
             top_p=None,
+            top_k=None,
             pad_token_id=tokenizer.pad_token_id,
         )
         prompt_len = enc["input_ids"].shape[1]
