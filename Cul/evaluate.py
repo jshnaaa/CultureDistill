@@ -64,10 +64,31 @@ def load_model(args):
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    # Load base model
+    # Check CUDA availability
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available! Cannot run 7B model on CPU.")
+    n_gpus = torch.cuda.device_count()
+    print(f"Available GPUs: {n_gpus}")
+    for gi in range(n_gpus):
+        print(f"  GPU {gi}: {torch.cuda.get_device_name(gi)} "
+              f"({torch.cuda.get_device_properties(gi).total_mem / 1024**3:.1f} GB)")
+
+    # Load base model - auto split across all available GPUs
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+        model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
+        attn_implementation="eager",  # Avoid SWA/sdpa issues with Qwen2.5
     )
+    # Determine the device for input tensors (where the first layer resides)
+    if hasattr(model, "hf_device_map"):
+        first_device = next(iter(set(model.hf_device_map.values())))
+        device = torch.device(f"cuda:{first_device}" if isinstance(first_device, int) else first_device)
+        print(f"  Base model loaded across devices: {set(model.hf_device_map.values())}")
+    else:
+        device = torch.device("cuda:0")
+    print(f"  Input tensor device: {device}")
 
     if args.mode == "sft":
         # Base + SFT LoRA
@@ -102,8 +123,6 @@ def load_model(args):
     else:
         raise ValueError(f"Unknown mode: {args.mode}. Use sft/rl/sft_rl")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
     model.eval()
 
     # Reset generation_config to avoid conflicts from adapter's saved config
@@ -111,6 +130,11 @@ def load_model(args):
     model.generation_config.top_p = None
     model.generation_config.temperature = None
     model.generation_config.do_sample = False
+
+    for gi in range(torch.cuda.device_count()):
+        mem = torch.cuda.memory_allocated(gi) / 1024**3
+        if mem > 0:
+            print(f"  GPU {gi} memory used: {mem:.2f} GB")
 
     return model, tokenizer, device
 
