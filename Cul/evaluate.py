@@ -71,7 +71,7 @@ def load_model(args):
     print(f"Available GPUs: {n_gpus}")
     for gi in range(n_gpus):
         print(f"  GPU {gi}: {torch.cuda.get_device_name(gi)} "
-              f"({torch.cuda.get_device_properties(gi).total_mem / 1024**3:.1f} GB)")
+              f"({torch.cuda.get_device_properties(gi).total_memory / 1024**3:.1f} GB)")
 
     # Load base model - auto split across all available GPUs
     model = AutoModelForCausalLM.from_pretrained(
