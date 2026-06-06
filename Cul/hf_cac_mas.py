@@ -97,10 +97,10 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Guardian: lower temperature for precise, authoritative responses
-        # CulturalBench: slightly lower overall but SAME asymmetry pattern
+        # CulturalBench: MAD-inspired settings — shorter outputs, proper token budget
         if self.task_type == "culturalbench":
             guardian_temp = 0.3
-            cb_max_tokens = 256
+            cb_max_tokens = 512  # MAD uses 512; needs room for reasoning
         else:
             guardian_temp = 0.5
             cb_max_tokens = self.max_tokens
@@ -111,8 +111,8 @@ class HF_CAC_MAS:
         )
         # Auditor: higher temperature for diverse perspectives (asymmetry)
         if self.task_type == "culturalbench":
-            auditor_temp = 0.7
-            aud_max_tokens = 256
+            auditor_temp = 0.6  # Closer to MAD's 0.6 (was 0.7)
+            aud_max_tokens = 512
         else:
             auditor_temp = 0.9
             aud_max_tokens = self.max_tokens
@@ -122,7 +122,7 @@ class HF_CAC_MAS:
             stop=stop_tokens,
         )
         # Judge: very low temperature for stable, deterministic arbitration
-        judge_max_tokens = 256 if self.task_type == "culturalbench" else self.max_tokens
+        judge_max_tokens = 512 if self.task_type == "culturalbench" else self.max_tokens
         self.judge_sampling = SamplingParams(
             temperature=0.1,
             max_tokens=judge_max_tokens,
@@ -187,16 +187,17 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             # CulturalBench: factual cultural knowledge MCQ (4-way)
+            # MAD-inspired: simple, concise prompt — "explain in less than three sentences"
             user = (
-                f"TARGET CULTURE: {target_country}\n\n"
-                f"{question}\n\n"
-                f"As the Host-Culture Guardian for {target_country}:\n"
-                f"1. First understand what the question asks (watch for negations "
-                f"like \"unusual\", \"not uncommon\", \"pair with X\").\n"
-                f"2. Consider ALL four options — do not default to the first one.\n"
-                f"3. Pick the most culturally accurate answer based on your expertise.\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), "
-                f"second line is a brief explanation."
+                f"Task: You will be given a cultural knowledge question about "
+                f"{target_country}. Select the correct option number. Do not make any "
+                f"extra inferences outside of the given context and country. "
+                f"Only align to the country given. "
+                f"Think step by step about the cultural practices of {target_country}, then respond "
+                f"with the correct option number (1, 2, 3, or 4). Explain your answer in less "
+                f"than three sentences.\n\n"
+                f"Question:\n{question}\n"
+                f"Answer (1, 2, 3, or 4):"
             )
         else:
             # NormAD: behavior acceptability (3-way 1/2/3)
@@ -256,18 +257,17 @@ class HF_CAC_MAS:
                     f"Answer: {answer_hint}"
                 )
             elif self.task_type == "culturalbench":
+                # MAD-inspired: concise feedback style
                 user = (
-                    f"TARGET CULTURE: {target_country}\n\n"
-                    f"{question}\n\n"
-                    f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
-                    f"authoritative answer:\n"
-                    f"---\n{guardian_response.strip()}\n---\n\n"
-                    f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
-                    f"1. If you agree with the Guardian, explain WHY from your cultural lens.\n"
-                    f"2. If you disagree, provide specific reasoning — but acknowledge "
-                    f"that the Guardian has primary authority on {target_country}.\n\n"
-                    f"Answer format: first line is ONLY the number (1/2/3/4), "
-                    f"second line is a brief explanation."
+                    f"Task: You are currently discussing the following cultural "
+                    f"knowledge question about {target_country} with the other discussant.\n\n"
+                    f"Question:\n{question}\n"
+                    f"Discussant: {guardian_response.strip()}\n\n"
+                    f"Respond to the discussant by providing any relevant "
+                    f"feedback. If you disagree, explain why with cultural evidence. "
+                    f"Then give your own answer. "
+                    f"Respond in less than three sentences.\n"
+                    f"Answer (1, 2, 3, or 4):"
                 )
             else:
                 user = (
@@ -301,15 +301,17 @@ class HF_CAC_MAS:
                     f"Answer: {answer_hint}"
                 )
             elif self.task_type == "culturalbench":
+                # MAD-inspired: same simple format as Guardian
                 user = (
-                    f"TARGET CULTURE: {target_country}\n\n"
-                    f"{question}\n\n"
-                    f"As a Cross-Cultural Auditor from [{agent_name}] background, "
-                    f"provide your answer for this question about {target_country}. "
-                    f"Acknowledge uncertainty where the target culture differs from "
-                    f"your expertise.\n\n"
-                    f"Answer format: first line is ONLY the number (1/2/3/4), "
-                    f"second line is a brief explanation."
+                    f"Task: You will be given a cultural knowledge question about "
+                    f"{target_country}. Select the correct option number. Do not make any "
+                    f"extra inferences outside of the given context and country. "
+                    f"Only align to the country given. "
+                    f"Think step by step about the cultural practices of {target_country}, then respond "
+                    f"with the correct option number (1, 2, 3, or 4). Explain your answer in less "
+                    f"than three sentences.\n\n"
+                    f"Question:\n{question}\n"
+                    f"Answer (1, 2, 3, or 4):"
                 )
             else:
                 user = (
@@ -361,28 +363,22 @@ class HF_CAC_MAS:
                 f"Answer: <1 or 2>"
             )
         elif self.task_type == "culturalbench":
-            # Show each expert's answer with Guardian designation
+            # MAD-inspired Judge: concise, debate-evidence-focused
             responses_text = ""
             for name, resp, is_guard in agent_responses:
-                role_tag = "HOST-CULTURE GUARDIAN" if is_guard else "Cross-Cultural Auditor"
-                responses_text += f"\n[{name}] ({role_tag}):\n{resp.strip()}\n"
+                label = "Guardian" if is_guard else "Auditor"
+                responses_text += f"  [{name}] ({label}): {resp.strip()}\n"
             user = (
-                f"TARGET CULTURE: {target_country}\n\n"
-                f"{question}\n\n"
-                f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
-                f"expertise most closely matches {target_country}.\n\n"
-                f"Agent responses:\n{responses_text}\n"
-                f"Step 1: First, understand what the question is ACTUALLY asking "
-                f"(watch for negations like \"unusual\", \"not uncommon\").\n"
-                f"Step 2: Determine the correct answer using these rules:\n"
-                f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
-                f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
-                f"- HOWEVER: if ALL or MOST Auditors agree on a DIFFERENT answer than "
-                f"the Guardian, carefully evaluate whether the Guardian's reasoning is "
-                f"actually correct — consensus from multiple perspectives is a strong signal\n"
-                f"- Check for logical errors (e.g., an answer that contradicts the question)\n"
-                f"- Do NOT default to option 1 — evaluate each option on its merits\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation."
+                f"Task: You are a judge responsible for making a final decision "
+                f"based on the opinions of cultural experts about {target_country}. "
+                f"Do NOT make any independent judgments; base your final decision "
+                f"solely on the expert opinions below. Evaluate the factual accuracy "
+                f"of each argument regarding cultural knowledge of {target_country}. "
+                f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
+                f"Question:\n{question}\n\n"
+                f"*** Expert opinions ***\n{responses_text}"
+                f"*** End opinions ***\n\n"
+                f"Final decision (1, 2, 3, or 4):"
             )
         else:
             user = (
@@ -427,7 +423,7 @@ class HF_CAC_MAS:
             if m:
                 return m.group(1)
 
-        m = re.search(rf"Answer\s*:\s*({pattern})", text, re.IGNORECASE)
+        m = re.search(rf"(?:Final\s+decision|Answer)\s*[:\-]\s*({pattern})", text, re.IGNORECASE)
         if m:
             return m.group(1)
         m = re.search(rf"answer\s+is\s*:?\s*({pattern})\b", text, re.IGNORECASE)
@@ -543,8 +539,8 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             user += (
-                f"IMPORTANT: You MUST answer with exactly one number: 1, 2, 3, or 4.\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), second line is brief explanation."
+                f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
+                f"Final decision (1, 2, 3, or 4):"
             )
         else:
             user += (
@@ -762,21 +758,19 @@ class HF_CAC_MAS:
 
         if self.task_type == "culturalbench":
             user = (
-                f"TARGET CULTURE: {target_country}\n\n"
-                f"{question}\n\n"
-                f"You are a judge resolving a disagreement between cultural experts "
-                f"about this question. The HOST-CULTURE GUARDIAN is [{guardian_name}] "
-                f"— their expertise most closely matches {target_country}.\n\n"
-                f"*** Debate feedback ***\n{feedback_text}\n"
-                f"*** Final decisions ***\n{debate_text}\n"
-                f"Rules:\n"
-                f"- Base your decision on the debate evidence, not independent judgment\n"
-                f"- Give HIGHER WEIGHT to the Guardian's cultural claims\n"
-                f"- BUT if the other expert(s) provide strong counter-evidence, "
-                f"consider it carefully\n"
-                f"- Evaluate the factual accuracy of each argument\n\n"
-                f"Answer format: first line is ONLY the number (1/2/3/4), "
-                f"second line is brief explanation."
+                f"Task: You are a judge responsible for making a final decision "
+                f"based on the debate history between cultural experts. They have "
+                f"debated the following cultural knowledge question about {target_country}. "
+                f"Do NOT make any independent judgments; base your final decision "
+                f"solely on the debate. Evaluate the factual accuracy of each argument "
+                f"regarding cultural knowledge of {target_country}. "
+                f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
+                f"Question:\n{question}\n\n"
+                f"*** Debate starts ***\n"
+                f"{feedback_text}"
+                f"{debate_text}"
+                f"*** Debate ends ***\n\n"
+                f"Final decision (1, 2, 3, or 4):"
             )
         else:
             user = (
