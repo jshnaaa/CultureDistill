@@ -145,6 +145,8 @@ def evaluate_on_test(model, tokenizer, test_samples: list[dict], device,
     results = []
 
     n_samples = len(test_samples) if max_samples is None else min(max_samples, len(test_samples))
+    print(f"  Total samples to evaluate: {n_samples}")
+    print(f"  Starting generation (first sample may take 30-60s due to CUDA warmup)...")
 
     for i, obj in enumerate(test_samples[:n_samples]):
         query = obj["query"]
@@ -175,6 +177,9 @@ def evaluate_on_test(model, tokenizer, test_samples: list[dict], device,
         prompt_len = enc["input_ids"].shape[1]
         response = tokenizer.decode(outs[0][prompt_len:], skip_special_tokens=True)
 
+        if i == 0:
+            print(f"  First sample generated successfully (warmup done).")
+
         # Extract answer
         pred = extract_answer(response)
         is_correct = (pred == gold)
@@ -195,7 +200,7 @@ def evaluate_on_test(model, tokenizer, test_samples: list[dict], device,
         })
 
         # Progress
-        if (i + 1) % 50 == 0:
+        if (i + 1) % 10 == 0:
             print(f"  Progress: {i+1}/{n_samples} "
                   f"(acc={correct/total:.4f})")
 
