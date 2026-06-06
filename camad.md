@@ -74,6 +74,17 @@ python Cul/sft/train_sft_weighted.py \
     --max_samples 0
 ```
 
+评估：
+
+```bash
+python Cul/evaluate.py \
+    --mode sft \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --sft_adapter /root/autodl-tmp/model/qwen/normad_camad_sft/best \
+    --output_json /autodl-fs/data/model/qwen/eval_sft_only.json
+```
+
 ---
 
 ## 4. 开卷式步骤标注
