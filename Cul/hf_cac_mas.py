@@ -257,16 +257,15 @@ class HF_CAC_MAS:
                     f"Answer: {answer_hint}"
                 )
             elif self.task_type == "culturalbench":
-                # MAD-inspired: concise feedback style
+                # MAD-inspired: concise feedback + clear answer at end
                 user = (
                     f"Task: You are currently discussing the following cultural "
                     f"knowledge question about {target_country} with the other discussant.\n\n"
                     f"Question:\n{question}\n"
                     f"Discussant: {guardian_response.strip()}\n\n"
-                    f"Respond to the discussant by providing any relevant "
-                    f"feedback. If you disagree, explain why with cultural evidence. "
-                    f"Then give your own answer. "
-                    f"Respond in less than three sentences.\n"
+                    f"Based on the above discussion, critically think and make "
+                    f"your final decision. Respond with the correct option number "
+                    f"(1, 2, 3, or 4).\n"
                     f"Answer (1, 2, 3, or 4):"
                 )
             else:
@@ -416,13 +415,30 @@ class HF_CAC_MAS:
             max_choice = 3
         pattern = f"[1-{max_choice}]"
 
-        # For culturalbench (answer-first format): check first line first
+        # For culturalbench: use MAD-style extraction (same as mad_common.extract_answer_mcq)
         if self.task_type == "culturalbench":
-            first_line = text.strip().split("\n")[0].strip()
-            m = re.match(rf"^({pattern})$", first_line)
+            tl = text.strip()
+            # Pattern 1: "Answer: 3" or "Final decision: 2" or "answer is 1"
+            m = re.search(rf'(?:Final\s+decision|Answer)\s*(?:is|[:\-])\s*({pattern})\b', tl, re.IGNORECASE)
             if m:
                 return m.group(1)
+            # Pattern 2: standalone single digit at end ("...so 3.")
+            m = re.search(rf'\b({pattern})\s*\.?\s*$', tl)
+            if m:
+                return m.group(1)
+            # Pattern 3: first line is ONLY a digit (no trailing text)
+            first_line = tl.split("\n")[0].strip().rstrip(".")
+            if re.match(rf'^({pattern})$', first_line):
+                return first_line
+            # Pattern 4: "option X"
+            m = re.search(rf'option\s*({pattern})\b', tl, re.IGNORECASE)
+            if m:
+                return m.group(1)
+            # Pattern 5: last digit in the text (fallback)
+            matches = re.findall(rf'\b({pattern})\b', tl)
+            return matches[-1] if matches else None
 
+        # Non-culturalbench tasks
         m = re.search(rf"(?:Final\s+decision|Answer)\s*[:\-]\s*({pattern})", text, re.IGNORECASE)
         if m:
             return m.group(1)
@@ -858,19 +874,29 @@ class HF_CAC_MAS:
         guardian_failed = self._detect_guardian_failure(guardian_response)
 
         # Determine consensus levels:
-        # Level 1: Full consensus (all agents agree)
-        # Level 2: Guardian-majority (Guardian + at least one Auditor agree)
-        # Level 3: Real disagreement → invoke Judge
-        guardian_has_support = False
-        if guardian_answer and not guardian_failed:
-            supporters = sum(
-                1 for a in auditor_answers.values() if a == guardian_answer
-            )
-            guardian_has_support = (supporters >= 1)
+        # For culturalbench (simple factual QA): use pure majority vote
+        # For other tasks: use Guardian-weighted consensus
+        if self.task_type == "culturalbench":
+            # Pure majority vote — no Guardian privilege for factual QA
+            from collections import Counter as _Counter
+            vote_counts = _Counter(a for a in valid_answers if a is not None)
+            majority_answer = vote_counts.most_common(1)[0][0] if vote_counts else None
+            majority_count = vote_counts.most_common(1)[0][1] if vote_counts else 0
+            total_voters = len(valid_answers)
 
-        has_full_consensus = (
-            len(set(valid_answers)) <= 1 if valid_answers else False
-        ) and not guardian_failed
+            has_full_consensus = (len(set(valid_answers)) <= 1) if valid_answers else False
+            # Majority = more than half agree (2/3 or 3/3)
+            guardian_has_support = (majority_count > total_voters / 2) and not has_full_consensus
+        else:
+            guardian_has_support = False
+            if guardian_answer and not guardian_failed:
+                supporters = sum(
+                    1 for a in auditor_answers.values() if a == guardian_answer
+                )
+                guardian_has_support = (supporters >= 1)
+            has_full_consensus = (
+                len(set(valid_answers)) <= 1 if valid_answers else False
+            ) and not guardian_failed
 
         judge_response = ""
 
@@ -880,11 +906,17 @@ class HF_CAC_MAS:
                 f"[CONSENSUS] All agents agree. Answer: {valid_answers[0]}"
             )
         elif guardian_has_support:
-            # Guardian + at least one Auditor agree → accept Guardian
-            judge_response = (
-                f"[GUARDIAN-MAJORITY] Guardian supported by auditor(s). "
-                f"Answer: {guardian_answer}"
-            )
+            # Majority agrees → accept majority answer
+            if self.task_type == "culturalbench":
+                judge_response = (
+                    f"[GUARDIAN-MAJORITY] Majority vote ({majority_count}/{total_voters}). "
+                    f"Answer: {majority_answer}"
+                )
+            else:
+                judge_response = (
+                    f"[GUARDIAN-MAJORITY] Guardian supported by auditor(s). "
+                    f"Answer: {guardian_answer}"
+                )
         elif self.include_judge:
             # Real disagreement → invoke Judge
             if guardian_failed:
@@ -1035,6 +1067,8 @@ class HF_CAC_MAS:
         guardian_failures = []
         consensus_types = []  # "full", "guardian_majority", "disagreement"
         all_answers_per_sample = []
+        majority_answers = [None] * n  # For culturalbench majority vote
+        majority_counts = [0] * n
 
         for si in range(n):
             g_idx = guardian_indices[si]
@@ -1056,16 +1090,29 @@ class HF_CAC_MAS:
             valid_ans = [a for a in all_ans.values() if a is not None]
 
             # Determine consensus type
-            has_full_consensus = (
-                len(set(valid_ans)) <= 1 if valid_ans else False
-            ) and not failed
+            if self.task_type == "culturalbench":
+                # Pure majority vote — no Guardian privilege for factual QA
+                from collections import Counter as _Counter
+                vote_counts = _Counter(a for a in valid_ans if a is not None)
+                maj_ans = vote_counts.most_common(1)[0][0] if vote_counts else None
+                maj_cnt = vote_counts.most_common(1)[0][1] if vote_counts else 0
+                total_voters = len(valid_ans)
+                majority_answers[si] = maj_ans
+                majority_counts[si] = maj_cnt
 
-            guardian_has_support = False
-            if g_answer and not failed:
-                supporters = sum(
-                    1 for a in a_answers.values() if a == g_answer
-                )
-                guardian_has_support = (supporters >= 1)
+                has_full_consensus = (len(set(valid_ans)) <= 1) if valid_ans else False
+                guardian_has_support = (maj_cnt > total_voters / 2) and not has_full_consensus
+            else:
+                has_full_consensus = (
+                    len(set(valid_ans)) <= 1 if valid_ans else False
+                ) and not failed
+
+                guardian_has_support = False
+                if g_answer and not failed:
+                    supporters = sum(
+                        1 for a in a_answers.values() if a == g_answer
+                    )
+                    guardian_has_support = (supporters >= 1)
 
             if has_full_consensus:
                 consensus_types.append("full")
@@ -1090,10 +1137,16 @@ class HF_CAC_MAS:
                     f"[CONSENSUS] All agents agree. Answer: {valid_ans[0]}"
                 )
             elif consensus_types[si] == "guardian_majority":
-                judge_responses[si] = (
-                    f"[GUARDIAN-MAJORITY] Guardian supported by auditor(s). "
-                    f"Answer: {g_answer}"
-                )
+                if self.task_type == "culturalbench":
+                    judge_responses[si] = (
+                        f"[GUARDIAN-MAJORITY] Majority vote ({majority_counts[si]}/{len(valid_ans)}). "
+                        f"Answer: {majority_answers[si]}"
+                    )
+                else:
+                    judge_responses[si] = (
+                        f"[GUARDIAN-MAJORITY] Guardian supported by auditor(s). "
+                        f"Answer: {g_answer}"
+                    )
             elif self.include_judge:
                 # Real disagreement → need Judge
                 if guardian_failures[si]:

@@ -455,14 +455,6 @@ deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
 #### 6.1.3 评估的运行命令
 
 ```bash
-# 评估 SFT 模型
-python Cul/evaluate.py \
-    --mode sft \
-    --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --output_json /autodl-fs/data/model/qwen/eval_sft.json
-
 # 评估 RL-only 模型
 python Cul/evaluate.py \
     --mode rl \

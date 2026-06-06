@@ -116,8 +116,13 @@ shutdown
 
 ```bash
 python Cul/split_data.py \
-    --input /autodl-fs/data/qwen/normad_hf_cac_6agents.jsonl \
+    --input /autodl-fs/data/qwen/normad_hf_cac_inference_20260525_101428.jsonl \
     --output /autodl-fs/data/qwen/normad_splits.pkl \
+    --seed 42
+    
+python Cul/split_data.py \
+    --input /autodl-fs/data/llama/normad_hf_cac_inference_20260527_200952.jsonl \
+    --output /autodl-fs/data/llama/normad_splits.pkl \
     --seed 42
 ```
 
