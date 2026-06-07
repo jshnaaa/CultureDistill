@@ -94,7 +94,7 @@ class MAGDi(torch.nn.Module):
 
 class MAGDiTrainer(Trainer):
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
       
         output = model(pos_input_ids=inputs["pos_input_ids"],
                        pos_attention_mask=inputs["pos_attention_mask"],
