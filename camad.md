@@ -59,7 +59,7 @@ accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
 accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
     --model_name llama \
     --data_pkl /autodl-fs/data/qwen/culturalBench_splits.pkl \
-    --output_dir /root/autodl-tmp/qwen/llama/culturalBench_camad_sft \
+    --output_dir /root/autodl-tmp/model/qwen/culturalBench_camad_sft \
     --alpha 2.0 \
     --epochs 5 \
     --batch_size 4 \
