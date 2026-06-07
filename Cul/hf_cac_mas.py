@@ -97,28 +97,32 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Temperature strategy:
-        # - CulturalBench (factual QA): ALL agents use low temp (0.3) for
-        #   self-consistency style voting. Diversity comes from different
-        #   agent roles/perspectives, not temperature randomness.
+        # - CulturalBench (factual QA): MAD-style asymmetric temperatures.
+        #   Guardian=0.3 (precise), Auditors=0.6 (diverse perspectives).
+        #   Diversity + Debate is the key — NOT self-consistency.
+        #   top_p=0.95 matches MAD's settings.
         # - Other tasks: asymmetric temperature for role-based diversity.
         if self.task_type == "culturalbench":
             guardian_temp = 0.3
-            auditor_temp = 0.3   # Same as Guardian — self-consistency for factual QA
+            auditor_temp = 0.6   # MAD's Agent2 temp — encourage diverse perspectives
             cb_max_tokens = 512
             self.guardian_sampling = SamplingParams(
                 temperature=guardian_temp,
                 max_tokens=cb_max_tokens,
                 stop=stop_tokens,
+                top_p=0.95,
             )
             self.auditor_sampling = SamplingParams(
                 temperature=auditor_temp,
                 max_tokens=cb_max_tokens,
                 stop=stop_tokens,
+                top_p=0.95,
             )
             self.judge_sampling = SamplingParams(
-                temperature=0.1,
+                temperature=0.3,  # MAD uses same as Agent1 for Judge
                 max_tokens=cb_max_tokens,
                 stop=stop_tokens,
+                top_p=0.95,
             )
         else:
             guardian_temp = 0.5

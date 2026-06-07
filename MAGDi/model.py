@@ -40,6 +40,10 @@ class MAGDi(torch.nn.Module):
         graph_loader = DataLoader(graph, batch_size=len(graph), shuffle=False, pin_memory=False, num_workers=0)
         graph_batch = next(iter(graph_loader))
         
+        # Move graph data to the same device as GCN parameters
+        gcn_device = next(self.gcn.parameters()).device
+        graph_batch = graph_batch.to(gcn_device)
+        
         pos_output = self.decoder(input_ids=pos_input_ids,
                              attention_mask=pos_attention_mask,
                              labels=pos_labels,
@@ -73,6 +77,11 @@ class MAGDi(torch.nn.Module):
             neg_mask = neg_mask.to(pos_seq_emb.device)
             pos_seq_emb = pos_seq_emb[neg_mask]
             neg_seq_emb = neg_seq_emb[neg_mask]
+        
+        # Move embeddings to MLP device (may differ from decoder's last layer device)
+        mlp_device = next(self.mlp1.parameters()).device
+        pos_seq_emb = pos_seq_emb.to(mlp_device)
+        neg_seq_emb = neg_seq_emb.to(mlp_device)
             
         pos_h = torch.relu(self.mlp1(pos_seq_emb))
         pos_score = self.mlp2(pos_h)

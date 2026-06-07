@@ -418,17 +418,26 @@ if __name__ == '__main__':
     
     # Device mapping
     print("Setting up device mapping...")
+    # Detect the correct decoder layer class name for the loaded model
+    no_split_classes = ["GCN"]
+    for module in model.decoder.modules():
+        cls_name = type(module).__name__
+        if "DecoderLayer" in cls_name and cls_name not in no_split_classes:
+            no_split_classes.append(cls_name)
+            break
+    print(f"  no_split_module_classes: {no_split_classes}")
+    
     max_memory = get_balanced_memory(
         model,
         max_memory=None,
-        no_split_module_classes=["GCN", "MistralDecoderLayer"],
+        no_split_module_classes=no_split_classes,
         dtype='float16',
         low_zero=False,
     )
     device_map = infer_auto_device_map(
         model,
         max_memory=max_memory,
-        no_split_module_classes=["GCN", "MistralDecoderLayer"],
+        no_split_module_classes=no_split_classes,
         dtype='float16'
     )
     model = dispatch_model(model, device_map=device_map)
