@@ -83,7 +83,7 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
-  --dataset_name culturalbench \
+  --input_file /autodl-fs/data/culturalBench_mas.json \
   --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_configB.jsonl \
   --config_path Cul/configs/hf_cac_config_culturalbench.yaml \
   --model_name qwen \
