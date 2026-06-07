@@ -35,6 +35,17 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
+    --model_name llama \
+    --data_pkl /autodl-fs/data/llama/normad_splits.pkl \
+    --output_dir /root/autodl-tmp/model/llama/normad_camad_sft \
+    --alpha 2.0 \
+    --epochs 5 \
+    --batch_size 4 \
+    --lr 2e-4 \
+    --lora_r 32 \
+    --eval_every_n_epochs 1
+
+accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
     --model_name qwen \
     --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
     --output_dir /root/autodl-tmp/model/qwen/normad_camad_sft \

@@ -47,6 +47,7 @@ import argparse
 import pickle
 from pathlib import Path
 from typing import Optional
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -70,6 +71,15 @@ MODEL_ALIASES = {
 
 MAX_SEQ_LEN = 2048
 IGNORE_INDEX = -100
+
+# System prompt for cultural knowledge tasks — ensures consistent behavior
+# across different base models (especially important for LLaMA which is
+# sensitive to missing system prompts)
+SYSTEM_PROMPT = (
+    "You are a helpful assistant with expertise in cross-cultural knowledge. "
+    "When given a cultural question with multiple choices, reason step by step "
+    "about the cultural context, then provide your answer in the format: Answer: X"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +390,7 @@ class WeightedSFTDataset(Dataset):
             target_text = s["dialogue"]
 
             messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": input_text},
                 {"role": "assistant", "content": target_text},
             ]
@@ -387,7 +398,10 @@ class WeightedSFTDataset(Dataset):
                 messages, tokenize=False, add_generation_prompt=False
             )
             prompt_only = tokenizer.apply_chat_template(
-                [{"role": "user", "content": input_text}],
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": input_text},
+                ],
                 tokenize=False, add_generation_prompt=True,
             )
             self.records.append((full_text, prompt_only, target_text))
@@ -431,10 +445,10 @@ class WeightedSFTDataset(Dataset):
         }
 
 
-def collate_fn(batch: list[dict]) -> dict:
+def collate_fn(batch: list[dict], pad_token_id: int = 0) -> dict:
     """Pad sequences to max length in batch."""
     max_len = max(b["input_ids"].shape[0] for b in batch)
-    pad_id = 0
+    pad_id = pad_token_id
 
     input_ids_list, mask_list, label_list = [], [], []
     loss_mask_list, loss_weight_list = [], []
@@ -544,7 +558,10 @@ def validate(model, tokenizer, val_samples: list[dict], accelerator: Accelerator
         gold = str(obj["gt"]).strip()
 
         input_text = f"[{country}]\n{query}"
-        messages = [{"role": "user", "content": input_text}]
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": input_text},
+        ]
         prompt = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
@@ -677,7 +694,7 @@ def train(args):
         train_ds,
         batch_size=args.batch_size,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=partial(collate_fn, pad_token_id=tokenizer.pad_token_id),
         num_workers=2,
         pin_memory=True,
     )

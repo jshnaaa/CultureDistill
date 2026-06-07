@@ -52,6 +52,13 @@ MODEL_ALIASES = {
 MAX_SEQ_LEN = 2048
 MAX_NEW_TOKENS = 512
 
+# System prompt — must match training (train_sft_weighted.py)
+SYSTEM_PROMPT = (
+    "You are a helpful assistant with expertise in cross-cultural knowledge. "
+    "When given a cultural question with multiple choices, reason step by step "
+    "about the cultural context, then provide your answer in the format: Answer: X"
+)
+
 
 def load_model(args):
     """Load model according to the specified mode."""
@@ -177,9 +184,12 @@ def evaluate_on_test(model, tokenizer, test_samples: list[dict], device,
         country = obj.get("country", "unknown")
         gold = str(obj["gt"]).strip()
 
-        # Build prompt
+        # Build prompt (must include system prompt to match training format)
         input_text = f"[{country}]\n{query}"
-        messages = [{"role": "user", "content": input_text}]
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": input_text},
+        ]
         prompt = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
