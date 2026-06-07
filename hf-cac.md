@@ -124,6 +124,16 @@ python Cul/split_data.py \
     --input /autodl-fs/data/llama/normad_hf_cac_inference_20260527_200952.jsonl \
     --output /autodl-fs/data/llama/normad_splits.pkl \
     --seed 42
+
+python Cul/split_data.py \
+    --input /autodl-fs/data/llama/culturalBench_hf_cac_3agents_20260606_192326.jsonl \
+    --output /autodl-fs/data/llama/culturalBench_splits.pkl \
+    --seed 42
+
+python Cul/split_data.py \
+    --input /autodl-fs/data/qwen/culturalBench_hf_cac_3agents_20260606_192326.jsonl \
+    --output /autodl-fs/data/qwen/culturalBench_splits.pkl \
+    --seed 42
 ```
 
 ### 2.5 输出数据格式
