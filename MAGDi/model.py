@@ -129,14 +129,19 @@ class MAGDi(torch.nn.Module):
 class MAGDiTrainer(Trainer):
     """
     Custom Trainer for MAGDi that handles multi-device model properly.
+    Prevents Trainer from wrapping model in DataParallel (we use device_map).
     """
 
     def _move_model_to_device(self, model, device):
         """Override to prevent Trainer from moving our multi-device model."""
         pass  # Model components are already on correct devices
 
+    def _wrap_model(self, model, training=True, dataloader=None):
+        """Override to prevent Trainer from wrapping model in DataParallel/DDP."""
+        return model
+
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        # Move tensor inputs to the decoder's input device (first GPU in device_map)
+        # Move tensor inputs to the decoder's input device
         device = next(model.decoder.parameters()).device
         tensor_inputs = {}
         for k, v in inputs.items():
