@@ -81,6 +81,18 @@ class MAGDi(torch.nn.Module):
                              labels=pos_labels,
                              output_hidden_states=True)
         nll_loss = pos_output.loss
+        
+        # Debug: print loss components on first few steps
+        if not hasattr(self, '_debug_count'):
+            self._debug_count = 0
+        if self._debug_count < 3:
+            print(f"\n[DEBUG step {self._debug_count}] nll_loss={nll_loss.item():.6f}, "
+                  f"requires_grad={nll_loss.requires_grad}, "
+                  f"pos_input_ids shape={pos_input_ids.shape}, "
+                  f"pos_labels unique={pos_labels.unique()[:10].tolist()}, "
+                  f"pos_labels -100 count={(pos_labels == -100).sum().item()}/{pos_labels.numel()}")
+            self._debug_count += 1
+        
         pos_seq_emb = self._weighted_pool(pos_output.hidden_states[-1], pos_attention_mask)
 
         # === Negative forward (NO gradient — saves ~40% compute) ===
@@ -120,9 +132,14 @@ class MAGDi(torch.nn.Module):
         node_loss = F.cross_entropy(logits, graph_batch.y.to(logits.device))
         
         # Combine losses on aux_device in float32
-        nll_loss = nll_loss.float().to(self.aux_device)
+        nll_loss = nll_loss.float()
         
         total_loss = self.alpha * nll_loss + self.beta * node_loss + self.gamma * mr_loss
+        
+        if self._debug_count <= 3:
+            print(f"[DEBUG] node_loss={node_loss.item():.6f}, mr_loss={mr_loss.item():.6f}, "
+                  f"total_loss={total_loss.item():.6f}, requires_grad={total_loss.requires_grad}")
+        
         return total_loss
 
 
@@ -141,21 +158,17 @@ class MAGDiTrainer(Trainer):
         return model
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        # Move tensor inputs to the decoder's input device
-        device = next(model.decoder.parameters()).device
-        tensor_inputs = {}
-        for k, v in inputs.items():
-            if isinstance(v, torch.Tensor):
-                tensor_inputs[k] = v.to(device)
-            else:
-                tensor_inputs[k] = v
+        # Move tensor inputs to the model's device
+        device = model.aux_device
         
-        loss = model(pos_input_ids=tensor_inputs["pos_input_ids"],
-                     pos_attention_mask=tensor_inputs["pos_attention_mask"],
-                     pos_labels=tensor_inputs["pos_labels"],
-                     neg_input_ids=tensor_inputs["neg_input_ids"],
-                     neg_attention_mask=tensor_inputs["neg_attention_mask"],
-                     neg_labels=tensor_inputs["neg_labels"],
-                     graph=tensor_inputs["graph"])
+        loss = model(
+            pos_input_ids=inputs["pos_input_ids"].to(device),
+            pos_attention_mask=inputs["pos_attention_mask"].to(device),
+            pos_labels=inputs["pos_labels"].to(device),
+            neg_input_ids=inputs["neg_input_ids"].to(device),
+            neg_attention_mask=inputs["neg_attention_mask"].to(device),
+            neg_labels=inputs["neg_labels"].to(device),
+            graph=inputs["graph"]
+        )
 
         return loss

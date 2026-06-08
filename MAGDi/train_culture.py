@@ -405,14 +405,14 @@ if __name__ == '__main__':
         aux_device="cuda:0"
     )
     
-    # Load decoder with device_map="auto" for multi-GPU distribution
-    print("Loading decoder with device_map='auto'...")
+    # Load decoder on a single GPU (7B fp16 ≈ 14GB, fits in one 48GB card)
+    # Avoid device_map="auto" which uses accelerate hooks that break gradient flow
+    print("Loading decoder on cuda:0...")
     decoder = AutoModelForCausalLM.from_pretrained(
         model_path,
         trust_remote_code=True,
         torch_dtype=torch.float16,
-        device_map="auto"
-    )
+    ).to("cuda:0")
     
     # Reshape node embeddings
     node_embeddings = node_embeddings.reshape(
