@@ -54,9 +54,7 @@ from peft import (
 )
 from model import MAGDi, MAGDiTrainer
 from data_utils import MAGDiDataCollator
-from transformers import AutoTokenizer
-from accelerate import dispatch_model, infer_auto_device_map
-from accelerate.utils import get_balanced_memory
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 np.random.seed(42)
 
@@ -326,15 +324,15 @@ if __name__ == '__main__':
     # Training
     parser.add_argument('--num_train_samples', type=int, default=0,
                         help="Number of training samples (0 = use all)")
-    parser.add_argument('--num_epochs', type=int, default=10,
+    parser.add_argument('--num_epochs', type=int, default=5,
                         help="Number of training epochs")
-    parser.add_argument('--lr', type=float, default=5e-6,
+    parser.add_argument('--lr', type=float, default=2e-5,
                         help="Learning rate")
-    parser.add_argument('--batch_size', type=int, default=4,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help="Per-device training batch size")
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=4,
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=2,
                         help="Gradient accumulation steps")
-    parser.add_argument('--warmup_steps', type=int, default=100,
+    parser.add_argument('--warmup_steps', type=int, default=50,
                         help="Warmup steps")
     
     # LoRA
@@ -394,6 +392,8 @@ if __name__ == '__main__':
     model_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     gcn_in_channels = model_config.hidden_size
     print(f"\nInitializing MAGDi model (hidden_size={gcn_in_channels})...")
+    
+    # Create MAGDi shell (GCN + MLPs on cuda:0)
     model = MAGDi(
         model_name=model_path,
         gcn_in_channels=gcn_in_channels,
@@ -401,12 +401,22 @@ if __name__ == '__main__':
         gcn_out_channels=args.gcn_out_channels,
         alpha=args.alpha,
         beta=args.beta,
-        gamma=args.gamma
+        gamma=args.gamma,
+        aux_device="cuda:0"
+    )
+    
+    # Load decoder with device_map="auto" for multi-GPU distribution
+    print("Loading decoder with device_map='auto'...")
+    decoder = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        torch_dtype=torch.float16,
+        device_map="auto"
     )
     
     # Reshape node embeddings
     node_embeddings = node_embeddings.reshape(
-        num_train_samples, max_node_num, model.decoder.config.hidden_size
+        num_train_samples, max_node_num, gcn_in_channels
     )
     node_embeddings = torch.tensor(node_embeddings)
     node_embeddings = node_embeddings[:num_train_samples, :, :]
@@ -420,38 +430,10 @@ if __name__ == '__main__':
     )
     tokenizer.pad_token_id = tokenizer.eos_token_id
     
-    # Device mapping
-    print("Setting up device mapping...")
-    # Detect the correct decoder layer class name for the loaded model
-    no_split_classes = ["GCN"]
-    for module in model.decoder.modules():
-        cls_name = type(module).__name__
-        if "DecoderLayer" in cls_name and cls_name not in no_split_classes:
-            no_split_classes.append(cls_name)
-            break
-    print(f"  no_split_module_classes: {no_split_classes}")
-    
-    max_memory = get_balanced_memory(
-        model,
-        max_memory=None,
-        no_split_module_classes=no_split_classes,
-        dtype='float16',
-        low_zero=False,
-    )
-    device_map = infer_auto_device_map(
-        model,
-        max_memory=max_memory,
-        no_split_module_classes=no_split_classes,
-        dtype='float16'
-    )
-    model = dispatch_model(model, device_map=device_map)
-    
-    # Freeze base model, apply LoRA
+    # Apply LoRA to decoder BEFORE assigning to MAGDi
     print("Applying LoRA...")
-    for param in model.decoder.parameters():
-        param.requires_grad = False
-        if param.ndim == 1:
-            param.data = param.data.to(torch.float32)
+    decoder.gradient_checkpointing_enable()
+    decoder.enable_input_require_grads()
     
     config = LoraConfig(
         r=args.lora_r,
@@ -461,11 +443,12 @@ if __name__ == '__main__':
         bias="none",
         task_type="CAUSAL_LM"
     )
+    decoder = get_peft_model(decoder, config)
+    decoder.print_trainable_parameters()
     
-    model.decoder.gradient_checkpointing_enable()
-    model.decoder.enable_input_require_grads()
-    model.decoder = get_peft_model(model.decoder, config)
-    model.decoder.lm_head = CastOutputToFloat(model.decoder.lm_head)
+    # Assign decoder to MAGDi model and initialize MLPs
+    model.set_decoder(decoder, gcn_in_channels)
+    print(f"  Decoder device_map: {decoder.hf_device_map if hasattr(decoder, 'hf_device_map') else 'N/A'}")
     
     # Prepare training data
     print("\nPreparing training batch...")
@@ -487,21 +470,26 @@ if __name__ == '__main__':
     
     # Train
     print(f"\nStarting training for {args.num_epochs} epochs...")
+    
+    training_args = transformers.TrainingArguments(
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        warmup_steps=args.warmup_steps,
+        num_train_epochs=args.num_epochs,
+        learning_rate=args.lr,
+        fp16=False,  # Decoder already loaded in float16; avoid GradScaler conflicts
+        logging_steps=10,
+        output_dir='outputs',
+        remove_unused_columns=False,
+        save_strategy="no",
+        dataloader_pin_memory=False,
+        dataloader_num_workers=2,
+    )
+    
     trainer = MAGDiTrainer(
         model=model,
         train_dataset=training_batch,
-        args=transformers.TrainingArguments(
-            per_device_train_batch_size=args.batch_size,
-            gradient_accumulation_steps=args.gradient_accumulation_steps,
-            warmup_steps=args.warmup_steps,
-            num_train_epochs=args.num_epochs,
-            learning_rate=args.lr,
-            fp16=True,
-            logging_steps=10,
-            output_dir='outputs',
-            remove_unused_columns=False,
-            save_strategy="no"
-        ),
+        args=training_args,
         data_collator=MAGDiDataCollator(tokenizer)
     )
     
