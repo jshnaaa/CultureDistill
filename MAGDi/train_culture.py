@@ -389,10 +389,14 @@ if __name__ == '__main__':
     print(f"  Training samples: {num_train_samples}")
     
     # Initialize model
-    print("\nInitializing MAGDi model...")
+    # Auto-detect hidden_size from model config to set GCN input dimension
+    from transformers import AutoConfig
+    model_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    gcn_in_channels = model_config.hidden_size
+    print(f"\nInitializing MAGDi model (hidden_size={gcn_in_channels})...")
     model = MAGDi(
         model_name=model_path,
-        gcn_in_channels=args.gcn_in_channels,
+        gcn_in_channels=gcn_in_channels,
         gcn_hidden_channels=args.gcn_hidden_channels,
         gcn_out_channels=args.gcn_out_channels,
         alpha=args.alpha,

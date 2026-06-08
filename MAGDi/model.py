@@ -26,7 +26,7 @@ class MAGDi(torch.nn.Module):
                  gcn_out_channels, alpha, beta, gamma):
         super(MAGDi, self).__init__()
         self.decoder = AutoModelForCausalLM.from_pretrained(
-            model_name, cache_dir='/nas-ssd2/cychen/models')
+            model_name, trust_remote_code=True, torch_dtype=torch.float16)
         self.gcn = GCN(gcn_in_channels, gcn_hidden_channels, gcn_out_channels)
         self.mlp1 = Linear(self.decoder.config.hidden_size, self.decoder.config.hidden_size)
         self.mlp2 = Linear(self.decoder.config.hidden_size, 1)
