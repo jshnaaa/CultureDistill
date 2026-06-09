@@ -100,6 +100,17 @@ python Cul/generate_hf_cac_data.py \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
       --include_judge true --num_agents 6
+
+# --- BLEnD 数据集（日常文化知识，4-way MCQ，15国/地区） ---
+# 使用 BLEnD 专用配置（扩展了 Azerbaijan、Assam 等 region_keywords）
+python Cul/generate_hf_cac_data.py \
+      --input_file /autodl-fs/data/blend_mas_after.json \
+      --output_file /autodl-fs/data/qwen/blend_hf_cac_6agents.jsonl \
+      --config_path Cul/configs/hf_cac_config_blend.yaml \
+      --model_name qwen \
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 0 --negotiation_rounds 1 \
+      --include_judge true --num_agents 3
 shutdown
 ```
 
@@ -136,6 +147,12 @@ python Cul/split_data.py \
     --input /autodl-fs/data/qwen/culturalBench_hf_cac_3agents_20260606_192326.jsonl \
     --output /autodl-fs/data/qwen/culturalBench_splits.pkl \
     --seed 42
+
+# BLEnD 数据集
+python Cul/split_data.py \
+    --input /autodl-fs/data/qwen/blend_hf_cac_6agents_<timestamp>.jsonl \
+    --output /autodl-fs/data/qwen/blend_splits.pkl \
+    --seed 42
 ```
 
 ### 2.5 输出数据格式
@@ -153,7 +170,9 @@ python Cul/split_data.py \
 
 ### 2.6 Baseline
 
-#### 2.6.0 RECONCILE
+#### 2.6.0 Base & Role-play
+
+#### 2.6.1 RECONCILE
 
 ```bash
 python Cul/generate_culture_data.py \
@@ -171,7 +190,7 @@ python Cul/generate_culture_data.py \
 | `--num_debate_rounds` | 辩论轮数（覆盖 config 中的值，0=无辩论仅独立推理）|
 | `--include_judge` | 是否包含 Judge 裁决（`true`/`false`）|
 
-#### 2.6.1 MAD 
+#### 2.6.2 MAD 
 
 **简介**：MAD 是多智能体辩论框架，通过两个 LLM Agent 对文化场景进行辩论来达成更准确的文化对齐判断。两种变体：
 
@@ -296,7 +315,7 @@ python MAD/self_reflect_debate.py \
 }
 ```
 
-#### 2.6.2 MACD (Multi-Agent Cultural Debate)
+#### 2.6.3 MACD (Multi-Agent Cultural Debate)
 
 **简介**：MACD 是训练无关多智能体文化辩论框架，通过赋予 Agent 显式的文化身份（而非功能性角色）来缓解 LLM 的文化偏见。核心思想是：
 
@@ -399,7 +418,7 @@ python MACD/macd_debate.py \
 }
 ```
 
-#### 2.6.3 OG-MAR (Ontology-Guided Multi-Agent Reasoning)
+#### 2.6.4 OG-MAR (Ontology-Guided Multi-Agent Reasoning)
 
 **简介**：OG-MAR 是本体引导多智能体推理框架，通过构建全球文化本体（ontology）来指导多智能体的文化对齐推理。核心创新：
 
@@ -597,6 +616,26 @@ python Cul/generate_hf_cac_data.py \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
       --include_judge true --num_agents 5
+
+# --- BLEnD 数据集消融 ---
+python Cul/generate_hf_cac_data.py \
+      --input_file /autodl-fs/data/blend_mas_after.json \
+      --output_file /autodl-fs/data/qwen/blend_hf_cac_6agents.jsonl \
+      --config_path Cul/configs/hf_cac_config_blend.yaml \
+      --model_name qwen \
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 0 --negotiation_rounds 1 \
+      --include_judge true --num_agents 6
+
+# 3 agents (推荐配置，与 CulturalBench 一致)
+python Cul/generate_hf_cac_data.py \
+      --input_file /autodl-fs/data/blend_mas_after.json \
+      --output_file /autodl-fs/data/qwen/blend_hf_cac_3agents.jsonl \
+      --config_path Cul/configs/hf_cac_config_blend.yaml \
+      --model_name qwen \
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 0 --negotiation_rounds 1 \
+      --include_judge true --num_agents 3
 ```
 
 每个配置运行完成后会自动输出 Judge 和 Guardian 的准确率指标（`--eval_accuracy` 默认开启），结果保存在对应的 `.metrics.json` 文件中。汇总所有配置的 metrics 即可绘制 num_agents vs accuracy 的消融曲线。
