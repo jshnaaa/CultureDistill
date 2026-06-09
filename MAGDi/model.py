@@ -61,12 +61,12 @@ class MAGDi(torch.nn.Module):
             param.requires_grad = True
         
     def _weighted_pool(self, hidden_states, attention_mask):
-        """Weighted average pooling (recency-weighted) — no gradient needed."""
+        """Weighted average pooling (recency-weighted)."""
         device = hidden_states.device
-        weights = attention_mask.to(device) * torch.arange(
-            1, hidden_states.shape[1] + 1, device=device).unsqueeze(0)
-        sum_emb = torch.sum(hidden_states * weights.unsqueeze(-1), dim=1)
-        denom = torch.sum(weights, dim=-1, keepdim=True)
+        # Use simple mean pooling over non-padding positions (more numerically stable)
+        mask = attention_mask.to(device).unsqueeze(-1).float()  # (B, T, 1)
+        sum_emb = torch.sum(hidden_states.float() * mask, dim=1)
+        denom = mask.sum(dim=1).clamp(min=1.0)  # avoid division by zero
         return sum_emb / denom
 
     def forward(self, pos_input_ids, pos_attention_mask, pos_labels, neg_input_ids, neg_attention_mask, neg_labels, graph):
@@ -114,8 +114,9 @@ class MAGDi(torch.nn.Module):
         # Move embeddings to auxiliary device for MLP computation
         pos_seq_emb = pos_seq_emb.to(self.aux_device).float()
         neg_seq_emb = neg_seq_emb.to(self.aux_device).float()
-        # Re-enable gradient for neg embeddings through MLP
-        neg_seq_emb = neg_seq_emb.detach().requires_grad_(False)
+        # Normalize to prevent overflow in MLP
+        pos_seq_emb = F.normalize(pos_seq_emb, p=2, dim=-1)
+        neg_seq_emb = F.normalize(neg_seq_emb.detach(), p=2, dim=-1)
             
         pos_h = torch.relu(self.mlp1(pos_seq_emb))
         pos_score = torch.tanh(self.mlp2(pos_h))
@@ -123,13 +124,24 @@ class MAGDi(torch.nn.Module):
         neg_h = torch.relu(self.mlp1(neg_seq_emb))
         neg_score = torch.tanh(self.mlp2(neg_h))
         
-        # Margin ranking loss
-        mr_loss = F.margin_ranking_loss(
-            pos_score, neg_score, torch.ones_like(pos_score), margin=1.0)
+        # Margin ranking loss (handle empty case)
+        if pos_score.numel() == 0:
+            mr_loss = torch.tensor(0.0, device=self.aux_device, requires_grad=True)
+        else:
+            mr_loss = F.margin_ranking_loss(
+                pos_score, neg_score, torch.ones_like(pos_score), margin=1.0)
         
-        # GCN node classification
-        gcn_output, logits = self.gcn(graph_batch.x.float(), graph_batch.edge_index)
-        node_loss = F.cross_entropy(logits, graph_batch.y.to(logits.device))
+        # GCN node classification (normalize node embeddings to prevent overflow)
+        node_x = graph_batch.x.float()
+        node_x = F.normalize(node_x, p=2, dim=-1)  # L2 normalize to unit sphere
+        gcn_output, logits = self.gcn(node_x, graph_batch.edge_index)
+        # ignore_index=2: label=2 means missing node (neither correct nor incorrect)
+        y = graph_batch.y.to(logits.device)
+        valid_nodes = (y != 2)
+        if valid_nodes.any():
+            node_loss = F.cross_entropy(logits[valid_nodes], y[valid_nodes])
+        else:
+            node_loss = torch.tensor(0.0, device=self.aux_device, requires_grad=True)
         
         # Combine losses on aux_device in float32
         nll_loss = nll_loss.float()
