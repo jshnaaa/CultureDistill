@@ -39,6 +39,7 @@ CB_REVERSE_MAP = {"1": "Option 1", "2": "Option 2", "3": "Option 3", "4": "Optio
 DATASET_NORMAD = "normad"
 DATASET_CULTURALBENCH = "culturalbench"
 DATASET_BLEND = "blend"
+DATASET_CULTURELLM = "culturellm"
 
 
 def detect_dataset_type(input_file: str) -> str:
@@ -47,10 +48,13 @@ def detect_dataset_type(input_file: str) -> str:
     - 'normad' in filename -> NormAD
     - 'culturalBench' (case-insensitive) in filename -> CulturalBench
     - 'blend' in filename -> BLEND
+    - 'culturellm' (case-insensitive) in filename -> CultureLLM
     """
     basename = os.path.basename(input_file).lower()
     if "culturalbench" in basename:
         return DATASET_CULTURALBENCH
+    if "culturellm" in basename:
+        return DATASET_CULTURELLM
     if "blend" in basename:
         return DATASET_BLEND
     return DATASET_NORMAD
@@ -177,6 +181,32 @@ def parse_input_culturalbench(item: dict) -> tuple:
     return country, question
 
 
+def parse_input_culturellm(item: dict) -> tuple:
+    """
+    Parse CultureLLM item (World Values Survey format).
+    Country is a top-level field. The input contains "Country: XXX\n\nQuestion: ..."
+    We extract the question part (after "Question: ") and determine the answer range.
+
+    Returns: (country: str, question_with_options: str, answer_low: int, answer_high: int)
+    """
+    country = item.get("country", "")
+    input_text = item.get("input", "").strip()
+
+    # Extract the question portion (after "Question: ")
+    q_match = re.search(r'Question:\s*(.+)$', input_text, re.DOTALL)
+    question = q_match.group(1).strip() if q_match else input_text
+
+    # Extract answer range: "from X to Y"
+    range_match = re.search(r'from\s+(\d+)\s+to\s+(\d+)', input_text)
+    if range_match:
+        answer_low = int(range_match.group(1))
+        answer_high = int(range_match.group(2))
+    else:
+        answer_low, answer_high = 1, 4  # fallback
+
+    return country, question, answer_low, answer_high
+
+
 def extract_answer(text):
     """
     Extract final answer from model output (NormAD: Yes/No/Neither).
@@ -251,6 +281,39 @@ def extract_answer_culturalbench(text):
     if matches:
         # prefer the last one (usually the final answer)
         return matches[-1]
+
+    return None
+
+
+def extract_answer_culturellm(text, answer_low=0, answer_high=10):
+    """
+    Extract final answer from model output (CultureLLM: variable range).
+    The valid answers are integers from answer_low to answer_high (inclusive).
+    Returns: str(number) or None.
+    """
+    valid_set = set(str(i) for i in range(answer_low, answer_high + 1))
+    tl = text.strip()
+
+    # Pattern 1: "answer: 3" or "Answer: 3" or "answer is 3"
+    m = re.search(r'(?:answer|option)\s*(?:is|:)?\s*(\d+)\b', tl, re.IGNORECASE)
+    if m and m.group(1) in valid_set:
+        return m.group(1)
+
+    # Pattern 2: standalone digit on a line
+    m = re.search(r'^\s*(\d+)\s*[\.\)]?\s*$', tl, re.MULTILINE)
+    if m and m.group(1) in valid_set:
+        return m.group(1)
+
+    # Pattern 3: starts with a digit
+    m = re.match(r'\s*(\d+)\b', tl)
+    if m and m.group(1) in valid_set:
+        return m.group(1)
+
+    # Pattern 4: last valid number mentioned in the text
+    matches = re.findall(r'\b(\d+)\b', tl)
+    valid_matches = [x for x in matches if x in valid_set]
+    if valid_matches:
+        return valid_matches[-1]
 
     return None
 

@@ -83,6 +83,23 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
+      --input_file /autodl-fs/data/blend_mas_after.json \
+      --output_file /autodl-fs/data/qwen/blend_hf_cac_6agents.jsonl \
+      --config_path Cul/configs/hf_cac_config_blend.yaml \
+      --model_name qwen \
+      --use_vllm --tensor_parallel_size 2 \
+      --max_samples 0 --negotiation_rounds 1 \
+      --include_judge true --num_agents 3
+
+python Cul/generate_hf_cac_data.py \
+    --input_file /autodl-fs/data/cultureLLM_mas.json \
+    --output_file /autodl-fs/data/qwen/culturellm_hf_cac_4agents.jsonl \
+    --model_name qwen \
+    --use_vllm --tensor_parallel_size 2 \
+    --max_samples 0 --negotiation_rounds 1 \
+    --include_judge true --num_agents 4
+
+python Cul/generate_hf_cac_data.py \
   --input_file /autodl-fs/data/culturalBench_mas.json \
   --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_configB.jsonl \
   --config_path Cul/configs/hf_cac_config_culturalbench.yaml \
@@ -92,25 +109,6 @@ python Cul/generate_hf_cac_data.py \
   --negotiation_rounds 1 \
   --num_agents 3 \
   --include_judge true
-      
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/normad_mas.json \
-      --output_file /autodl-fs/data/qwen/normad_hf_cac_6agents.jsonl \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 6
-
-# --- BLEnD 数据集（日常文化知识，4-way MCQ，15国/地区） ---
-# 使用 BLEnD 专用配置（扩展了 Azerbaijan、Assam 等 region_keywords）
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/blend_mas_after.json \
-      --output_file /autodl-fs/data/qwen/blend_hf_cac_6agents.jsonl \
-      --config_path Cul/configs/hf_cac_config_blend.yaml \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 3
 shutdown
 ```
 
@@ -148,7 +146,6 @@ python Cul/split_data.py \
     --output /autodl-fs/data/qwen/culturalBench_splits.pkl \
     --seed 42
 
-# BLEnD 数据集
 python Cul/split_data.py \
     --input /autodl-fs/data/qwen/blend_hf_cac_6agents_<timestamp>.jsonl \
     --output /autodl-fs/data/qwen/blend_splits.pkl \
@@ -239,12 +236,31 @@ MAD/
 └── self_reflect_debate.py       # Self-Reflect+Debate Baseline（A.4）
 ```
 
-**输出文件命名规范**：`{dataset}_{方法}_{变体}_{基座}.json`
-
 **运行命令**（文件名自动生成，无需指定 `--output_file`；脚本自动检测数据集类型）：
 
 ```bash
-# Debate-Only Baseline - NorMAD（Qwen 基座）
+# Debate-Only Baseline
+cd autodl-tmp/distill
+source /etc/network_turbo
+sh git.sh
+python MAD/debate_only.py \
+    --input_file /autodl-fs/data/cultureLLM_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.3 \
+    --temperature_agent2 0.6 \
+    --max_tokens 512
+    
+python MAD/debate_only.py \
+    --input_file /autodl-fs/data/blend_mas_after.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.3 \
+    --temperature_agent2 0.6 \
+    --max_tokens 512
+    
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/normad_mas.json \
     --model_name qwen \
@@ -254,7 +270,6 @@ python MAD/debate_only.py \
     --temperature_agent2 0.6 \
     --max_tokens 512
 
-# Debate-Only Baseline - CulturalBench（Qwen 基座）
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
     --model_name qwen \
@@ -264,19 +279,9 @@ python MAD/debate_only.py \
     --temperature_agent2 0.6 \
     --max_tokens 512
 
-# Debate-Only Baseline - BLEND（Qwen 基座）
-python MAD/debate_only.py \
-    --input_file /autodl-fs/data/blend_mas_after.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.3 \
-    --temperature_agent2 0.6 \
-    --max_tokens 512
-
 # Self-Reflect+Debate Baseline - NorMAD（Qwen 基座）
 python MAD/self_reflect_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
+    --input_file /autodl-fs/data/blend_mas_after.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0 \
@@ -284,9 +289,8 @@ python MAD/self_reflect_debate.py \
     --temperature_agent2 0.6 \
     --max_tokens 512
 
-# Self-Reflect+Debate Baseline - BLEND（Qwen 基座）
 python MAD/self_reflect_debate.py \
-    --input_file /autodl-fs/data/blend_mas_after.json \
+    --input_file /autodl-fs/data/cultureLLM_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0 \
@@ -309,8 +313,9 @@ python MAD/self_reflect_debate.py \
 - NorMAD：文件名包含 "normad"，输出为 "1"/"2"/"3"（Yes/No/Neither），提示词使用论文原始模板
 - CulturalBench：文件名包含 "culturalbench"，输出为 "1"/"2"/"3"/"4"（4 选 1 MCQ），提示词为论文模板的最小化改写
 - BLEND：文件名包含 "blend"，输出为 "1"/"2"/"3"/"4"（4 选 1 MCQ），使用针对事实性文化知识问答优化的提示词模板
+- CultureLLM：文件名包含 "culturellm"，输出为 "0"-"10"（变长选项：0-2/1-4/1-5/1-10），使用针对世界价值观调查的文化视角判断提示词模板
 
-**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，移除 `Rule: {rule-of-thumb}` 相关行，并做小幅优化（增加 step-by-step 推理引导、文化证据引导、事实准确性评估引导）。对于 NorMAD 数据集，将 Cultural Background 信息作为 story 的一部分传入模型（格式：`Cultural Background:\n{context}\n\nScenario: {scenario}`）。对于 CulturalBench 和 BLEND 数据集，直接使用顶层 `country` 字段和 `input` 字段（已包含完整问题和选项）。BLEND 数据集使用专门优化的提示词模板，强调事实性文化知识的回忆和验证。
+**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，移除 `Rule: {rule-of-thumb}` 相关行，并做小幅优化（增加 step-by-step 推理引导、文化证据引导、事实准确性评估引导）。对于 NorMAD 数据集，将 Cultural Background 信息作为 story 的一部分传入模型（格式：`Cultural Background:\n{context}\n\nScenario: {scenario}`）。对于 CulturalBench、BLEND 和 CultureLLM 数据集，直接使用顶层 `country` 字段和 `input` 字段（已包含完整问题和选项）。BLEND 数据集使用专门优化的提示词模板，强调事实性文化知识的回忆和验证。CultureLLM 数据集使用专门优化的提示词模板，强调代入特定国家的文化视角和价值观进行判断，并支持每题动态适配的变长选项范围。
 
 **推理阶段**（Debate-Only 共 4 阶段，Self-Reflect+Debate 共 5 阶段）：
 
@@ -365,8 +370,6 @@ MACD/
 └── Mitigating Cultural Bias in LLMs via Multi-Agent Cultural Debate.pdf  # 原论文
 ```
 
-**输出文件命名规范**：`{dataset}_MACD_{基座}.json`
-
 **运行命令**：
 
 ```bash
@@ -374,19 +377,19 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python MACD/macd_debate.py \
-    --input_file /autodl-fs/data/culturalBench_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0
-
-python MACD/macd_debate.py \
-    --input_file /autodl-fs/data/normad_mas.json \
+    --input_file /autodl-fs/data/cultureLLM_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0
 
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/blend_mas_after.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0
+
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0
@@ -469,21 +472,14 @@ OG/
 └── Toward Culturally Aligned LLMs through Ontology-Guided Multi-Agent Reasoning.pdf  # 原论文
 ```
 
-**输出文件命名规范**：`{dataset}_OGMAR_{基座}.json`
-
 **运行命令**：
 
 ```bash
+cd autodl-tmp/distill
+source /etc/network_turbo
+sh git.sh
 python OG/og_mar.py \
-    --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --batch_size 256 \
-    --max_samples 0 \
-    --temperature 0.0
-
-python OG/og_mar.py \
-    --input_file /autodl-fs/data/culturalBench_mas.json \
+    --input_file /autodl-fs/data/cultureLLM_mas.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --batch_size 256
@@ -493,6 +489,14 @@ python OG/og_mar.py \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --batch_size 256
+
+python OG/og_mar.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --batch_size 256
+
+
 ```
 
 **参数说明**：

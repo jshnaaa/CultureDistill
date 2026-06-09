@@ -76,7 +76,8 @@ class HF_CAC_MAS:
         self.max_tokens = max_tokens
         self.model_name = model_name
 
-        # Task type: "normad" (3-way acceptability) or "cultureatlas" (2-way comparison)
+        # Task type: "normad" (3-way acceptability), "cultureatlas" (2-way comparison),
+        # "culturalbench" (4-way MCQ), or "culturellm" (variable-scale WVS survey)
         self.task_type = cfg.get("task_type", "normad")
         self.answer_choices = cfg.get("answer_choices", [1, 2, 3])
 
@@ -97,12 +98,12 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Temperature strategy:
-        # - CulturalBench (factual QA): MAD-style asymmetric temperatures.
+        # - CulturalBench / CultureLLM (factual/survey QA): MAD-style asymmetric temperatures.
         #   Guardian=0.3 (precise), Auditors=0.6 (diverse perspectives).
         #   Diversity + Debate is the key — NOT self-consistency.
         #   top_p=0.95 matches MAD's settings.
         # - Other tasks: asymmetric temperature for role-based diversity.
-        if self.task_type == "culturalbench":
+        if self.task_type in ("culturalbench", "culturellm"):
             guardian_temp = 0.3
             auditor_temp = 0.6   # MAD's Agent2 temp — encourage diverse perspectives
             cb_max_tokens = 512
@@ -199,6 +200,21 @@ class HF_CAC_MAS:
                 f"Reasoning: <your authoritative analysis of cultural depth>\n"
                 f"Answer: <1 or 2>"
             )
+        elif self.task_type == "culturellm":
+            # CultureLLM: World Values Survey attitude prediction (variable scale)
+            # The question already contains the full survey item with numbered options.
+            # Agent must predict the most representative answer for the target culture.
+            user = (
+                f"Task: You will be given a World Values Survey question about the "
+                f"cultural values and attitudes of {target_country}. "
+                f"Select the option number that BEST represents the typical attitude "
+                f"or value orientation of people in {target_country}. "
+                f"Think about the dominant cultural values, social norms, and common "
+                f"worldviews in {target_country}, then respond with the most representative "
+                f"option number. Explain your reasoning in less than three sentences.\n\n"
+                f"Survey Question:\n{question}\n"
+                f"Answer:"
+            )
         elif self.task_type == "culturalbench":
             # CulturalBench: factual cultural knowledge MCQ (4-way)
             # MAD-inspired: simple, concise prompt — "explain in less than three sentences"
@@ -250,7 +266,7 @@ class HF_CAC_MAS:
         elif self.task_type == "culturalbench":
             answer_hint = "<1, 2, 3, or 4>"
         else:
-            answer_hint = "<number>"
+            answer_hint = "<number>"  # covers normad and culturellm (variable scale)
 
         if guardian_response:
             # Phase 2: Auditor sees Guardian's response
@@ -269,6 +285,18 @@ class HF_CAC_MAS:
                     f"that the Guardian has primary authority on {target_country}.\n\n"
                     f"Reasoning: <your cross-cultural comparative analysis>\n"
                     f"Answer: {answer_hint}"
+                )
+            elif self.task_type == "culturellm":
+                # CultureLLM: WVS attitude — auditor sees guardian's cultural value analysis
+                user = (
+                    f"Task: You are currently discussing the following World Values Survey "
+                    f"question about {target_country} with the other discussant.\n\n"
+                    f"Survey Question:\n{question}\n"
+                    f"Discussant: {guardian_response.strip()}\n\n"
+                    f"Based on the above discussion, critically think about the cultural "
+                    f"values and attitudes of {target_country} and make your final decision. "
+                    f"Respond with the most representative option number.\n"
+                    f"Answer:"
                 )
             elif self.task_type == "culturalbench":
                 # MAD-inspired: concise feedback + clear answer at end
@@ -312,6 +340,19 @@ class HF_CAC_MAS:
                     f"from your expertise.\n\n"
                     f"Reasoning: <your cross-cultural comparative analysis>\n"
                     f"Answer: {answer_hint}"
+                )
+            elif self.task_type == "culturellm":
+                # CultureLLM: same format as Guardian (independent value reasoning)
+                user = (
+                    f"Task: You will be given a World Values Survey question about the "
+                    f"cultural values and attitudes of {target_country}. "
+                    f"Select the option number that BEST represents the typical attitude "
+                    f"or value orientation of people in {target_country}. "
+                    f"Think about the dominant cultural values, social norms, and common "
+                    f"worldviews in {target_country}, then respond with the most representative "
+                    f"option number. Explain your reasoning in less than three sentences.\n\n"
+                    f"Survey Question:\n{question}\n"
+                    f"Answer:"
                 )
             elif self.task_type == "culturalbench":
                 # MAD-inspired: same simple format as Guardian
@@ -375,6 +416,24 @@ class HF_CAC_MAS:
                 f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
                 f"Answer: <1 or 2>"
             )
+        elif self.task_type == "culturellm":
+            # CultureLLM: Judge for WVS attitude prediction
+            responses_text = ""
+            for name, resp, is_guard in agent_responses:
+                label = "Guardian" if is_guard else "Auditor"
+                responses_text += f"  [{name}] ({label}): {resp.strip()}\n"
+            user = (
+                f"Task: You are a judge responsible for making a final decision "
+                f"based on the opinions of cultural value experts about {target_country}. "
+                f"Do NOT make any independent judgments; base your final decision "
+                f"solely on the expert opinions below. Evaluate which option number "
+                f"best represents the typical cultural attitude of {target_country}. "
+                f"Respond with the most representative option number.\n\n"
+                f"Survey Question:\n{question}\n\n"
+                f"*** Expert opinions ***\n{responses_text}"
+                f"*** End opinions ***\n\n"
+                f"Final decision:"
+            )
         elif self.task_type == "culturalbench":
             # MAD-inspired Judge: concise, debate-evidence-focused
             responses_text = ""
@@ -425,12 +484,25 @@ class HF_CAC_MAS:
             max_choice = 2
         elif self.task_type == "culturalbench":
             max_choice = 4
+        elif self.task_type == "culturellm":
+            # CultureLLM has variable scales; detect max from question text
+            # Options look like "0. ...\n1. ...\n2. ..." or "1. ...\n2. ...\n3. ...\n4. ..."
+            option_nums = re.findall(r'^(\d+)\.', question, re.MULTILINE)
+            if option_nums:
+                max_choice = max(int(n) for n in option_nums)
+            else:
+                max_choice = 9  # safe fallback for unknown scale
         else:
             max_choice = 3
-        pattern = f"[1-{max_choice}]"
 
-        # For culturalbench: use MAD-style extraction (same as mad_common.extract_answer_mcq)
-        if self.task_type == "culturalbench":
+        # Build pattern: for culturellm, options can start from 0
+        if self.task_type == "culturellm":
+            pattern = f"[0-{max_choice}]"
+        else:
+            pattern = f"[1-{max_choice}]"
+
+        # For culturalbench/culturellm: use MAD-style extraction
+        if self.task_type in ("culturalbench", "culturellm"):
             tl = text.strip()
             # Pattern 1: "Answer: 3" or "Final decision: 2" or "answer is 1"
             m = re.search(rf'(?:Final\s+decision|Answer)\s*(?:is|[:\-])\s*({pattern})\b', tl, re.IGNORECASE)
@@ -452,7 +524,7 @@ class HF_CAC_MAS:
             matches = re.findall(rf'\b({pattern})\b', tl)
             return matches[-1] if matches else None
 
-        # Non-culturalbench tasks
+        # Non-culturalbench/culturellm tasks
         m = re.search(rf"(?:Final\s+decision|Answer)\s*[:\-]\s*({pattern})", text, re.IGNORECASE)
         if m:
             return m.group(1)
@@ -481,8 +553,8 @@ class HF_CAC_MAS:
         if not guardian_response or not guardian_response.strip():
             return True
 
-        # For culturalbench, response may be just a digit — skip length check
-        if self.task_type != "culturalbench":
+        # For culturalbench/culturellm, response may be just a digit — skip length check
+        if self.task_type not in ("culturalbench", "culturellm"):
             if len(guardian_response.strip()) < 10:
                 return True
 
@@ -566,6 +638,12 @@ class HF_CAC_MAS:
                 f"One response is always more culturally specific than the other.\n\n"
                 f"Reasoning: <your reasoning, referencing affinity-weighted evidence>\n"
                 f"Answer: <1 or 2>"
+            )
+        elif self.task_type == "culturellm":
+            user += (
+                f"Respond with the option number that best represents the typical "
+                f"cultural attitude of {target_country}.\n\n"
+                f"Final decision:"
             )
         elif self.task_type == "culturalbench":
             user += (
@@ -679,7 +757,7 @@ class HF_CAC_MAS:
         for name, resp in other_responses:
             discussion += f"  [{name}]: {resp.strip()}\n"
 
-        if self.task_type == "culturalbench":
+        if self.task_type in ("culturalbench", "culturellm"):
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
                 f"{question}\n\n"
@@ -733,7 +811,22 @@ class HF_CAC_MAS:
         for name, fb in other_feedbacks:
             feedback_text += f"  [{name}]: {fb.strip()}\n"
 
-        if self.task_type == "culturalbench":
+        if self.task_type in ("culturalbench", "culturellm"):
+            # For culturellm: don't hardcode option range, just ask for option number
+            if self.task_type == "culturellm":
+                answer_instruction = (
+                    f"Based on the above discussion, critically think and make "
+                    f"your final decision. Respond with the option number that best "
+                    f"represents the typical cultural attitude of {target_country}.\n"
+                    f"Answer:"
+                )
+            else:
+                answer_instruction = (
+                    f"Based on the above discussion, critically think and make "
+                    f"your final decision. Respond with the correct option number "
+                    f"(1, 2, 3, or 4).\n"
+                    f"Answer (1, 2, 3, or 4):"
+                )
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
                 f"{question}\n\n"
@@ -742,10 +835,7 @@ class HF_CAC_MAS:
                 f"Other experts' answers:\n{others_text}\n"
                 f"Feedback from all experts:\n{feedback_text}\n"
                 f"=== End Discussion ===\n\n"
-                f"Based on the above discussion, critically think and make "
-                f"your final decision. Respond with the correct option number "
-                f"(1, 2, 3, or 4).\n"
-                f"Answer (1, 2, 3, or 4):"
+                f"{answer_instruction}"
             )
         else:
             user = (
@@ -786,7 +876,23 @@ class HF_CAC_MAS:
         for name, fb in agent_feedbacks:
             feedback_text += f"  [{name}]: {fb.strip()}\n"
 
-        if self.task_type == "culturalbench":
+        if self.task_type == "culturellm":
+            user = (
+                f"Task: You are a judge responsible for making a final decision "
+                f"based on the debate history between cultural value experts. They have "
+                f"debated the following cultural attitude question about {target_country}. "
+                f"Do NOT make any independent judgments; base your final decision "
+                f"solely on the debate. Evaluate which option best represents the "
+                f"typical cultural attitude of {target_country}. "
+                f"Respond with the most representative option number.\n\n"
+                f"Survey Question:\n{question}\n\n"
+                f"*** Debate starts ***\n"
+                f"{feedback_text}"
+                f"{debate_text}"
+                f"*** Debate ends ***\n\n"
+                f"Final decision:"
+            )
+        elif self.task_type == "culturalbench":
             user = (
                 f"Task: You are a judge responsible for making a final decision "
                 f"based on the debate history between cultural experts. They have "
@@ -845,8 +951,8 @@ class HF_CAC_MAS:
 
         # ---- Phase 2: Auditors generate ----
         auditor_responses = {}  # agent_idx -> response text
-        if self.negotiation_rounds > 0 and self.task_type != "culturalbench":
-            # Non-culturalbench: Auditors SEE Guardian's response (one-directional)
+        if self.negotiation_rounds > 0 and self.task_type not in ("culturalbench", "culturellm"):
+            # Non-culturalbench/culturellm: Auditors SEE Guardian's response (one-directional)
             auditor_prompts = []
             for ai in auditor_indices:
                 prompt = self._build_auditor_prompt(
@@ -860,7 +966,7 @@ class HF_CAC_MAS:
                 for ai, out in zip(auditor_indices, auditor_outputs):
                     auditor_responses[ai] = out.outputs[0].text.strip()
         else:
-            # Independent mode: Auditors don't see Guardian (CulturalBench always starts independent)
+            # Independent mode: Auditors don't see Guardian (CulturalBench/CultureLLM always starts independent)
             auditor_prompts = []
             for ai in auditor_indices:
                 prompt = self._build_auditor_prompt(
@@ -874,10 +980,10 @@ class HF_CAC_MAS:
                 for ai, out in zip(auditor_indices, auditor_outputs):
                     auditor_responses[ai] = out.outputs[0].text.strip()
 
-        # ---- Phase 2.5: MAD-style debate for CulturalBench ----
-        # When negotiation_rounds > 0 AND culturalbench: do feedback + final decision
+        # ---- Phase 2.5: MAD-style debate for CulturalBench/CultureLLM ----
+        # When negotiation_rounds > 0 AND culturalbench/culturellm: do feedback + final decision
         # This lets agents reconsider after seeing others' answers (can fix minority-correct cases)
-        if self.negotiation_rounds > 0 and self.task_type == "culturalbench":
+        if self.negotiation_rounds > 0 and self.task_type in ("culturalbench", "culturellm"):
             # All initial responses (Guardian + Auditors)
             all_initial = {guardian_idx: guardian_response, **auditor_responses}
 
@@ -953,9 +1059,9 @@ class HF_CAC_MAS:
         guardian_failed = self._detect_guardian_failure(guardian_response)
 
         # Determine consensus levels:
-        # For culturalbench (simple factual QA): use pure majority vote
+        # For culturalbench/culturellm (MCQ-style): use pure majority vote
         # For other tasks: use Guardian-weighted consensus
-        if self.task_type == "culturalbench":
+        if self.task_type in ("culturalbench", "culturellm"):
             # Pure majority vote — no Guardian privilege for factual QA
             from collections import Counter as _Counter
             vote_counts = _Counter(a for a in valid_answers if a is not None)
@@ -986,7 +1092,7 @@ class HF_CAC_MAS:
             )
         elif guardian_has_support:
             # Majority agrees → accept majority answer
-            if self.task_type == "culturalbench":
+            if self.task_type in ("culturalbench", "culturellm"):
                 judge_response = (
                     f"[GUARDIAN-MAJORITY] Majority vote ({majority_count}/{total_voters}). "
                     f"Answer: {majority_answer}"
@@ -1126,7 +1232,11 @@ class HF_CAC_MAS:
         for si in range(n):
             g_idx = guardian_indices[si]
             g_name = self.culture_roles[g_idx]["name"]
-            g_resp = guardian_responses[si] if self.negotiation_rounds > 0 else None
+            # For culturalbench/culturellm: always independent (no guardian context)
+            if self.task_type in ("culturalbench", "culturellm") or self.negotiation_rounds == 0:
+                g_resp = None
+            else:
+                g_resp = guardian_responses[si]
             for ai in auditor_indices_per_sample[si]:
                 prompt = self._build_auditor_prompt(
                     ai, questions[si], countries[si], g_name, g_resp
@@ -1169,8 +1279,8 @@ class HF_CAC_MAS:
             valid_ans = [a for a in all_ans.values() if a is not None]
 
             # Determine consensus type
-            if self.task_type == "culturalbench":
-                # Pure majority vote — no Guardian privilege for factual QA
+            if self.task_type in ("culturalbench", "culturellm"):
+                # Pure majority vote — no Guardian privilege for MCQ-style QA
                 from collections import Counter as _Counter
                 vote_counts = _Counter(a for a in valid_ans if a is not None)
                 maj_ans = vote_counts.most_common(1)[0][0] if vote_counts else None
@@ -1216,7 +1326,7 @@ class HF_CAC_MAS:
                     f"[CONSENSUS] All agents agree. Answer: {valid_ans[0]}"
                 )
             elif consensus_types[si] == "guardian_majority":
-                if self.task_type == "culturalbench":
+                if self.task_type in ("culturalbench", "culturellm"):
                     judge_responses[si] = (
                         f"[GUARDIAN-MAJORITY] Majority vote ({majority_counts[si]}/{len(valid_ans)}). "
                         f"Answer: {majority_answers[si]}"

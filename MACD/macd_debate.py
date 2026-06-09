@@ -58,9 +58,10 @@ from MACD.macd_common import (
     MODEL_ALIASES, CULTURAL_PERSONAS, CULTURAL_VALUES, SCGRD_PROMPT,
     ANSWER_MAP, REVERSE_ANSWER_MAP,
     CB_VALID_ANSWERS, CB_REVERSE_MAP,
-    DATASET_NORMAD, DATASET_CULTURALBENCH, DATASET_BLEND, detect_dataset_type,
-    load_dataset, parse_input, parse_input_culturalbench,
-    extract_answer, extract_answer_culturalbench,
+    DATASET_NORMAD, DATASET_CULTURALBENCH, DATASET_BLEND, DATASET_CULTURELLM,
+    detect_dataset_type,
+    load_dataset, parse_input, parse_input_culturalbench, parse_input_culturellm,
+    extract_answer, extract_answer_culturalbench, extract_answer_culturellm,
     infer_output_path, compute_metrics,
 )
 
@@ -220,6 +221,56 @@ PROMPT_SUMMARY_BLEND = (
 
 
 # ===================================================================
+# Prompt Templates - CultureLLM (World Values Survey, variable options)
+# ===================================================================
+
+# Round 1: Initial Response
+PROMPT_ROUND1_CULTURELLM = (
+    "{persona}\n\n"
+    "You are currently participating in a debate, and there is round 1 of the debate.\n\n"
+    "Answer the following World Values Survey question about cultural values "
+    "in {country}.\n\n"
+    "{question}\n\n"
+    "Directly answer the question based on your understanding of cultural values "
+    "and social attitudes in {country}. "
+    "Select the option number that best represents the cultural perspective of {country}.\n"
+    "Answer (option number):"
+)
+
+# Round 2: Debate with SCGRD
+PROMPT_ROUND2_CULTURELLM = (
+    "{persona}\n\n"
+    "You are currently participating in a debate, and there is round 2 of the debate.\n\n"
+    "Answer the following World Values Survey question about cultural values "
+    "in {country}.\n\n"
+    "{question}\n\n"
+    "Previous responses of people from other culture background:\n"
+    "{other_responses}\n\n"
+    "Based on other perspectives and **{scgrd}** strategy, refine your answer to "
+    "the question. You must summarize the common reasoning with other "
+    "cultures at the end of your refined answer. Don't over-analyze, such as what "
+    "these cultural perspectives indicate or mean. You just discuss the original question.\n\n"
+    "Remember: answer based on cultural values and social attitudes specific to {country}.\n"
+    "Select the option number that best represents the cultural perspective of {country}.\n"
+    "Answer (option number):"
+)
+
+# Summary prompt - CultureLLM
+PROMPT_SUMMARY_CULTURELLM = (
+    "After a multi-agent cultural debate, the following are the final answers "
+    "from agents representing different cultural perspectives on a World Values "
+    "Survey question about {country}:\n\n"
+    "{agent_responses}\n\n"
+    "Question: {question}\n\n"
+    "Based on the debate above, determine the answer that best represents "
+    "the cultural perspective of {country}. Prioritize cultural accuracy and "
+    "the majority consensus.\n\n"
+    "Respond with the correct option number only.\n"
+    "Answer (option number):"
+)
+
+
+# ===================================================================
 # Culture names list
 # ===================================================================
 
@@ -257,10 +308,18 @@ def format_agent_responses_for_summary(
     responses: dict, answers: dict, dataset_type: str
 ) -> str:
     parts = []
-    reverse_map = REVERSE_ANSWER_MAP if dataset_type == DATASET_NORMAD else CB_REVERSE_MAP
+    if dataset_type == DATASET_NORMAD:
+        reverse_map = REVERSE_ANSWER_MAP
+    elif dataset_type == DATASET_CULTURELLM:
+        reverse_map = None  # use raw number
+    else:
+        reverse_map = CB_REVERSE_MAP
     for culture, resp in responses.items():
         ans = answers.get(culture)
-        ans_label = reverse_map.get(ans, "Unknown") if ans else "Unknown"
+        if reverse_map is None:
+            ans_label = f"Option {ans}" if ans else "Unknown"
+        else:
+            ans_label = reverse_map.get(ans, "Unknown") if ans else "Unknown"
         parts.append(f"[{culture} Agent] (Answer: {ans_label}): {resp}")
     return "\n\n".join(parts)
 
@@ -277,6 +336,10 @@ def majority_vote(answers: dict, dataset_type: str) -> str:
     # Tie-breaking: prefer lower-numbered option
     if dataset_type == DATASET_NORMAD:
         priority = ["1", "2", "3"]
+    elif dataset_type == DATASET_CULTURELLM:
+        # CultureLLM has variable ranges (0-10); sort numerically
+        priority = sorted(candidates, key=lambda x: int(x) if x.isdigit() else 99)
+        return priority[0]
     else:
         priority = ["1", "2", "3", "4"]
     for p in priority:
@@ -325,6 +388,12 @@ def run_macd(args):
         PROMPT_R2 = PROMPT_ROUND2_BLEND
         PROMPT_SUM = PROMPT_SUMMARY_BLEND
         extract_fn = extract_answer_culturalbench
+    elif dataset_type == DATASET_CULTURELLM:
+        PROMPT_R1 = PROMPT_ROUND1_CULTURELLM
+        PROMPT_R2 = PROMPT_ROUND2_CULTURELLM
+        PROMPT_SUM = PROMPT_SUMMARY_CULTURELLM
+        # extract_fn is per-sample (needs answer range), set a placeholder
+        extract_fn = None
     else:
         PROMPT_R1 = PROMPT_ROUND1_CB
         PROMPT_R2 = PROMPT_ROUND2_CB
@@ -341,6 +410,15 @@ def run_macd(args):
                 "country": country,
                 "cultural_bg": cultural_bg,
                 "scenario": scenario,
+            })
+        elif dataset_type == DATASET_CULTURELLM:
+            country, question, answer_low, answer_high = parse_input_culturellm(item)
+            parsed.append({
+                **item,
+                "country": country,
+                "question": question,
+                "answer_low": answer_low,
+                "answer_high": answer_high,
             })
         else:  # CulturalBench and BLEND share the same format
             country, question = parse_input_culturalbench(item)
@@ -483,12 +561,21 @@ def run_macd(args):
 
     t3 = time.time()
 
+    # Helper: extract answer (handles CultureLLM's per-sample range)
+    def do_extract(text, sample_idx):
+        if dataset_type == DATASET_CULTURELLM:
+            p = parsed[sample_idx]
+            return extract_answer_culturellm(
+                text, p["answer_low"], p["answer_high"]
+            )
+        return extract_fn(text)
+
     # Extract Round 2 answers
     all_r2_answers = []
     for idx in range(n):
         r2_answers = {}
         for culture in CULTURE_NAMES:
-            r2_answers[culture] = extract_fn(round2_responses[idx][culture])
+            r2_answers[culture] = do_extract(round2_responses[idx][culture], idx)
         all_r2_answers.append(r2_answers)
 
     # Build summary prompts
@@ -533,7 +620,7 @@ def run_macd(args):
         # Round 1 answers
         r1_answers = {}
         for culture in CULTURE_NAMES:
-            r1_answers[culture] = extract_fn(round1_responses[idx][culture])
+            r1_answers[culture] = do_extract(round1_responses[idx][culture], idx)
 
         # Round 2 answers (already extracted)
         r2_answers = all_r2_answers[idx]
@@ -544,7 +631,7 @@ def run_macd(args):
 
         # Summary answer
         summary_resp = summary_outputs[idx]
-        summary_ans = extract_fn(summary_resp)
+        summary_ans = do_extract(summary_resp, idx)
 
         # R1 consensus strength
         r1_vote_counts = Counter(v for v in r1_answers.values() if v is not None)

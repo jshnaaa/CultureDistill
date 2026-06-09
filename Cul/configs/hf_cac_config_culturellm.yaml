@@ -1,0 +1,245 @@
+# HF-CAC Configuration for CultureLLM Dataset
+#
+# CultureLLM task: World Values Survey (WVS) attitude questions.
+#   - Questions ask about cultural values, attitudes, and social norms
+#   - Answer options vary per question (2-way to 10-way scales)
+#   - The task is to predict the MOST REPRESENTATIVE attitude
+#     of a given culture/country (not factual knowledge, but value alignment)
+#   - Countries: China, United States, Germany, Greece, South Korea,
+#     Portugal, Spain, Turkey, Bangladesh, Arabic (Iraq & Jordan)
+#
+# Key difference from CulturalBench:
+#   - CulturalBench = factual cultural knowledge QA (fixed 4-way MCQ)
+#   - CultureLLM = cultural VALUES/ATTITUDES prediction (variable-scale survey)
+#   - Requires agents to reason about cultural worldviews, not recall facts
+#
+# DESIGN: Concise MAD-inspired prompts, with emphasis on cultural value reasoning.
+# System prompt remains a one-liner. Task-specific guidance in user prompts.
+
+num_agents: 6
+num_debate_rounds: 0
+temperature: 0.9
+max_tokens: 512
+
+# ---------------------------------------------------------------------------
+# Cultural Affinity Matrix (6x6)
+# ---------------------------------------------------------------------------
+cultural_affinity_matrix:
+  - [1.0, 0.4, 0.1, 0.2, 0.2, 0.1]   # Western & Anglo-Saxon
+  - [0.4, 1.0, 0.3, 0.1, 0.2, 0.2]   # Latin American
+  - [0.1, 0.3, 1.0, 0.1, 0.5, 0.2]   # Sub-Saharan African
+  - [0.2, 0.1, 0.1, 1.0, 0.2, 0.5]   # East-Asian
+  - [0.2, 0.2, 0.5, 0.2, 1.0, 0.4]   # Islamic & Middle-Eastern
+  - [0.1, 0.2, 0.2, 0.5, 0.4, 1.0]   # South & Southeast Asian
+
+guardian_failure_indicators:
+  - "I'm not sure"
+  - "I don't have enough knowledge"
+  - "I cannot determine"
+  - "I lack sufficient"
+  - "uncertain about this"
+  - "not familiar with"
+
+# ---------------------------------------------------------------------------
+# Task type identifier
+# ---------------------------------------------------------------------------
+task_type: "culturellm"
+# answer_choices is dynamic (varies per question), not fixed here
+# max_choice is determined at runtime from each question's option range
+
+# ---------------------------------------------------------------------------
+# 6 Heterogeneous Cultural Agents
+#
+# System prompts: MAD-style one-liner (simple, avoids role-play bias).
+# The user prompt (built in code) provides all task-specific instructions.
+#
+# region_keywords cover CultureLLM's 10 countries/regions:
+#   United States → Western & Anglo-Saxon
+#   Germany → Western & Anglo-Saxon
+#   Greece → Western & Anglo-Saxon
+#   Portugal → Western & Anglo-Saxon
+#   Spain → Western & Anglo-Saxon
+#   China → East-Asian
+#   South Korea → East-Asian
+#   Turkey → Islamic & Middle-Eastern
+#   Arabic (Iraq & Jordan) → Islamic & Middle-Eastern
+#   Bangladesh → South & Southeast Asian
+# ---------------------------------------------------------------------------
+culture_roles:
+  - name: "Western & Anglo-Saxon Culture"
+    region_keywords:
+      - united states
+      - usa
+      - america
+      - american
+      - canada
+      - australia
+      - new zealand
+      - uk
+      - united kingdom
+      - britain
+      - england
+      - scotland
+      - ireland
+      - france
+      - germany
+      - netherlands
+      - spain
+      - italy
+      - portugal
+      - sweden
+      - norway
+      - denmark
+      - finland
+      - poland
+      - greece
+      - austria
+      - switzerland
+      - belgium
+      - czech
+      - hungary
+      - romania
+      - ukraine
+      - russia
+      - croatia
+      - serbia
+      - bulgaria
+    guardian_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+    auditor_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+
+  - name: "Latin American Culture"
+    region_keywords:
+      - brazil
+      - mexico
+      - argentina
+      - chile
+      - colombia
+      - peru
+      - venezuela
+      - ecuador
+      - bolivia
+      - uruguay
+      - paraguay
+      - costa rica
+      - panama
+      - cuba
+      - dominican
+      - puerto rico
+      - guatemala
+      - honduras
+      - el salvador
+      - nicaragua
+    guardian_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+    auditor_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+
+  - name: "Sub-Saharan African Culture"
+    region_keywords:
+      - nigeria
+      - kenya
+      - ethiopia
+      - ghana
+      - south africa
+      - tanzania
+      - uganda
+      - senegal
+      - cameroon
+      - ivory coast
+      - sudan
+      - congo
+      - angola
+      - mozambique
+      - zimbabwe
+      - zambia
+      - mali
+      - niger
+      - burkina faso
+      - somalia
+      - rwanda
+      - benin
+      - togo
+      - sierra leone
+      - liberia
+      - madagascar
+      - african
+    guardian_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+    auditor_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+
+  - name: "East-Asian Culture"
+    region_keywords:
+      - china
+      - japan
+      - korea
+      - south korea
+      - north korea
+      - taiwan
+      - mongolia
+    guardian_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+    auditor_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+
+  - name: "Islamic & Middle-Eastern Culture"
+    region_keywords:
+      - arab
+      - arabic
+      - saudi
+      - iran
+      - iraq
+      - egypt
+      - turkey
+      - israel
+      - jordan
+      - lebanon
+      - uae
+      - qatar
+      - bahrain
+      - kuwait
+      - oman
+      - yemen
+      - syria
+      - palestine
+      - afghanistan
+      - morocco
+      - algeria
+      - tunisia
+      - libya
+      - azerbaijan
+    guardian_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+    auditor_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+
+  - name: "South & Southeast Asian Culture"
+    region_keywords:
+      - india
+      - pakistan
+      - bangladesh
+      - nepal
+      - sri lanka
+      - thailand
+      - vietnam
+      - indonesia
+      - malaysia
+      - philippines
+      - singapore
+      - myanmar
+      - cambodia
+      - laos
+      - assam
+    guardian_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+    auditor_prompt: |
+      You are a helpful assistant with expertise in cross-cultural values and social attitudes.
+
+# ---------------------------------------------------------------------------
+# Judge
+# ---------------------------------------------------------------------------
+judge:
+  system_prompt: |
+    You are a helpful assistant with expertise in cross-cultural values and social attitudes.

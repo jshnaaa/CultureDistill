@@ -7,10 +7,11 @@ HF-CAC (Home-Field Culture-Activated Collaboration):
   - Cross-Cultural Auditors provide contrastive perspectives
   - Judge weights Guardian's claims with veto mechanism
 
-Supports three dataset types (auto-detected from data format):
+Supports four dataset types (auto-detected from data format):
   - NormAD: behavior acceptability judgment (1/2/3) — uses hf_cac_config.yaml
   - CultureAtlas: comparative cultural depth (1/2) — uses hf_cac_config_cultureatlas.yaml
   - CulturalBench: multiple-choice cultural knowledge QA (1/2/3/4) — uses hf_cac_config_culturalbench.yaml
+  - CultureLLM: World Values Survey attitude prediction (variable scale) — uses hf_cac_config_culturellm.yaml
 
 Output format mirrors AgentArk LLM Debate so that the existing
 label.py / split_solutions pipeline can be reused directly.
@@ -38,6 +39,15 @@ Usage:
     python Cul/generate_hf_cac_data.py \\
         --input_file /autodl-fs/data/culturalBench_mas_before.json \\
         --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_inference.jsonl \\
+        --model_name qwen \\
+        --use_vllm --tensor_parallel_size 2 \\
+        --max_samples 5 --negotiation_rounds 1 \\
+        --include_judge true
+
+    # CultureLLM dataset (auto-detected, WVS attitude prediction)
+    python Cul/generate_hf_cac_data.py \\
+        --input_file /autodl-fs/data/cultureLLM_mas.json \\
+        --output_file /autodl-fs/data/qwen/culturellm_hf_cac_inference.jsonl \\
         --model_name qwen \\
         --use_vllm --tensor_parallel_size 2 \\
         --max_samples 5 --negotiation_rounds 1 \\
@@ -85,15 +95,18 @@ def detect_dataset_type(data: list) -> str:
     Auto-detect dataset type from data content.
 
     Returns:
+        "culturellm" if data matches CultureLLM format (WVS attitude survey, variable scale)
         "cultureatlas" if data matches CultureAtlas format (comparative, binary 1/2)
         "culturalbench" if data matches CulturalBench format (4-way knowledge QA, 1/2/3/4)
         "normad" otherwise (behavior acceptability, 3-way 1/2/3)
 
     Detection heuristics (in priority order):
-      1. Instruction content: CultureAtlas mentions "more culturally specific" or
+      1. Instruction content: CultureLLM mentions "World Values Survey";
+         CultureAtlas mentions "more culturally specific" or
          "Response 1"/"Response 2"; NormAD mentions "acceptable"/"unacceptable";
          CulturalBench mentions "cultural knowledge question" or "correct option number"
-      2. Input field: CultureAtlas has "Response 1:" and "Response 2:" patterns;
+      2. Input field: CultureLLM has "Give me the answer from" pattern;
+         CultureAtlas has "Response 1:" and "Response 2:" patterns;
          CulturalBench has numbered options ("1. "/"2. "/"3. "/"4. ")
       3. Output distribution (full dataset): CultureAtlas only has 1/2, NormAD has 1/2/3,
          CulturalBench has 1/2/3/4
@@ -108,6 +121,9 @@ def detect_dataset_type(data: list) -> str:
     for item in sample:
         instruction = item.get("instruction", "")
         instr_lower = instruction.lower()
+        # CultureLLM markers
+        if "world values survey" in instr_lower:
+            return "culturellm"
         # CulturalBench markers
         if "cultural knowledge question" in instr_lower:
             return "culturalbench"
@@ -123,6 +139,12 @@ def detect_dataset_type(data: list) -> str:
             return "normad"
         if "determine whether the behavior" in instr_lower:
             return "normad"
+
+    # Check input content for CultureLLM (WVS survey pattern)
+    for item in sample:
+        inp = item.get("input", "")
+        if "Give me the answer from" in inp and "You can only choose one option" in inp:
+            return "culturellm"
 
     # Check if input contains "Response 1" / "Response 2" pattern (CultureAtlas)
     for item in sample:
@@ -280,6 +302,8 @@ def main():
             args.config_path = os.path.join(config_dir, "hf_cac_config_cultureatlas.yaml")
         elif dataset_type == "culturalbench":
             args.config_path = os.path.join(config_dir, "hf_cac_config_culturalbench.yaml")
+        elif dataset_type == "culturellm":
+            args.config_path = os.path.join(config_dir, "hf_cac_config_culturellm.yaml")
         else:
             args.config_path = os.path.join(config_dir, "hf_cac_config.yaml")
         print(f"Auto-selected config: {args.config_path}")
@@ -493,6 +517,8 @@ def compute_accuracy(output_file: str) -> dict:
         max_choice = 2
     elif task_type == "culturalbench":
         max_choice = 4
+    elif task_type == "culturellm":
+        max_choice = 9  # WVS questions have variable scales (0-8 range observed)
     else:
         max_choice = 3
     print(f"Accuracy evaluation — detected task type: {task_type} (max_choice={max_choice})")

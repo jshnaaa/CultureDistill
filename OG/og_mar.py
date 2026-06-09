@@ -85,6 +85,7 @@ from OG.og_common import (
 DATASET_NORMAD = "normad"
 DATASET_CULTURALBENCH = "culturalbench"
 DATASET_BLEND = "blend"
+DATASET_CULTURELLM = "culturellm"
 
 
 def detect_dataset_type(input_file: str) -> str:
@@ -94,6 +95,8 @@ def detect_dataset_type(input_file: str) -> str:
         return DATASET_CULTURALBENCH
     if "blend" in basename:
         return DATASET_BLEND
+    if "culturellm" in basename or "culture_llm" in basename:
+        return DATASET_CULTURELLM
     # Default to normad
     return DATASET_NORMAD
 
@@ -286,6 +289,89 @@ Output Format (JSON only):
 
 
 # ===================================================================
+# CultureLLM Persona Agent Prompt (adapted from Table 8)
+# CultureLLM is directly sourced from WVS, so the ontology triples
+# are highly relevant. This prompt encourages active use of ontology
+# context and cultural value reasoning.
+# ===================================================================
+
+CULTURELLM_PERSONA_PROMPT = """\
+Task:
+- You are Persona Agent {persona_id}, representing the cultural perspective of {country_name}.
+- The question below is from the World Values Survey (WVS). Your job is to select the option that best represents the dominant cultural viewpoint of people in {country_name}.
+- Use ALL provided persona-defining inputs: the ontology context captures core cultural value relationships directly relevant to WVS topics; the demographic profile and value summaries define your cultural perspective.
+- Prohibited: fabricating demographics/values/edges not provided; answering from a universal or Western-default perspective.
+
+Inputs:
+- [DEMOGRAPHICS]: {demographics_text}
+- [VALUE PROFILES]: {value_summaries_text}
+- [ONTOLOGY CONTEXT]: {hyper_nodes_text}
+- [RESPONSE OPTIONS]: {options_text}
+- [USER QUESTION]: {question}
+
+Strict Rules:
+- This is a cultural values question. Choose the option that best represents how people in {country_name} would typically respond, based on their cultural norms and values.
+- Actively integrate the ontology context: these triples describe relationships between cultural value domains (e.g., religious values influence family values) that are directly relevant to WVS questions.
+- Stay in persona as a representative of {country_name}; reason from that culture's dominant perspective.
+- Cite at least 1 ontology relationship and 1 demographic attribute in your reasoning.
+- Choose exactly one option number; output only one valid JSON object and nothing else.
+- Your chosen_answer MUST be the option number only (e.g., "1", "2", "3", etc.).
+- reasoning must be >= 50 words explaining why this cultural perspective leads to the chosen answer.
+
+Output Format (JSON only):
+{{
+  "persona_id": "{persona_id}",
+  "chosen_answer": "<option_number>",
+  "reasoning": "...",
+  "alignment_factors": {{
+    "demographic": "...",
+    "value_summaries_used": [],
+    "hyper_edges_used": [],
+    "integration_rationale": "..."
+  }}
+}}"""
+
+
+# ===================================================================
+# CultureLLM Judgment Agent Prompt (adapted from Table 9)
+# Emphasizes cultural majority perspective over factual correctness.
+# ===================================================================
+
+CULTURELLM_JUDGMENT_PROMPT = """\
+Task:
+- You are the Judgment Agent.
+- Given the question, options, persona outputs, and a pre-computed vote summary, select exactly one final option.
+- This is a World Values Survey question about cultural attitudes. The correct answer is the one that best represents the dominant cultural perspective of the target country.
+- Your decision must be based on: (1) Persona outputs and their cultural reasoning (primary evidence), (2) Vote summary (secondary context).
+- If all personas agree, confirm their answer. If they disagree, prefer the option supported by stronger cultural reasoning aligned with the country's known value orientation.
+- Prohibited: answering from a universal/Western perspective; ignoring cultural context.
+
+Inputs:
+- [USER QUESTION]: {question_text}
+- [RESPONSE OPTIONS]: {options_text}
+- [VOTE SUMMARY]: {vote_summary}
+- [PERSONA OUTPUTS]: {persona_outputs}
+
+Strict Rules:
+- Use information in [PERSONA OUTPUTS] and [VOTE SUMMARY] as primary evidence.
+- Treat vote counts as correct and immutable; do not recount or modify them.
+- The correct answer represents the DOMINANT cultural viewpoint of the target country, not a universal truth.
+- Prefer the option that aligns with the country's cultural values as expressed in persona reasoning.
+- For Likert-scale questions (1-10 or similar), choose the specific number that best represents the cultural majority, even if approximate.
+
+Decision Procedure:
+- A) Cultural Alignment (Primary): Which option best represents this country's dominant cultural values?
+- B) Persona Consensus (Secondary): What do the personas agree on, and is their reasoning culturally grounded?
+- C) Vote Count (Tertiary): Use votes to break ties when cultural reasoning is comparable.
+
+Output Format (JSON only):
+{{
+  "final_answer": "{valid_answer_hint}",
+  "reasoning": "..."
+}}"""
+
+
+# ===================================================================
 # Chat template helper
 # ===================================================================
 
@@ -416,6 +502,78 @@ def infer_axis_culturalbench(input_text: str, country: str) -> str:
 
 
 # ===================================================================
+# CultureLLM: Parse input and build options text
+# ===================================================================
+
+def parse_culturellm_input(input_text: str) -> tuple:
+    """
+    Parse CultureLLM input to extract the question stem, options text,
+    options list, and valid answer range.
+
+    CultureLLM format examples:
+      "Country: X\n\nQuestion: Give me the answer from 1 to 4: Do you agree with ...?
+       1. Strongly agree 2. agree 3. Disagree 4. Strongly disagree. You can only choose one option."
+      "Country: X\n\nQuestion: Give me the answer from 1 to 10: Do you agree with ...?
+       1. Completely disagree 10. Completely agree . You can only choose one option."
+      "Country: X\n\nQuestion: Give me the answer from 0 to 2: ...?
+       2. Agree 1. Hard to say 0. Disagree. You can only choose one option."
+
+    Returns:
+        (question_stem: str, options_text: str, options_list: list[str],
+         valid_range_start: int, valid_range_end: int)
+    """
+    # Extract the answer range: "from X to Y"
+    range_match = re.search(r'from (\d+) to (\d+)', input_text)
+    if range_match:
+        valid_start = int(range_match.group(1))
+        valid_end = int(range_match.group(2))
+    else:
+        valid_start, valid_end = 1, 4  # fallback
+
+    # Extract question part (after "Question:" prefix, before options)
+    question_match = re.search(
+        r'Question:\s*Give me the answer from \d+ to \d+:\s*(.+?)(?:\s*\d+[\.\)]\s)',
+        input_text, re.DOTALL
+    )
+    if question_match:
+        question_stem = question_match.group(1).strip()
+    else:
+        # Fallback: everything after "Question:" until first option number
+        q_match = re.search(r'Question:\s*(.+?)(?:\s*\d+[\.\)]\s)', input_text, re.DOTALL)
+        question_stem = q_match.group(1).strip() if q_match else input_text
+
+    # Remove trailing instruction "You can only choose one option."
+    question_stem = re.sub(r'\s*You can only choose one option\.?\s*$', '', question_stem)
+
+    # Extract options: find all "N. text" patterns
+    # For 1-10 scale with only endpoints, build synthetic options
+    if valid_end == 10:
+        # Only endpoint labels provided (e.g., "1. Completely disagree 10. Completely agree")
+        # Build a list: 1 through 10
+        label_1 = re.search(r'1\.\s*([^0-9]+?)(?:\s*10\.|\s*$)', input_text)
+        label_10 = re.search(r'10\.\s*([^.]+?)(?:\.\s*You|\s*$)', input_text)
+        l1 = label_1.group(1).strip() if label_1 else "Completely disagree"
+        l10 = label_10.group(1).strip().rstrip('.') if label_10 else "Completely agree"
+        options_list = [f"{i}." for i in range(1, 11)]
+        options_list[0] = f"1. {l1}"
+        options_list[9] = f"10. {l10}"
+        options_text = "\n".join(options_list)
+    else:
+        # Normal options: extract "N. text" patterns
+        # Match patterns like "1. Strongly agree" or "0. Disagree"
+        option_matches = re.findall(r'(\d+)[\.\)]\s*([^0-9]+?)(?=\s*\d+[\.\)]|\s*\.?\s*You can only|\s*$)', input_text)
+        if option_matches:
+            options_list = [f"{num}. {text.strip().rstrip('.')}" for num, text in option_matches]
+            options_text = "\n".join(options_list)
+        else:
+            # Fallback: just list numbers
+            options_list = [f"{i}." for i in range(valid_start, valid_end + 1)]
+            options_text = "\n".join(options_list)
+
+    return question_stem, options_text, options_list, valid_start, valid_end
+
+
+# ===================================================================
 # Unified answer extraction (supports both 1-3 and 1-4)
 # ===================================================================
 
@@ -507,17 +665,21 @@ def _match_text_to_option(answer_text: str, options_list: list) -> str:
     return best_match
 
 
-def extract_answer_unified(text: str, dataset_type: str, options_list: list = None) -> str:
+def extract_answer_unified(text: str, dataset_type: str, options_list: list = None,
+                           valid_set_override: str = None) -> str:
     """
     Extract answer from model output.
     For NormAD: valid answers are 1/2/3.
-    For CulturalBench: valid answers are 1/2/3/4.
+    For CulturalBench/BLEnD: valid answers are 1/2/3/4.
+    For CultureLLM: valid answers depend on question (0-2, 1-4, 1-5, or 1-10).
 
     Args:
         text: Raw model output text
-        dataset_type: "normad" or "culturalbench"
+        dataset_type: "normad", "culturalbench", "blend", or "culturellm"
         options_list: List of option strings (e.g., ["1. Cycle everywhere", ...])
                      Used for text-matching when the model outputs text without a number prefix.
+        valid_set_override: If provided, overrides the default valid_set for this dataset type.
+                           String of valid digits (e.g., "012" for 0-2 range, "12345678910" for 1-10).
 
     Strategy:
     1. Parse the outermost JSON object (handles nested braces like alignment_factors)
@@ -530,7 +692,20 @@ def extract_answer_unified(text: str, dataset_type: str, options_list: list = No
     if not text:
         return None
 
-    valid_set = "123" if dataset_type == DATASET_NORMAD else "1234"
+    # Build valid_set as a set of strings for flexible matching
+    if valid_set_override:
+        valid_set = set(valid_set_override) if isinstance(valid_set_override, (list, set)) else set(valid_set_override.split(","))
+    elif dataset_type == DATASET_NORMAD:
+        valid_set = {"1", "2", "3"}
+    elif dataset_type == DATASET_CULTURELLM:
+        # CultureLLM has variable ranges; if no override given, accept 0-10
+        valid_set = {str(i) for i in range(0, 11)}
+    else:
+        valid_set = {"1", "2", "3", "4"}
+
+    # Helper: check if a number string is in valid_set
+    def _is_valid(num_str: str) -> bool:
+        return num_str in valid_set
 
     # --- Strategy 1: Parse outermost JSON (handles nested objects) ---
     obj = _find_outermost_json(text)
@@ -539,9 +714,9 @@ def extract_answer_unified(text: str, dataset_type: str, options_list: list = No
         answer_val = obj.get("final_answer") or obj.get("chosen_answer") or ""
         if answer_val:
             answer_str = str(answer_val).strip()
-            # Extract the leading digit from "4. Talking loudly..." or "2: Poached"
-            num_match = re.match(r'(\d)', answer_str)
-            if num_match and num_match.group(1) in valid_set:
+            # Extract the leading number from "4. Talking loudly..." or "10" or "2: Poached"
+            num_match = re.match(r'(\d+)', answer_str)
+            if num_match and _is_valid(num_match.group(1)):
                 return num_match.group(1)
 
             # Text-only answer: match against options_list
@@ -551,16 +726,16 @@ def extract_answer_unified(text: str, dataset_type: str, options_list: list = No
                     return matched
 
     # --- Strategy 2: Regex-based field extraction (no full JSON parse needed) ---
-    # Directly search for "chosen_answer": "N. ..." or "final_answer": "N. ..."
-    field_pattern = r'"(?:final_answer|chosen_answer)"\s*:\s*"(\d)'
+    # Directly search for "chosen_answer": "N..." or "final_answer": "N..."
+    field_pattern = r'"(?:final_answer|chosen_answer)"\s*:\s*"(\d+)'
     field_match = re.search(field_pattern, text)
-    if field_match and field_match.group(1) in valid_set:
+    if field_match and _is_valid(field_match.group(1)):
         return field_match.group(1)
 
     # Also try: "chosen_answer": N (without quotes, just a number)
-    field_pattern2 = r'"(?:final_answer|chosen_answer)"\s*:\s*(\d)'
+    field_pattern2 = r'"(?:final_answer|chosen_answer)"\s*:\s*(\d+)'
     field_match2 = re.search(field_pattern2, text)
-    if field_match2 and field_match2.group(1) in valid_set:
+    if field_match2 and _is_valid(field_match2.group(1)):
         return field_match2.group(1)
 
     # --- Strategy 2b: If JSON parsing found a text answer but no options_list was given ---
@@ -572,9 +747,9 @@ def extract_answer_unified(text: str, dataset_type: str, options_list: list = No
     # --- Strategy 3: Look for explicit answer patterns ---
     text_lower = text.lower().strip()
 
-    pattern = r'(?:answer|choice|option)\s*(?:is|:)?\s*([' + valid_set + r'])'
+    pattern = r'(?:answer|choice|option)\s*(?:is|:)?\s*(\d+)'
     num_match = re.search(pattern, text_lower)
-    if num_match:
+    if num_match and _is_valid(num_match.group(1)):
         return num_match.group(1)
 
     # NormAD-specific: check for yes/no/neither keywords
@@ -592,21 +767,22 @@ def extract_answer_unified(text: str, dataset_type: str, options_list: list = No
     answer_region = re.search(r'(?:chosen_answer|final_answer)["\s:]+(.{1,80})', text)
     if answer_region:
         region_text = answer_region.group(1)
-        # First try digit
-        digit_match = re.search(r'[' + valid_set + r']', region_text)
-        if digit_match:
-            return digit_match.group(0)
+        # First try number
+        digit_match = re.search(r'(\d+)', region_text)
+        if digit_match and _is_valid(digit_match.group(1)):
+            return digit_match.group(1)
         # Try text matching on the region content
         if options_list:
             matched = _match_text_to_option(region_text.strip('" '), options_list)
             if matched:
                 return matched
 
-    # Absolute last resort: skip first 200 chars (avoids persona_id) and find digit
+    # Absolute last resort: skip first 200 chars (avoids persona_id) and find valid number
     if len(text) > 200:
-        late_digit = re.search(r'[' + valid_set + r']', text[200:])
-        if late_digit:
-            return late_digit.group(0)
+        late_digits = re.finditer(r'(\d+)', text[200:])
+        for m in late_digits:
+            if _is_valid(m.group(1)):
+                return m.group(1)
 
     return None
 
@@ -615,19 +791,28 @@ def extract_answer_unified(text: str, dataset_type: str, options_list: list = No
 # Unified vote summary (supports both datasets)
 # ===================================================================
 
-def format_vote_summary_unified(persona_answers: list, dataset_type: str) -> str:
+def format_vote_summary_unified(persona_answers: list, dataset_type: str,
+                                valid_set_override: set = None) -> str:
     """
     Create a vote summary from persona agent answers.
-    Uses REVERSE_ANSWER_MAP labels for NormAD, plain option numbers for CulturalBench.
+    Uses REVERSE_ANSWER_MAP labels for NormAD, plain option numbers for others.
     """
     vote_counter = Counter()
-    valid_set = "123" if dataset_type == DATASET_NORMAD else "1234"
+    if valid_set_override:
+        valid_set = valid_set_override
+    elif dataset_type == DATASET_NORMAD:
+        valid_set = {"1", "2", "3"}
+    elif dataset_type == DATASET_CULTURELLM:
+        valid_set = {str(i) for i in range(0, 11)}
+    else:
+        valid_set = {"1", "2", "3", "4"}
+
     for ans in persona_answers:
         if ans and ans in valid_set:
             vote_counter[ans] += 1
 
     parts = []
-    for option in sorted(vote_counter.keys()):
+    for option in sorted(vote_counter.keys(), key=lambda x: int(x)):
         if dataset_type == DATASET_NORMAD:
             option_label = REVERSE_ANSWER_MAP.get(option, f"Option {option}")
             parts.append(f"Option {option} ({option_label}): {vote_counter[option]} vote(s)")
@@ -684,6 +869,31 @@ def run_og_mar(args):
                 "axis": axis,
                 "options_text": NORMAD_OPTIONS_TEXT,
                 "question_stem": None,  # built dynamically in Stage 2
+            })
+    elif dataset_type == DATASET_CULTURELLM:
+        for item in dataset:
+            input_text = item.get("input", "")
+            country = item.get("country", "").strip()
+            country_key = country.lower().replace(" ", "_")
+            question_stem, options_text, options_list, valid_start, valid_end = parse_culturellm_input(input_text)
+            axis = infer_axis_culturalbench(input_text, country_key)  # reuse same heuristic
+
+            # Build per-sample valid_set
+            sample_valid_set = {str(i) for i in range(valid_start, valid_end + 1)}
+
+            parsed.append({
+                **item,
+                "country": country_key,
+                "country_display": country,
+                "background": question_stem,  # use question as context for retrieval
+                "scenario": "",
+                "axis": axis,
+                "options_text": options_text,
+                "options_list": options_list,
+                "question_stem": question_stem,
+                "valid_set": sample_valid_set,
+                "valid_start": valid_start,
+                "valid_end": valid_end,
             })
     else:  # DATASET_CULTURALBENCH or DATASET_BLEND (same input format)
         for item in dataset:
@@ -785,7 +995,7 @@ def run_og_mar(args):
                 f"evaluate the following scenario:\n{p['scenario']}\n\n"
                 f"Is the described behavior socially acceptable in this culture?"
             )
-        else:  # DATASET_CULTURALBENCH or DATASET_BLEND
+        else:  # DATASET_CULTURALBENCH, DATASET_BLEND, or DATASET_CULTURELLM
             question = p["question_stem"]
 
         options_text = p["options_text"]
@@ -794,6 +1004,8 @@ def run_og_mar(args):
             # Select prompt template based on dataset type
             if dataset_type == DATASET_BLEND:
                 prompt_template = BLEND_PERSONA_PROMPT
+            elif dataset_type == DATASET_CULTURELLM:
+                prompt_template = CULTURELLM_PERSONA_PROMPT
             elif dataset_type == DATASET_CULTURALBENCH:
                 prompt_template = CULTURALBENCH_PERSONA_PROMPT
             else:
@@ -807,8 +1019,8 @@ def run_og_mar(args):
                 options_text=options_text,
                 question=question,
             )
-            # CulturalBench/BLEnD prompts need country_name for grounding
-            if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND):
+            # CulturalBench/BLEnD/CultureLLM prompts need country_name for grounding
+            if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND, DATASET_CULTURELLM):
                 format_kwargs["country_name"] = p["country"].replace("_", " ").title()
             user_content = prompt_template.format(**format_kwargs)
             all_persona_prompts.append(apply_chat(tokenizer, user_content))
@@ -843,10 +1055,12 @@ def run_og_mar(args):
     # First, extract persona answers for vote summary
     persona_answers = [[None] * K for _ in range(n)]
     for idx in range(n):
-        opts = parsed[idx].get("options_list") if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND) else None
+        opts = parsed[idx].get("options_list") if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND, DATASET_CULTURELLM) else None
+        vs_override = parsed[idx].get("valid_set") if dataset_type == DATASET_CULTURELLM else None
         for k in range(K):
             persona_answers[idx][k] = extract_answer_unified(
-                persona_outputs[idx][k], dataset_type, options_list=opts
+                persona_outputs[idx][k], dataset_type, options_list=opts,
+                valid_set_override=vs_override
             )
 
     # Build judgment prompts
@@ -861,7 +1075,10 @@ def run_og_mar(args):
         persona_outputs_text = "\n\n".join(persona_text_parts)
 
         # Vote summary
-        vote_summary = format_vote_summary_unified(persona_answers[idx], dataset_type)
+        vs_override = p.get("valid_set") if dataset_type == DATASET_CULTURELLM else None
+        vote_summary = format_vote_summary_unified(
+            persona_answers[idx], dataset_type, valid_set_override=vs_override
+        )
 
         # Question text (dataset-specific)
         if dataset_type == DATASET_NORMAD:
@@ -870,7 +1087,7 @@ def run_og_mar(args):
                 f"evaluate the following scenario:\n{p['scenario']}\n\n"
                 f"Is the described behavior socially acceptable in this culture?"
             )
-        else:  # DATASET_CULTURALBENCH or DATASET_BLEND
+        else:  # DATASET_CULTURALBENCH, DATASET_BLEND, or DATASET_CULTURELLM
             question_text = p["question_stem"]
 
         options_text = p["options_text"]
@@ -878,16 +1095,27 @@ def run_og_mar(args):
         # Select judgment prompt based on dataset type
         if dataset_type == DATASET_BLEND:
             judgment_template = BLEND_JUDGMENT_PROMPT
+        elif dataset_type == DATASET_CULTURELLM:
+            judgment_template = CULTURELLM_JUDGMENT_PROMPT
         elif dataset_type == DATASET_CULTURALBENCH:
             judgment_template = CULTURALBENCH_JUDGMENT_PROMPT
         else:
             judgment_template = JUDGMENT_AGENT_PROMPT
-        user_content = judgment_template.format(
+
+        # Build format kwargs for judgment template
+        fmt_kwargs = dict(
             question_text=question_text,
             options_text=options_text,
             vote_summary=vote_summary,
             persona_outputs=persona_outputs_text,
         )
+        # CultureLLM judgment prompt has valid_answer_hint placeholder
+        if dataset_type == DATASET_CULTURELLM:
+            valid_start = p.get("valid_start", 1)
+            valid_end = p.get("valid_end", 4)
+            fmt_kwargs["valid_answer_hint"] = f"<number from {valid_start} to {valid_end}>"
+
+        user_content = judgment_template.format(**fmt_kwargs)
         judgment_prompts.append(apply_chat(tokenizer, user_content))
 
     # Batch inference for judgment
@@ -910,8 +1138,10 @@ def run_og_mar(args):
     for idx, p in enumerate(parsed):
         # Extract judgment answer
         judge_resp = judgment_outputs[idx]
-        opts = p.get("options_list") if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND) else None
-        judge_ans = extract_answer_unified(judge_resp, dataset_type, options_list=opts)
+        opts = p.get("options_list") if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND, DATASET_CULTURELLM) else None
+        vs_override = p.get("valid_set") if dataset_type == DATASET_CULTURELLM else None
+        judge_ans = extract_answer_unified(judge_resp, dataset_type, options_list=opts,
+                                           valid_set_override=vs_override)
 
         # If judgment extraction fails, fall back to majority vote
         if judge_ans is None:
@@ -932,17 +1162,20 @@ def run_og_mar(args):
             }
 
         # Build result record (dataset-specific fields)
+        vs_override_rec = p.get("valid_set") if dataset_type == DATASET_CULTURELLM else None
         record = {
             "instruction": p.get("instruction", ""),
             "input": p.get("input", ""),
             "output": gt,
-            "country": p.get("country_display", p["country"]) if dataset_type == DATASET_CULTURALBENCH else p["country"],
+            "country": p.get("country_display", p["country"]) if dataset_type in (DATASET_CULTURALBENCH, DATASET_CULTURELLM) else p["country"],
             "axis": p["axis"],
             # Retrieval context
             "ontology_triples": all_triples[idx],
             # Persona agents
             "persona_outputs": per_persona,
-            "persona_vote_summary": format_vote_summary_unified(persona_answers[idx], dataset_type),
+            "persona_vote_summary": format_vote_summary_unified(
+                persona_answers[idx], dataset_type, valid_set_override=vs_override_rec
+            ),
             # Judgment
             "judgment_response": judge_resp,
             "final_answer": judge_ans if judge_ans else "",

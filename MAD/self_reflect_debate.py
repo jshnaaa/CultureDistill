@@ -40,8 +40,9 @@ from transformers import AutoTokenizer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from MAD.mad_common import (
     MODEL_ALIASES, ANSWER_MAP, REVERSE_ANSWER_MAP,
-    DATASET_NORMAD, DATASET_MCQ, DATASET_BLEND,
+    DATASET_NORMAD, DATASET_MCQ, DATASET_BLEND, DATASET_CULTURELLM,
     load_dataset, parse_input, extract_answer, extract_answer_mcq,
+    extract_answer_culturellm, get_culturellm_option_range,
     extract_choice, detect_dataset_type, infer_output_path, compute_metrics,
 )
 
@@ -345,6 +346,104 @@ PROMPT_BLEND_JUDGE = (
     "Final decision:"
 )
 
+# ---------- CultureLLM prompts (World Values Survey, variable options) ----------
+
+SYSTEM_PROMPT_CULTURELLM = (
+    "You are a helpful assistant with deep expertise in cross-cultural "
+    "values, social attitudes, and the World Values Survey."
+)
+
+PROMPT_CULTURELLM_INITIAL = (
+    "Task: You will be given a question from the World Values Survey. "
+    "Answer it by selecting the option number that best represents the "
+    "prevailing cultural perspective and common attitudes in {country}. "
+    "Do not answer based on your own values. Only align to the cultural "
+    "norms and majority views of {country}. "
+    "Think step by step about the cultural values of {country}, then respond "
+    "with the option number that best reflects {country}'s perspective. "
+    "Explain your answer in less than three sentences.\n\n"
+    "Question:\n{story}\n"
+    "Answer ({option_range}):"
+)
+
+PROMPT_CULTURELLM_CHOOSE = (
+    "Task: You are currently discussing the following World Values Survey "
+    "question about {country}'s cultural perspective with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n\n"
+    "You can choose to (A) reflect on your response or (B) "
+    "respond to the discussant by providing any relevant feed-"
+    "back. Respond with your choice - (A) reflect or (B) "
+    "respond to the discussant. Only respond your choice as "
+    "(A) or (B).\n"
+    "Response:"
+)
+
+PROMPT_CULTURELLM_REFLECT = (
+    "Task: You are currently discussing the following World Values Survey "
+    "question about {country}'s cultural perspective with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n\n"
+    "You chose to reflect on your response. Respond in less "
+    "than three sentences.\n"
+    "Response:"
+)
+
+PROMPT_CULTURELLM_DEBATE = (
+    "Task: You are currently discussing the following World Values Survey "
+    "question about {country}'s cultural perspective with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n\n"
+    "You chose to respond to the discussant by providing any "
+    "relevant feedback. If you disagree, explain why based on the cultural values "
+    "and social attitudes commonly held in {country}. "
+    "Respond in less than three sentences.\n"
+    "Response:"
+)
+
+PROMPT_CULTURELLM_FINAL = (
+    "Task: You are currently discussing the following World Values Survey "
+    "question about {country}'s cultural perspective with the other discussant. "
+    "You chose to {your_action}. Your discussant chose "
+    "to {other_action}.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n"
+    "Your feedback: {your_feedback}\n"
+    "Discussant feedback: {other_feedback}\n\n"
+    "Based on the above discussion, critically think about what the "
+    "prevailing cultural perspective in {country} would be, and make "
+    "your final decision. Respond with the option number that best "
+    "represents {country}'s cultural values.\n"
+    "Answer ({option_range}):"
+)
+
+PROMPT_CULTURELLM_JUDGE = (
+    "Task: You are a judge responsible for making a "
+    "final decision based on the debate history between "
+    "Model1 and Model2. They have debated the following "
+    "World Values Survey question about {country}'s "
+    "cultural perspective.\n"
+    "Do NOT make any independent "
+    "judgments; base your final decision solely on the de-"
+    "bate. Evaluate which agent's reasoning better reflects "
+    "the actual cultural values and social attitudes in {country}. "
+    "Respond with a final decision - the option number that "
+    "best represents {country}'s perspective.\n\n"
+    "Question:\n{story}\n\n"
+    "*** Debate starts ***\n"
+    "Model1 opinion: {model1_response}\n"
+    "Model2 opinion: {model2_response}\n"
+    "Model1 feedback: {model1_feedback}\n"
+    "Model2 feedback: {model2_feedback}\n"
+    "Model1 final decision: {model1_decision}\n"
+    "Model2 final decision: {model2_decision}\n"
+    "*** Debate ends ***\n\n"
+    "Final decision:"
+)
+
 
 # ===================================================================
 # Chat template helper
@@ -385,13 +484,23 @@ def run_self_reflect_debate(args):
 
     # --- Detect dataset type ---
     ds_type = detect_dataset_type(args.input_file)
-    is_mcq = (ds_type in (DATASET_MCQ, DATASET_BLEND))
+    is_mcq = (ds_type in (DATASET_MCQ, DATASET_BLEND, DATASET_CULTURELLM))
     ds_label = {DATASET_NORMAD: "Yes/No/Neither", DATASET_MCQ: "MCQ 4-choice (CulturalBench)",
-                DATASET_BLEND: "MCQ 4-choice (BLEND)"}
+                DATASET_BLEND: "MCQ 4-choice (BLEND)",
+                DATASET_CULTURELLM: "World Values Survey (CultureLLM)"}
     print(f"Dataset type: {ds_type} ({ds_label.get(ds_type, ds_type)})")
 
     # Select prompt templates based on dataset type
-    if ds_type == DATASET_BLEND:
+    if ds_type == DATASET_CULTURELLM:
+        tpl_initial = PROMPT_CULTURELLM_INITIAL
+        tpl_choose = PROMPT_CULTURELLM_CHOOSE
+        tpl_reflect = PROMPT_CULTURELLM_REFLECT
+        tpl_debate = PROMPT_CULTURELLM_DEBATE
+        tpl_final = PROMPT_CULTURELLM_FINAL
+        tpl_judge = PROMPT_CULTURELLM_JUDGE
+        sys_prompt = SYSTEM_PROMPT_CULTURELLM
+        answer_extractor = None  # handled per-item due to variable option ranges
+    elif ds_type == DATASET_BLEND:
         tpl_initial = PROMPT_BLEND_INITIAL
         tpl_choose = PROMPT_BLEND_CHOOSE
         tpl_reflect = PROMPT_BLEND_REFLECT
@@ -423,7 +532,7 @@ def run_self_reflect_debate(args):
     parsed = []
     for item in dataset:
         if is_mcq:
-            # CulturalBench/BLEND: country is a top-level field, input is the question
+            # CulturalBench/BLEND/CultureLLM: country is a top-level field, input is the question
             country = item.get("country", "")
             story = item["input"]
         else:
@@ -436,10 +545,23 @@ def run_self_reflect_debate(args):
                 )
             else:
                 story = scenario
+
+        # For CultureLLM: extract per-item option range
+        if ds_type == DATASET_CULTURELLM:
+            min_opt, max_opt = get_culturellm_option_range(item["input"])
+            option_range = (f"{min_opt} to {max_opt}"
+                           if max_opt <= 5
+                           else f"{min_opt}, 2, 3, ... {max_opt}")
+        else:
+            min_opt, max_opt, option_range = None, None, None
+
         parsed.append({
             **item,
             "country": country,
             "scenario": story,
+            "_min_opt": min_opt,
+            "_max_opt": max_opt,
+            "_option_range": option_range,
         })
 
     n = len(parsed)
@@ -475,12 +597,20 @@ def run_self_reflect_debate(args):
 
     batch_size = args.batch_size
 
+    # Helper: extract answer considering per-item option range for CultureLLM
+    def _extract(text, item):
+        if ds_type == DATASET_CULTURELLM:
+            return extract_answer_culturellm(text, item["_max_opt"])
+        return answer_extractor(text)
+
     # -------- Stage 1: Initial decisions (both agents) --------
     print("\n=== Stage 1: Initial Decisions ===")
     prompts_a1 = []
     prompts_a2 = []
     for p in parsed:
         kw = {"country": p["country"], "story": p["scenario"]}
+        if ds_type == DATASET_CULTURELLM:
+            kw["option_range"] = p["_option_range"]
         prompts_a1.append(apply_chat(tokenizer, tpl_initial.format(**kw), sys_prompt))
         prompts_a2.append(apply_chat(tokenizer, tpl_initial.format(**kw), sys_prompt))
 
@@ -497,9 +627,9 @@ def run_self_reflect_debate(args):
             r1 = out1[j].outputs[0].text.strip()
             r2 = out2[j].outputs[0].text.strip()
             parsed[idx]["model1_initial"] = r1
-            parsed[idx]["model1_initial_ans"] = answer_extractor(r1)
+            parsed[idx]["model1_initial_ans"] = _extract(r1, parsed[idx])
             parsed[idx]["model2_initial"] = r2
-            parsed[idx]["model2_initial_ans"] = answer_extractor(r2)
+            parsed[idx]["model2_initial_ans"] = _extract(r2, parsed[idx])
 
     # -------- Stage 2: Choose self-reflect or debate --------
     print("\n=== Stage 2: Choose Self-Reflect or Debate ===")
@@ -611,6 +741,9 @@ def run_self_reflect_debate(args):
             "your_feedback": p["model2_action_response"],
             "other_feedback": p["model1_action_response"],
         }
+        if ds_type == DATASET_CULTURELLM:
+            kw1["option_range"] = p["_option_range"]
+            kw2["option_range"] = p["_option_range"]
         prompts_final1.append(apply_chat(tokenizer, tpl_final.format(**kw1), sys_prompt))
         prompts_final2.append(apply_chat(tokenizer, tpl_final.format(**kw2), sys_prompt))
 
@@ -624,9 +757,9 @@ def run_self_reflect_debate(args):
             rf1 = f1[j].outputs[0].text.strip()
             rf2 = f2[j].outputs[0].text.strip()
             parsed[idx]["model1_final"] = rf1
-            parsed[idx]["model1_final_ans"] = answer_extractor(rf1)
+            parsed[idx]["model1_final_ans"] = _extract(rf1, parsed[idx])
             parsed[idx]["model2_final"] = rf2
-            parsed[idx]["model2_final_ans"] = answer_extractor(rf2)
+            parsed[idx]["model2_final_ans"] = _extract(rf2, parsed[idx])
 
     # -------- Stage 5: Judge for disagreements --------
     print("\n=== Stage 5: Judge Resolution ===")
@@ -667,7 +800,7 @@ def run_self_reflect_debate(args):
             for j, (didx, jo) in enumerate(zip(disagree_indices[i:batch_end], j_out)):
                 resp = jo.outputs[0].text.strip()
                 parsed[didx]["judge_response"] = resp
-                parsed[didx]["judge_ans"] = answer_extractor(resp)
+                parsed[didx]["judge_ans"] = _extract(resp, parsed[didx])
 
     # -------- Build output records --------
     print("\n=== Writing output ===")

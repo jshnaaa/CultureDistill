@@ -25,9 +25,10 @@ ANSWER_MAP = {"yes": "1", "no": "2", "neither": "3"}
 REVERSE_ANSWER_MAP = {"1": "Yes", "2": "No", "3": "Neither"}
 
 # Dataset types
-DATASET_NORMAD = "normad"      # Yes/No/Neither social acceptability
-DATASET_MCQ = "mcq"            # Multiple-choice (1/2/3/4) cultural knowledge (culturalBench)
-DATASET_BLEND = "blend"        # Multiple-choice (1/2/3/4) cultural knowledge (BLEND)
+DATASET_NORMAD = "normad"          # Yes/No/Neither social acceptability
+DATASET_MCQ = "mcq"                # Multiple-choice (1/2/3/4) cultural knowledge (culturalBench)
+DATASET_BLEND = "blend"            # Multiple-choice (1/2/3/4) cultural knowledge (BLEND)
+DATASET_CULTURELLM = "culturellm"  # World Values Survey, variable options (0-2/1-4/1-5/1-10)
 
 
 # ---------------------------------------------------------------------------
@@ -46,13 +47,15 @@ def detect_dataset_type(input_file: str):
     """
     Auto-detect dataset type from input file name.
 
-    Returns: DATASET_NORMAD, DATASET_MCQ, or DATASET_BLEND
+    Returns: DATASET_NORMAD, DATASET_MCQ, DATASET_BLEND, or DATASET_CULTURELLM
     """
     basename = os.path.basename(input_file).lower()
     if "culturalbench" in basename:
         return DATASET_MCQ
     if "blend" in basename:
         return DATASET_BLEND
+    if "culturellm" in basename:
+        return DATASET_CULTURELLM
     return DATASET_NORMAD
 
 
@@ -121,6 +124,67 @@ def extract_answer_mcq(text):
         return matches[-1]
 
     return None
+
+
+def extract_answer_culturellm(text, max_option: int):
+    """
+    Extract answer for CultureLLM (World Values Survey) questions.
+    Supports variable option ranges: 0-2, 1-4, 1-5, 1-10.
+
+    Args:
+        text: model output text
+        max_option: maximum valid option number (e.g., 2, 4, 5, 10)
+
+    Returns: string digit ("0"-"10") or None.
+    """
+    tl = text.strip()
+    min_option = 0 if max_option == 2 else 1  # 0-2 range starts from 0
+
+    def is_valid(val):
+        try:
+            v = int(val)
+            return min_option <= v <= max_option
+        except (ValueError, TypeError):
+            return False
+
+    # Pattern 1: "answer: 3" or "Answer: 2" or "answer is 1"
+    m = re.search(r'answer\s*(?:is|:)\s*(\d+)\b', tl, re.IGNORECASE)
+    if m and is_valid(m.group(1)):
+        return m.group(1)
+
+    # Pattern 2: standalone digit at end
+    m = re.search(r'\b(\d+)\s*\.?\s*$', tl)
+    if m and is_valid(m.group(1)):
+        return m.group(1)
+
+    # Pattern 3: starts with a digit answer
+    m = re.match(r'\s*(\d+)\b', tl)
+    if m and is_valid(m.group(1)):
+        return m.group(1)
+
+    # Pattern 4: "option X"
+    m = re.search(r'option\s*(\d+)\b', tl, re.IGNORECASE)
+    if m and is_valid(m.group(1)):
+        return m.group(1)
+
+    # Pattern 5: last valid digit in the text
+    matches = re.findall(r'\b(\d+)\b', tl)
+    for match in reversed(matches):
+        if is_valid(match):
+            return match
+
+    return None
+
+
+def get_culturellm_option_range(input_text: str):
+    """
+    Extract the option range from a CultureLLM input field.
+    Returns (min_option, max_option) tuple, e.g., (1, 4), (0, 2), (1, 10).
+    """
+    m = re.search(r'from (\d+) to (\d+)', input_text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return 1, 4  # default fallback
 
 
 def extract_answer(text):
