@@ -105,10 +105,8 @@ python Cul/generate_hf_cac_data.py \
   --config_path Cul/configs/hf_cac_config_culturalbench.yaml \
   --model_name qwen \
   --use_vllm --tensor_parallel_size 2 \
-  --max_samples 0 \
-  --negotiation_rounds 1 \
-  --num_agents 3 \
-  --include_judge true
+  --max_samples 0 --negotiation_rounds 1 \
+  --num_agents 3 --include_judge true
 shutdown
 ```
 
@@ -196,9 +194,9 @@ python Cul/single_data.py \
 --tensor_parallel_size 2 --max_samples 0
 
 python Cul/single_data.py \
---input_file /autodl-fs/data/normad_mas.json \
---output_file /autodl-fs/data/normad_qwen_role.json \
---model_name qwen --method role \
+--input_file /autodl-fs/data/blend_mas_after.json \
+--output_file /autodl-fs/data/blend_qwen_role.json \
+--model_name qwen --method base \
 --tensor_parallel_size 2 --max_samples 0
 ```
 
@@ -210,8 +208,7 @@ python Cul/generate_culture_data.py \
     --output_file /autodl-fs/data/qwen/normad_reconcile_inference.jsonl \
     --model_name qwen \
     --use_vllm --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --num_debate_rounds 1 --include_judge true
+    --max_samples 0 --num_debate_rounds 1 --include_judge true
 ```
 
 | 参数 | 含义 |
@@ -245,58 +242,40 @@ source /etc/network_turbo
 sh git.sh
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/cultureLLM_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.3 \
-    --temperature_agent2 0.6 \
-    --max_tokens 512
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0 --temperature 0.3 \
+    --temperature_agent2 0.6 --max_tokens 512
     
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/blend_mas_after.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.3 \
-    --temperature_agent2 0.6 \
-    --max_tokens 512
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0 --temperature 0.3 \
+    --temperature_agent2 0.6 --max_tokens 512
     
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/normad_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.3 \
-    --temperature_agent2 0.6 \
-    --max_tokens 512
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0 --temperature 0.3 \
+    --temperature_agent2 0.6 --max_tokens 512
 
 python MAD/debate_only.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.3 \
-    --temperature_agent2 0.6 \
-    --max_tokens 512
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0 --temperature 0.3 \
+    --temperature_agent2 0.6 --max_tokens 512
 
 # Self-Reflect+Debate Baseline - NorMAD（Qwen 基座）
 python MAD/self_reflect_debate.py \
     --input_file /autodl-fs/data/blend_mas_after.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.3 \
-    --temperature_agent2 0.6 \
-    --max_tokens 512
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0 --temperature 0.3 \
+    --temperature_agent2 0.6 --max_tokens 512
 
 python MAD/self_reflect_debate.py \
     --input_file /autodl-fs/data/cultureLLM_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
-    --max_samples 0 \
-    --temperature 0.3 \
-    --temperature_agent2 0.6 \
-    --max_tokens 512
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0 --temperature 0.3 \
+    --temperature_agent2 0.6 --max_tokens 512
 ```
 
 **参数说明**：
@@ -378,20 +357,17 @@ source /etc/network_turbo
 sh git.sh
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/cultureLLM_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
+    --model_name qwen --tensor_parallel_size 2 \
     --max_samples 0
 
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/blend_mas_after.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
+    --model_name qwen --tensor_parallel_size 2 \
     --max_samples 0
 
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
+    --model_name qwen --tensor_parallel_size 2 \
     --max_samples 0
 ```
 
@@ -480,23 +456,18 @@ source /etc/network_turbo
 sh git.sh
 python OG/og_mar.py \
     --input_file /autodl-fs/data/cultureLLM_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
+    --model_name qwen --tensor_parallel_size 2 \
     --batch_size 256
 
 python OG/og_mar.py \
     --input_file /autodl-fs/data/blend_mas_after.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
+    --model_name qwen --tensor_parallel_size 2 \
     --batch_size 256
 
 python OG/og_mar.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
-    --model_name qwen \
-    --tensor_parallel_size 2 \
+    --model_name qwen --tensor_parallel_size 2 \
     --batch_size 256
-
-
 ```
 
 **参数说明**：
@@ -611,69 +582,6 @@ HF-CAC 框架通过 `--num_agents` 参数支持 2~6 个智能体的消融实验�
 | 2 | Eastern-Collectivist | 中日韩 + 南亚 + 东南亚 + 撒哈拉以南非洲 + 中东北非 | 其余四个区域全部合并 |
 
 合并理由：这是最极端的消融配置，对应 Hofstede 文化维度中最核心的一条轴线——**个人主义 vs 集体主义**。Western-Individualist 代表低权力距离、个人权利优先、世俗法治的文化传统；Eastern-Collectivist 代表高权力距离、群体和谐优先、宗教/传统权威主导的文化传统。虽然内部异质性很大，但这条轴线是跨文化研究中解释力最强的单一维度，2-agent 配置的目的是验证"仅靠一条核心文化对立轴是否足以产生有效的辩论蒸馏数据"。
-
-
-#### 消融实验运行命令
-
-```bash
-cd autodl-tmp/distill
-source /etc/network_turbo
-sh git.sh
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/normad_mas.json \
-      --output_file /autodl-fs/data/qwen/normad_hf_cac_6agents.jsonl \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 6
-
-# 5 agents
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/normad_mas.json \
-      --output_file /autodl-fs/data/qwen/normad_hf_cac_5agents.jsonl \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 5
-
-# --- CulturalBench 数据集 ---
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/culturalBench_mas.json \
-      --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_6agents.jsonl \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 6
-
-# 5 agents
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/culturalBench_mas.json \
-      --output_file /autodl-fs/data/qwen/culturalbench_hf_cac_5agents.jsonl \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 5
-
-# --- BLEnD 数据集消融 ---
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/blend_mas_after.json \
-      --output_file /autodl-fs/data/qwen/blend_hf_cac_6agents.jsonl \
-      --config_path Cul/configs/hf_cac_config_blend.yaml \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 6
-
-# 3 agents (推荐配置，与 CulturalBench 一致)
-python Cul/generate_hf_cac_data.py \
-      --input_file /autodl-fs/data/blend_mas_after.json \
-      --output_file /autodl-fs/data/qwen/blend_hf_cac_3agents.jsonl \
-      --config_path Cul/configs/hf_cac_config_blend.yaml \
-      --model_name qwen \
-      --use_vllm --tensor_parallel_size 2 \
-      --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 3
-```
 
 每个配置运行完成后会自动输出 Judge 和 Guardian 的准确率指标（`--eval_accuracy` 默认开启），结果保存在对应的 `.metrics.json` 文件中。汇总所有配置的 metrics 即可绘制 num_agents vs accuracy 的消融曲线。
 
