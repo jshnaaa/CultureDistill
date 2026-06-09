@@ -32,9 +32,11 @@ class MAGDi(torch.nn.Module):
     """
 
     def __init__(self, model_name, gcn_in_channels, gcn_hidden_channels,
-                 gcn_out_channels, alpha, beta, gamma, aux_device="cuda:0"):
+                 gcn_out_channels, alpha, beta, gamma, aux_device="cuda:0",
+                 decoder_device="cuda:1"):
         super(MAGDi, self).__init__()
         self.aux_device = aux_device
+        self.decoder_device = decoder_device
         self._gcn_in_channels = gcn_in_channels
         self._hidden_size = None  # set later via set_decoder
         
@@ -75,12 +77,23 @@ class MAGDi(torch.nn.Module):
         graph_batch = next(iter(graph_loader))
         graph_batch = graph_batch.to(self.aux_device)
         
+        # Route decoder inputs to decoder's device (cuda:1)
+        dec_device = self.decoder_device
+        pos_input_ids = pos_input_ids.to(dec_device)
+        pos_attention_mask = pos_attention_mask.to(dec_device)
+        pos_labels = pos_labels.to(dec_device)
+        neg_input_ids = neg_input_ids.to(dec_device)
+        neg_attention_mask = neg_attention_mask.to(dec_device)
+        
         # === Positive forward (with gradient for NLL loss) ===
         pos_output = self.decoder(input_ids=pos_input_ids,
                              attention_mask=pos_attention_mask,
                              labels=pos_labels,
                              output_hidden_states=True)
         nll_loss = pos_output.loss
+        # Only keep last hidden state, discard the rest immediately
+        pos_last_hidden = pos_output.hidden_states[-1]
+        del pos_output
         
         # Debug: print loss components on first few steps
         if not hasattr(self, '_debug_count'):
@@ -88,20 +101,22 @@ class MAGDi(torch.nn.Module):
         if self._debug_count < 3:
             print(f"\n[DEBUG step {self._debug_count}] nll_loss={nll_loss.item():.6f}, "
                   f"requires_grad={nll_loss.requires_grad}, "
-                  f"pos_input_ids shape={pos_input_ids.shape}, "
-                  f"pos_labels unique={pos_labels.unique()[:10].tolist()}, "
-                  f"pos_labels -100 count={(pos_labels == -100).sum().item()}/{pos_labels.numel()}")
+                  f"pos_input_ids shape={pos_input_ids.shape}")
             self._debug_count += 1
         
-        pos_seq_emb = self._weighted_pool(pos_output.hidden_states[-1], pos_attention_mask)
+        pos_seq_emb = self._weighted_pool(pos_last_hidden, pos_attention_mask)
+        del pos_last_hidden
 
-        # === Negative forward (NO gradient — saves ~40% compute) ===
+        # === Negative forward (NO gradient — saves ~40% compute & memory) ===
         with torch.no_grad():
             neg_output = self.decoder(input_ids=neg_input_ids,
                                  attention_mask=neg_attention_mask,
                                  labels=None,
                                  output_hidden_states=True)
-            neg_seq_emb = self._weighted_pool(neg_output.hidden_states[-1], neg_attention_mask)
+            neg_last_hidden = neg_output.hidden_states[-1]
+            del neg_output
+            neg_seq_emb = self._weighted_pool(neg_last_hidden, neg_attention_mask)
+            del neg_last_hidden
 
         # Filter out padding-only negatives
         row_sums = neg_attention_mask.sum(dim=1)
@@ -144,7 +159,9 @@ class MAGDi(torch.nn.Module):
             node_loss = torch.tensor(0.0, device=self.aux_device, requires_grad=True)
         
         # Combine losses on aux_device in float32
-        nll_loss = nll_loss.float()
+        # nll_loss is on decoder_device (cuda:1), move to aux_device (cuda:0)
+        # .to() preserves gradient for scalar tensors
+        nll_loss = nll_loss.to(self.aux_device).float()
         
         total_loss = self.alpha * nll_loss + self.beta * node_loss + self.gamma * mr_loss
         
@@ -169,17 +186,20 @@ class MAGDiTrainer(Trainer):
         """Override to prevent Trainer from wrapping model in DataParallel/DDP."""
         return model
 
+    def _prepare_inputs(self, inputs):
+        """Override to prevent Trainer from moving inputs to a single device.
+        Our forward() handles device routing internally."""
+        return inputs
+
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        # Move tensor inputs to the model's device
-        device = model.aux_device
-        
+        # Inputs stay on CPU here; forward() routes them to correct devices
         loss = model(
-            pos_input_ids=inputs["pos_input_ids"].to(device),
-            pos_attention_mask=inputs["pos_attention_mask"].to(device),
-            pos_labels=inputs["pos_labels"].to(device),
-            neg_input_ids=inputs["neg_input_ids"].to(device),
-            neg_attention_mask=inputs["neg_attention_mask"].to(device),
-            neg_labels=inputs["neg_labels"].to(device),
+            pos_input_ids=inputs["pos_input_ids"],
+            pos_attention_mask=inputs["pos_attention_mask"],
+            pos_labels=inputs["pos_labels"],
+            neg_input_ids=inputs["neg_input_ids"],
+            neg_attention_mask=inputs["neg_attention_mask"],
+            neg_labels=inputs["neg_labels"],
             graph=inputs["graph"]
         )
 

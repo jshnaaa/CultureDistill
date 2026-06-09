@@ -58,7 +58,7 @@ from MACD.macd_common import (
     MODEL_ALIASES, CULTURAL_PERSONAS, CULTURAL_VALUES, SCGRD_PROMPT,
     ANSWER_MAP, REVERSE_ANSWER_MAP,
     CB_VALID_ANSWERS, CB_REVERSE_MAP,
-    DATASET_NORMAD, DATASET_CULTURALBENCH, detect_dataset_type,
+    DATASET_NORMAD, DATASET_CULTURALBENCH, DATASET_BLEND, detect_dataset_type,
     load_dataset, parse_input, parse_input_culturalbench,
     extract_answer, extract_answer_culturalbench,
     infer_output_path, compute_metrics,
@@ -174,6 +174,52 @@ PROMPT_SUMMARY_CB = (
 
 
 # ===================================================================
+# Prompt Templates - BLEND (factual cultural knowledge, 4-choice)
+# ===================================================================
+
+# Round 1: Initial Response
+PROMPT_ROUND1_BLEND = (
+    "{persona}\n\n"
+    "You are currently participating in a debate, and there is round 1 of the debate.\n\n"
+    "Answer the following question about everyday cultural knowledge in {country}.\n\n"
+    "{question}\n\n"
+    "Directly answer the question based on your factual knowledge about {country}. "
+    "Select the correct option number and explain your reasoning briefly.\n"
+    "Answer (option number):"
+)
+
+# Round 2: Debate with SCGRD
+PROMPT_ROUND2_BLEND = (
+    "{persona}\n\n"
+    "You are currently participating in a debate, and there is round 2 of the debate.\n\n"
+    "Answer the following question about everyday cultural knowledge in {country}.\n\n"
+    "{question}\n\n"
+    "Previous responses of people from other culture background:\n"
+    "{other_responses}\n\n"
+    "Based on other perspectives and **{scgrd}** strategy, refine your answer to "
+    "the question. You must summarize the common reasoning with other "
+    "cultures at the end of your refined answer. Don't over-analyze, such as what "
+    "these cultural perspectives indicate or mean. You just discuss the original question.\n\n"
+    "Remember: answer based on factual knowledge specific to {country}.\n"
+    "Select the correct option number and explain your reasoning briefly.\n"
+    "Answer (option number):"
+)
+
+# Summary prompt - BLEND
+PROMPT_SUMMARY_BLEND = (
+    "After a multi-agent cultural debate, the following are the final answers "
+    "from agents representing different cultural perspectives on a cultural "
+    "knowledge question about {country}:\n\n"
+    "{agent_responses}\n\n"
+    "Question: {question}\n\n"
+    "Based on the debate above, determine the correct answer to this question "
+    "about {country}. Prioritize factual accuracy and the majority consensus.\n\n"
+    "Respond with the correct option number only.\n"
+    "Answer (option number):"
+)
+
+
+# ===================================================================
 # Culture names list
 # ===================================================================
 
@@ -274,6 +320,11 @@ def run_macd(args):
         PROMPT_R2 = PROMPT_ROUND2_NORMAD
         PROMPT_SUM = PROMPT_SUMMARY_NORMAD
         extract_fn = extract_answer
+    elif dataset_type == DATASET_BLEND:
+        PROMPT_R1 = PROMPT_ROUND1_BLEND
+        PROMPT_R2 = PROMPT_ROUND2_BLEND
+        PROMPT_SUM = PROMPT_SUMMARY_BLEND
+        extract_fn = extract_answer_culturalbench
     else:
         PROMPT_R1 = PROMPT_ROUND1_CB
         PROMPT_R2 = PROMPT_ROUND2_CB
@@ -291,7 +342,7 @@ def run_macd(args):
                 "cultural_bg": cultural_bg,
                 "scenario": scenario,
             })
-        else:
+        else:  # CulturalBench and BLEND share the same format
             country, question = parse_input_culturalbench(item)
             parsed.append({
                 **item,

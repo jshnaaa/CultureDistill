@@ -198,7 +198,8 @@ python MAD/debate_only.py \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0 \
-    --temperature 0.7 \
+    --temperature 0.3 \
+    --temperature_agent2 0.6 \
     --max_tokens 512
 
 # Debate-Only Baseline - CulturalBench（Qwen 基座）
@@ -207,7 +208,18 @@ python MAD/debate_only.py \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0 \
-    --temperature 0.7 \
+    --temperature 0.3 \
+    --temperature_agent2 0.6 \
+    --max_tokens 512
+
+# Debate-Only Baseline - BLEND（Qwen 基座）
+python MAD/debate_only.py \
+    --input_file /autodl-fs/data/blend_mas_after.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.3 \
+    --temperature_agent2 0.6 \
     --max_tokens 512
 
 # Self-Reflect+Debate Baseline - NorMAD（Qwen 基座）
@@ -216,7 +228,18 @@ python MAD/self_reflect_debate.py \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0 \
-    --temperature 0.7 \
+    --temperature 0.3 \
+    --temperature_agent2 0.6 \
+    --max_tokens 512
+
+# Self-Reflect+Debate Baseline - BLEND（Qwen 基座）
+python MAD/self_reflect_debate.py \
+    --input_file /autodl-fs/data/blend_mas_after.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0 \
+    --temperature 0.3 \
+    --temperature_agent2 0.6 \
     --max_tokens 512
 ```
 
@@ -226,14 +249,16 @@ python MAD/self_reflect_debate.py \
 |------|------|--------|
 | `--output_dir` | 输出目录（默认 /autodl-fs/data/mad） | None |
 | `--tensor_parallel_size` | vLLM 张量并行数 | 1 |
-| `--temperature` | 采样温度 | 0.7 |
+| `--temperature` | Agent1 和 Judge 的采样温度 | 0.3 |
+| `--temperature_agent2` | Agent2 的采样温度（增加观点多样性） | 0.6 |
 | `--max_tokens` | 最大生成 token 数 | 512 |
 
-**数据集自动检测**：脚本根据数据样本的 `output` 字段值范围自动判断数据集类型：
-- NorMAD：输出为 "1"/"2"/"3"（Yes/No/Neither），提示词使用论文原始模板
-- CulturalBench：输出为 "1"/"2"/"3"/"4"（4 选 1 MCQ），提示词为论文模板的最小化改写（将 "story" → "question"，"Yes, No or Neither" → "1, 2, 3, or 4"）
+**数据集自动检测**：脚本根据输入文件名自动判断数据集类型：
+- NorMAD：文件名包含 "normad"，输出为 "1"/"2"/"3"（Yes/No/Neither），提示词使用论文原始模板
+- CulturalBench：文件名包含 "culturalbench"，输出为 "1"/"2"/"3"/"4"（4 选 1 MCQ），提示词为论文模板的最小化改写
+- BLEND：文件名包含 "blend"，输出为 "1"/"2"/"3"/"4"（4 选 1 MCQ），使用针对事实性文化知识问答优化的提示词模板
 
-**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，移除 `Rule: {rule-of-thumb}` 相关行。对于 NorMAD 数据集，将 Cultural Background 信息作为 story 的一部分传入模型（格式：`Cultural Background:\n{context}\n\nScenario: {scenario}`）。对于 CulturalBench 数据集，直接使用顶层 `country` 字段和 `input` 字段（已包含完整问题和选项）。提示词模板本身仅做最小格式适配。
+**提示词来源**：严格遵循论文附录 A.3（Debate-Only）和 A.4（Self-Reflect+Debate）的提示词模板，移除 `Rule: {rule-of-thumb}` 相关行，并做小幅优化（增加 step-by-step 推理引导、文化证据引导、事实准确性评估引导）。对于 NorMAD 数据集，将 Cultural Background 信息作为 story 的一部分传入模型（格式：`Cultural Background:\n{context}\n\nScenario: {scenario}`）。对于 CulturalBench 和 BLEND 数据集，直接使用顶层 `country` 字段和 `input` 字段（已包含完整问题和选项）。BLEND 数据集使用专门优化的提示词模板，强调事实性文化知识的回忆和验证。
 
 **推理阶段**（Debate-Only 共 4 阶段，Self-Reflect+Debate 共 5 阶段）：
 
@@ -304,6 +329,12 @@ python MACD/macd_debate.py \
 
 python MACD/macd_debate.py \
     --input_file /autodl-fs/data/normad_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --max_samples 0
+
+python MACD/macd_debate.py \
+    --input_file /autodl-fs/data/blend_mas_after.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --max_samples 0
@@ -401,6 +432,12 @@ python OG/og_mar.py \
 
 python OG/og_mar.py \
     --input_file /autodl-fs/data/culturalBench_mas.json \
+    --model_name qwen \
+    --tensor_parallel_size 2 \
+    --batch_size 256
+
+python OG/og_mar.py \
+    --input_file /autodl-fs/data/blend_mas_after.json \
     --model_name qwen \
     --tensor_parallel_size 2 \
     --batch_size 256

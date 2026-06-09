@@ -235,7 +235,7 @@ def prepare_contrastive_samples(samples, labels):
     return positive_samples, negative_samples
 
 
-def prepare_batch_culture(tokenizer, all_result, num_train_samples, max_node_num, data_source):
+def prepare_batch_culture(tokenizer, all_result, num_train_samples, max_node_num, data_source, max_length=256):
     """
     Prepare training batch with positive/negative pairs for cultural MAGs.
     """
@@ -248,8 +248,8 @@ def prepare_batch_culture(tokenizer, all_result, num_train_samples, max_node_num
         pairs = prepare_contrastive_samples(sentence, label)
         if pairs:
             positive_samples, negative_samples = pairs
-            pos_enc = tokenizer(positive_samples, truncation=True, max_length=512)
-            neg_enc = tokenizer(negative_samples, truncation=True, max_length=512)
+            pos_enc = tokenizer(positive_samples, truncation=True, max_length=max_length)
+            neg_enc = tokenizer(negative_samples, truncation=True, max_length=max_length)
             for pi, pa, ni, na in zip(
                 pos_enc.input_ids, pos_enc.attention_mask,
                 neg_enc.input_ids, neg_enc.attention_mask
@@ -328,12 +328,14 @@ if __name__ == '__main__':
                         help="Number of training epochs")
     parser.add_argument('--lr', type=float, default=2e-5,
                         help="Learning rate")
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=4,
                         help="Per-device training batch size")
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=2,
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=4,
                         help="Gradient accumulation steps")
     parser.add_argument('--warmup_steps', type=int, default=50,
                         help="Warmup steps")
+    parser.add_argument('--max_length', type=int, default=256,
+                        help="Max sequence length for tokenization")
     
     # LoRA
     parser.add_argument('--lora_r', type=int, default=16,
@@ -393,7 +395,11 @@ if __name__ == '__main__':
     gcn_in_channels = model_config.hidden_size
     print(f"\nInitializing MAGDi model (hidden_size={gcn_in_channels})...")
     
-    # Create MAGDi shell (GCN + MLPs on cuda:0)
+    # Create MAGDi shell (GCN + MLPs on cuda:0, decoder on cuda:1)
+    # Split across 2 GPUs: decoder on cuda:1 (≈14GB), GCN/MLP on cuda:0
+    aux_device = "cuda:0"
+    decoder_device = "cuda:1"
+    
     model = MAGDi(
         model_name=model_path,
         gcn_in_channels=gcn_in_channels,
@@ -402,17 +408,18 @@ if __name__ == '__main__':
         alpha=args.alpha,
         beta=args.beta,
         gamma=args.gamma,
-        aux_device="cuda:0"
+        aux_device=aux_device,
+        decoder_device=decoder_device
     )
     
-    # Load decoder on a single GPU (7B fp16 ≈ 14GB, fits in one 48GB card)
-    # Avoid device_map="auto" which uses accelerate hooks that break gradient flow
-    print("Loading decoder on cuda:0...")
+    # Load decoder on cuda:1 (7B fp16 ≈ 14GB, fits in one 48GB card)
+    # No device_map="auto" — direct .to() preserves gradient flow
+    print(f"Loading decoder on {decoder_device}...")
     decoder = AutoModelForCausalLM.from_pretrained(
         model_path,
         trust_remote_code=True,
         torch_dtype=torch.float16,
-    ).to("cuda:0")
+    ).to(decoder_device)
     
     # Reshape node embeddings
     node_embeddings = node_embeddings.reshape(
@@ -451,9 +458,10 @@ if __name__ == '__main__':
     print(f"  Decoder device_map: {decoder.hf_device_map if hasattr(decoder, 'hf_device_map') else 'N/A'}")
     
     # Prepare training data
-    print("\nPreparing training batch...")
+    print(f"\nPreparing training batch (max_length={args.max_length})...")
     training_batch = prepare_batch_culture(
-        tokenizer, all_result, num_train_samples, max_node_num, args.data_source
+        tokenizer, all_result, num_train_samples, max_node_num, args.data_source,
+        max_length=args.max_length
     )
     print(f"  Training pairs: {len(training_batch)}")
     
@@ -477,13 +485,14 @@ if __name__ == '__main__':
         warmup_steps=args.warmup_steps,
         num_train_epochs=args.num_epochs,
         learning_rate=args.lr,
-        fp16=False,  # Decoder already loaded in float16; avoid GradScaler conflicts
+        fp16=False,  # Decoder already in float16; no GradScaler needed
         logging_steps=10,
         output_dir='outputs',
         remove_unused_columns=False,
         save_strategy="no",
         dataloader_pin_memory=False,
-        dataloader_num_workers=2,
+        dataloader_num_workers=0,
+        max_grad_norm=1.0,
     )
     
     trainer = MAGDiTrainer(

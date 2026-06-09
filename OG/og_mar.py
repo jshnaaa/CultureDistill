@@ -84,6 +84,7 @@ from OG.og_common import (
 
 DATASET_NORMAD = "normad"
 DATASET_CULTURALBENCH = "culturalbench"
+DATASET_BLEND = "blend"
 
 
 def detect_dataset_type(input_file: str) -> str:
@@ -91,6 +92,8 @@ def detect_dataset_type(input_file: str) -> str:
     basename = os.path.basename(input_file).lower()
     if "culturalbench" in basename or "cultural_bench" in basename:
         return DATASET_CULTURALBENCH
+    if "blend" in basename:
+        return DATASET_BLEND
     # Default to normad
     return DATASET_NORMAD
 
@@ -192,6 +195,88 @@ Decision Procedure:
 - A) Factual Verification (Primary): Verify the chosen option is factually correct.
 - B) Evidence Strength (Secondary): Prefer the option supported by explicit, internally consistent persona reasoning.
 - C) Vote Summary (Tertiary): Use vote counts to break ties when evidence strength is comparable.
+
+Output Format (JSON only):
+{{
+  "final_answer": "<option_number>. <option_text>",
+  "reasoning": "..."
+}}"""
+
+
+# ===================================================================
+# BLEnD Persona Agent Prompt (adapted from Table 8)
+# BLEnD questions are highly specific factual questions (e.g., hotel
+# brands, work hours, popular sports). Ontology triples provide no
+# useful signal. This prompt focuses entirely on factual recall.
+# ===================================================================
+
+BLEND_PERSONA_PROMPT = """\
+Task:
+- You are Persona Agent {persona_id}, a local resident and cultural knowledge expert from {country_name}.
+- The question below is a specific factual question about daily life, culture, or common knowledge in {country_name}. There is exactly one correct answer.
+- Select the factually correct option based on your knowledge of {country_name}.
+- The provided ontology context contains abstract value relationships that may NOT be directly relevant to this specific factual question. Use it only if it is genuinely helpful; otherwise, rely entirely on your factual knowledge.
+- Prohibited: guessing randomly; fabricating facts.
+
+Inputs:
+- [DEMOGRAPHICS]: {demographics_text}
+- [VALUE PROFILES]: {value_summaries_text}
+- [ONTOLOGY CONTEXT]: {hyper_nodes_text}
+- [RESPONSE OPTIONS]: {options_text}
+- [USER QUESTION]: {question}
+
+Strict Rules:
+- This is a factual question. Choose the option that is objectively correct.
+- Use your knowledge as a local resident of {country_name} to identify the correct answer.
+- The ontology context is unlikely to be relevant for this type of specific factual question; do not force-fit it.
+- Choose exactly one option; output only one valid JSON object and nothing else.
+- Your chosen_answer MUST start with the option number followed by a period (e.g., "1. ...", "2. ...", "3. ...", "4. ...").
+- reasoning must be >= 30 words explaining why this is the correct factual answer.
+
+Output Format (JSON only):
+{{
+  "persona_id": "{persona_id}",
+  "chosen_answer": "<option_number>. <option_text>",
+  "reasoning": "...",
+  "alignment_factors": {{
+    "demographic": "...",
+    "value_summaries_used": [],
+    "hyper_edges_used": [],
+    "integration_rationale": "..."
+  }}
+}}"""
+
+
+# ===================================================================
+# BLEnD Judgment Agent Prompt (adapted from Table 9)
+# Emphasizes factual verification over persona-based reasoning.
+# ===================================================================
+
+BLEND_JUDGMENT_PROMPT = """\
+Task:
+- You are the Judgment Agent.
+- Given the question, options, persona outputs, and a pre-computed vote summary, select exactly one final option.
+- This is a specific factual question about a country's culture, daily life, or common knowledge. There is one objectively correct answer.
+- Your primary job is to verify factual correctness. Use persona outputs as evidence, but ultimately choose the answer that is factually true.
+- Prohibited: adding fabricated facts.
+
+Inputs:
+- [USER QUESTION]: {question_text}
+- [RESPONSE OPTIONS]: {options_text}
+- [VOTE SUMMARY]: {vote_summary}
+- [PERSONA OUTPUTS]: {persona_outputs}
+
+Strict Rules:
+- Use persona outputs as reference evidence, but prioritize factual correctness.
+- Treat vote counts as correct and immutable.
+- If persona consensus is factually correct, confirm it.
+- If you detect a factual error (e.g., wrong city, wrong brand, wrong person attributed to a country), override with the correct answer.
+- When uncertain, prefer the option that is most widely known and verifiable.
+
+Decision Procedure:
+- A) Factual Correctness (Primary): Is the answer objectively true?
+- B) Persona Evidence (Secondary): Is the answer supported by persona reasoning?
+- C) Vote Count (Tertiary): Use votes to break ties.
 
 Output Format (JSON only):
 {{
@@ -600,7 +685,7 @@ def run_og_mar(args):
                 "options_text": NORMAD_OPTIONS_TEXT,
                 "question_stem": None,  # built dynamically in Stage 2
             })
-    else:  # DATASET_CULTURALBENCH
+    else:  # DATASET_CULTURALBENCH or DATASET_BLEND (same input format)
         for item in dataset:
             input_text = item.get("input", "")
             country = item.get("country", "").strip()
@@ -700,19 +785,20 @@ def run_og_mar(args):
                 f"evaluate the following scenario:\n{p['scenario']}\n\n"
                 f"Is the described behavior socially acceptable in this culture?"
             )
-        else:  # DATASET_CULTURALBENCH
+        else:  # DATASET_CULTURALBENCH or DATASET_BLEND
             question = p["question_stem"]
 
         options_text = p["options_text"]
 
         for k in range(K):
-            # Use CulturalBench-specific prompt (allows cultural knowledge)
-            # or standard NormAD prompt (strict ontology-only)
-            prompt_template = (
-                CULTURALBENCH_PERSONA_PROMPT
-                if dataset_type == DATASET_CULTURALBENCH
-                else PERSONA_AGENT_PROMPT
-            )
+            # Select prompt template based on dataset type
+            if dataset_type == DATASET_BLEND:
+                prompt_template = BLEND_PERSONA_PROMPT
+            elif dataset_type == DATASET_CULTURALBENCH:
+                prompt_template = CULTURALBENCH_PERSONA_PROMPT
+            else:
+                prompt_template = PERSONA_AGENT_PROMPT
+
             format_kwargs = dict(
                 persona_id=k + 1,
                 demographics_text=all_demographics[idx][k],
@@ -721,8 +807,8 @@ def run_og_mar(args):
                 options_text=options_text,
                 question=question,
             )
-            # CulturalBench prompt needs country_name for grounding
-            if dataset_type == DATASET_CULTURALBENCH:
+            # CulturalBench/BLEnD prompts need country_name for grounding
+            if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND):
                 format_kwargs["country_name"] = p["country"].replace("_", " ").title()
             user_content = prompt_template.format(**format_kwargs)
             all_persona_prompts.append(apply_chat(tokenizer, user_content))
@@ -757,7 +843,7 @@ def run_og_mar(args):
     # First, extract persona answers for vote summary
     persona_answers = [[None] * K for _ in range(n)]
     for idx in range(n):
-        opts = parsed[idx].get("options_list") if dataset_type == DATASET_CULTURALBENCH else None
+        opts = parsed[idx].get("options_list") if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND) else None
         for k in range(K):
             persona_answers[idx][k] = extract_answer_unified(
                 persona_outputs[idx][k], dataset_type, options_list=opts
@@ -784,18 +870,18 @@ def run_og_mar(args):
                 f"evaluate the following scenario:\n{p['scenario']}\n\n"
                 f"Is the described behavior socially acceptable in this culture?"
             )
-        else:  # DATASET_CULTURALBENCH
+        else:  # DATASET_CULTURALBENCH or DATASET_BLEND
             question_text = p["question_stem"]
 
         options_text = p["options_text"]
 
-        # Use CulturalBench judgment prompt (with factual verification)
-        # or standard NormAD judgment prompt
-        judgment_template = (
-            CULTURALBENCH_JUDGMENT_PROMPT
-            if dataset_type == DATASET_CULTURALBENCH
-            else JUDGMENT_AGENT_PROMPT
-        )
+        # Select judgment prompt based on dataset type
+        if dataset_type == DATASET_BLEND:
+            judgment_template = BLEND_JUDGMENT_PROMPT
+        elif dataset_type == DATASET_CULTURALBENCH:
+            judgment_template = CULTURALBENCH_JUDGMENT_PROMPT
+        else:
+            judgment_template = JUDGMENT_AGENT_PROMPT
         user_content = judgment_template.format(
             question_text=question_text,
             options_text=options_text,
@@ -824,7 +910,7 @@ def run_og_mar(args):
     for idx, p in enumerate(parsed):
         # Extract judgment answer
         judge_resp = judgment_outputs[idx]
-        opts = p.get("options_list") if dataset_type == DATASET_CULTURALBENCH else None
+        opts = p.get("options_list") if dataset_type in (DATASET_CULTURALBENCH, DATASET_BLEND) else None
         judge_ans = extract_answer_unified(judge_resp, dataset_type, options_list=opts)
 
         # If judgment extraction fails, fall back to majority vote

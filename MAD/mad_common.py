@@ -26,7 +26,8 @@ REVERSE_ANSWER_MAP = {"1": "Yes", "2": "No", "3": "Neither"}
 
 # Dataset types
 DATASET_NORMAD = "normad"      # Yes/No/Neither social acceptability
-DATASET_MCQ = "mcq"            # Multiple-choice (1/2/3/4) cultural knowledge
+DATASET_MCQ = "mcq"            # Multiple-choice (1/2/3/4) cultural knowledge (culturalBench)
+DATASET_BLEND = "blend"        # Multiple-choice (1/2/3/4) cultural knowledge (BLEND)
 
 
 # ---------------------------------------------------------------------------
@@ -45,11 +46,13 @@ def detect_dataset_type(input_file: str):
     """
     Auto-detect dataset type from input file name.
 
-    Returns: DATASET_NORMAD or DATASET_MCQ
+    Returns: DATASET_NORMAD, DATASET_MCQ, or DATASET_BLEND
     """
     basename = os.path.basename(input_file).lower()
     if "culturalbench" in basename:
         return DATASET_MCQ
+    if "blend" in basename:
+        return DATASET_BLEND
     return DATASET_NORMAD
 
 

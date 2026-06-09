@@ -39,7 +39,7 @@ from transformers import AutoTokenizer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from MAD.mad_common import (
     MODEL_ALIASES, ANSWER_MAP, REVERSE_ANSWER_MAP,
-    DATASET_NORMAD, DATASET_MCQ,
+    DATASET_NORMAD, DATASET_MCQ, DATASET_BLEND,
     load_dataset, parse_input, extract_answer, extract_answer_mcq,
     detect_dataset_type, infer_output_path, compute_metrics,
 )
@@ -193,6 +193,76 @@ PROMPT_MCQ_JUDGE = (
     "Final decision:"
 )
 
+# ---------- BLEND prompts (option 1/2/3/4, factual cultural knowledge) ----------
+# BLEND questions are direct factual knowledge questions (e.g., "What is the most famous
+# theme park in the UK?") with short concrete options. Prompts emphasize factual recall.
+
+SYSTEM_PROMPT_BLEND = (
+    "You are a helpful assistant with extensive knowledge of cultures, "
+    "traditions, and daily life practices around the world."
+)
+
+PROMPT_BLEND_INITIAL = (
+    "Task: Answer the following factual cultural knowledge question about "
+    "{country}. Read the question and all options carefully. Select the "
+    "option that is the most widely known and correct answer specific to "
+    "{country}. Think about what is commonly associated with {country} in "
+    "everyday life, then respond with the correct option number (1, 2, 3, or 4). "
+    "Explain your answer in less than three sentences.\n\n"
+    "Question:\n{story}\n"
+    "Answer (1, 2, 3, or 4):"
+)
+
+PROMPT_BLEND_FEEDBACK = (
+    "Task: You are currently discussing the following factual cultural "
+    "knowledge question about {country} with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n\n"
+    "Respond to the discussant by providing any relevant "
+    "feedback. If you disagree, provide specific factual evidence about "
+    "{country} to support your position. "
+    "Respond in less than three sentences.\n"
+    "Response:"
+)
+
+PROMPT_BLEND_FINAL = (
+    "Task: You are currently discussing the following factual cultural "
+    "knowledge question about {country} with the other discussant.\n\n"
+    "Question:\n{story}\n"
+    "You: {your_response}\n"
+    "Discussant: {other_response}\n"
+    "Your feedback: {your_feedback}\n"
+    "Discussant feedback: {other_feedback}\n\n"
+    "Based on the above discussion, critically evaluate which answer is "
+    "factually correct for {country}. Respond with the correct option number "
+    "(1, 2, 3, or 4).\n"
+    "Answer (1, 2, 3, or 4):"
+)
+
+PROMPT_BLEND_JUDGE = (
+    "Task: You are a judge responsible for making a "
+    "final decision based on the debate history between "
+    "Model1 and Model2. They have debated the following "
+    "factual cultural knowledge question about {country}.\n"
+    "Do NOT make any independent "
+    "judgments; base your final decision solely on the de-"
+    "bate. Carefully evaluate which agent provides more "
+    "accurate factual knowledge about {country}. "
+    "Respond with a final decision - the correct option "
+    "number (1, 2, 3, or 4).\n\n"
+    "Question:\n{story}\n\n"
+    "*** Debate starts ***\n"
+    "Model1 opinion: {model1_response}\n"
+    "Model2 opinion: {model2_response}\n"
+    "Model1 feedback: {model1_feedback}\n"
+    "Model2 feedback: {model2_feedback}\n"
+    "Model1 final decision: {model1_decision}\n"
+    "Model2 final decision: {model2_decision}\n"
+    "*** Debate ends ***\n\n"
+    "Final decision:"
+)
+
 
 # ===================================================================
 # Chat template helper
@@ -233,11 +303,20 @@ def run_debate_only(args):
 
     # --- Detect dataset type ---
     ds_type = detect_dataset_type(args.input_file)
-    is_mcq = (ds_type == DATASET_MCQ)
-    print(f"Dataset type: {ds_type} ({'MCQ 4-choice' if is_mcq else 'Yes/No/Neither'})")
+    is_mcq = (ds_type in (DATASET_MCQ, DATASET_BLEND))
+    ds_label = {DATASET_NORMAD: "Yes/No/Neither", DATASET_MCQ: "MCQ 4-choice (CulturalBench)",
+                DATASET_BLEND: "MCQ 4-choice (BLEND)"}
+    print(f"Dataset type: {ds_type} ({ds_label.get(ds_type, ds_type)})")
 
     # Select prompt templates based on dataset type
-    if is_mcq:
+    if ds_type == DATASET_BLEND:
+        tpl_initial = PROMPT_BLEND_INITIAL
+        tpl_feedback = PROMPT_BLEND_FEEDBACK
+        tpl_final = PROMPT_BLEND_FINAL
+        tpl_judge = PROMPT_BLEND_JUDGE
+        sys_prompt = SYSTEM_PROMPT_BLEND
+        answer_extractor = extract_answer_mcq
+    elif ds_type == DATASET_MCQ:
         tpl_initial = PROMPT_MCQ_INITIAL
         tpl_feedback = PROMPT_MCQ_FEEDBACK
         tpl_final = PROMPT_MCQ_FINAL
@@ -256,7 +335,7 @@ def run_debate_only(args):
     parsed = []
     for item in dataset:
         if is_mcq:
-            # CulturalBench: country is a top-level field, input is the question
+            # CulturalBench/BLEND: country is a top-level field, input is the question
             country = item.get("country", "")
             story = item["input"]
         else:

@@ -38,6 +38,7 @@ CB_REVERSE_MAP = {"1": "Option 1", "2": "Option 2", "3": "Option 3", "4": "Optio
 
 DATASET_NORMAD = "normad"
 DATASET_CULTURALBENCH = "culturalbench"
+DATASET_BLEND = "blend"
 
 
 def detect_dataset_type(input_file: str) -> str:
@@ -45,10 +46,13 @@ def detect_dataset_type(input_file: str) -> str:
     Auto-detect dataset type from input file name.
     - 'normad' in filename -> NormAD
     - 'culturalBench' (case-insensitive) in filename -> CulturalBench
+    - 'blend' in filename -> BLEND
     """
     basename = os.path.basename(input_file).lower()
     if "culturalbench" in basename:
         return DATASET_CULTURALBENCH
+    if "blend" in basename:
+        return DATASET_BLEND
     return DATASET_NORMAD
 
 
