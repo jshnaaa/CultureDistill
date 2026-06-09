@@ -172,6 +172,39 @@ python Cul/split_data.py \
 
 #### 2.6.0 Base & Role-play
 
+**简介**：使用单个基座模型直接作答的两个 Baseline。
+
+- **base**：zero-shot，system prompt 仅为通用助手，模型只根据题目作答。
+- **role**：角色扮演，按目标国家注入「你是某国文化专家」的 system prompt，依据该文化背景作答。
+
+**输出**：结果 JSONL 保存每条 `query/country/gt/pred/response`；同名 `.metrics.json` 保存准确率、各国别准确率及答案分布（输出文件名会自动追加时间戳）。
+
+| 参数 | 含义 |
+|------|------|
+| `--input_file` | 数据集路径（`culturalBench_mas.json` / `normad_mas.json` / `blend_mas_after.json`）|
+| `--output_file` | 结果输出路径，文件名自动追加时间戳，指标文件同名 + `.metrics.json` |
+| `--model_name` | 基座 `qwen` / `llama`（或完整本地路径）|
+| `--method` | `base`（zero-shot）/ `role`（角色扮演）|
+| `--tensor_parallel_size` | vLLM 张量并行度 |
+| `--max_samples` | 处理样本数，`0`=全部 |
+
+```bash
+cd autodl-tmp/distill
+source /etc/network_turbo
+sh git.sh
+python Cul/single_data.py \
+--input_file /autodl-fs/data/blend_mas_after.json \
+--output_file /autodl-fs/data/blend_llama_role.json \
+--model_name llama --method role \
+--tensor_parallel_size 2 --max_samples 0
+
+python Cul/single_data.py \
+--input_file /autodl-fs/data/normad_mas.json \
+--output_file /autodl-fs/data/normad_qwen_role.json \
+--model_name qwen --method role \
+--tensor_parallel_size 2 --max_samples 0
+```
+
 #### 2.6.1 RECONCILE
 
 ```bash
