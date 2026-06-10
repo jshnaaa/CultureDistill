@@ -520,6 +520,84 @@ python OG/og_mar.py \
 }
 ```
 
+#### 2.6.5 MD (Multiagent Debate)
+
+**简介**：MD 是经典的多智能体辩论框架（Du et al., 2023），用 N 个相同模型的副本作为 Agent，通过多轮辩论达成共识。核心流程：
+
+1. **独立作答（Round 0）**：N 个 Agent 使用 Starting 提示词各自独立回答问题，不互相参考。
+2. **多轮辩论（Round 1..R）**：每个 Agent 接收**其他 Agent**上一轮回答的拼接作为额外参考（Debate 提示词），据此审视并更新自己的答案。所有 Agent 基于同一份上一轮快照同步更新。
+3. **多数投票**：对最后一轮各 Agent 的答案做多数投票得到最终答案，平票时取 Agent 1 的答案。N 个 Agent 为同一模型同温度的副本，多样性来自采样随机性。
+
+**代码目录**：`MD/`
+
+```
+MD/
+├── md_common.py    # 共享工具（模型别名、数据解析、答案提取、多数投票、指标计算）
+├── md_debate.py    # MD 主推理脚本（Round 0 独立作答 + R 轮辩论 + 多数投票）
+└── MD.pdf          # 原论文
+```
+
+**运行命令**：
+
+```bash
+cd autodl-tmp/distill
+source /etc/network_turbo
+sh git.sh
+python MD/md_debate.py \
+    --input_file /autodl-fs/data/cultureLLM_mas.json \
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0
+
+python MD/md_debate.py \
+    --input_file /autodl-fs/data/blend_mas_after.json \
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0
+
+python MD/md_debate.py \
+    --input_file /autodl-fs/data/culturalBench_mas.json \
+    --model_name qwen --tensor_parallel_size 2 \
+    --max_samples 0
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--num_agents` | 辩论智能体数量 N | 3 |
+| `--num_rounds` | 初始作答后的辩论轮数 R | 2 |
+| `--temperature` | 采样温度（所有 Agent 共用，多样性来自采样） | 0.7 |
+| `--max_tokens` | 每次生成最大 token 数 | 512 |
+
+**提示词来源**：遵循论文 Appendix Figure 15 的 Starting + Debate 模板。其中 MMLU 辩论模板（"Using the reasoning from other agents as additional advice, can you give an updated answer? ... Put your answer ..."）与本文多选文化任务最为契合，因此保留其"以其他 Agent 推理作为参考 → 给出更新答案"的核心逻辑，仅将任务表述和答案格式适配到各数据集（NorMAD 的 Yes/No/Neither、CulturalBench/BLEND 的 1-4、CultureLLM 的可变选项区间）。
+
+**推理阶段**（共 R+1 轮）：
+
+| 阶段 | 说明 | 推理次数 |
+|------|------|---------|
+| Round 0 | N 个 Agent 用 Starting 提示词独立作答 | N×N_samples |
+| Round 1..R | 每个 Agent 参考其他 Agent 上一轮回答，用 Debate 提示词更新答案 | R×N×N_samples |
+| 最终 | 对最后一轮各 Agent 答案做多数投票（平票取 Agent 1） | 无 LLM 调用 |
+
+**输出格式**：JSON 数组，每条记录包含完整的多轮辩论过程：
+
+```json
+{
+  "instruction": "...",
+  "input": "...",
+  "output": "1",
+  "country": "egypt",
+  "scenario": "At a gathering...",
+  "debate_rounds": [
+    {"round": 0, "responses": ["...", "...", "..."], "answers": ["1", "2", "1"]},
+    {"round": 1, "responses": ["...", "...", "..."], "answers": ["1", "1", "1"]},
+    {"round": 2, "responses": ["...", "...", "..."], "answers": ["1", "1", "1"]}
+  ],
+  "final_answers": ["1", "1", "1"],
+  "final_answer": "1",
+  "correct": true
+}
+```
+
 ### 2.7 Agent 角色设定
 
 HF-CAC 框架通过 `--num_agents` 参数支持 2~6 个智能体的消融实验。默认使用 6 个智能体（完整覆盖全球六大文化圈），减少智能体数量时按照"文化亲缘性"原则进行合并——将 Hofstede 文化维度相近、地理相邻、宗教/哲学传统有交叉的文化区域合并为一个智能体。
