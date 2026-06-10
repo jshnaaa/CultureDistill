@@ -98,14 +98,16 @@ class HF_CAC_MAS:
         stop_tokens = ["<|eot_id|>", "<|end_of_text|>", "</s>"]
 
         # Temperature strategy:
-        # - CulturalBench / CultureLLM (factual/survey QA): MAD-style asymmetric temperatures.
-        #   Guardian=0.3 (precise), Auditors=0.6 (diverse perspectives).
+        # - CulturalBench / CultureLLM / BLEnD (factual/survey QA): MAD-style asymmetric temperatures.
+        #   Guardian=0.3 (precise), Auditors=0.6-0.7 (diverse perspectives).
         #   Diversity + Debate is the key — NOT self-consistency.
         #   top_p=0.95 matches MAD's settings.
+        # - BLEnD uses higher auditor temp (0.7) because its factual-recall nature
+        #   causes excessive conformity at lower temps, reducing corrective diversity.
         # - Other tasks: asymmetric temperature for role-based diversity.
-        if self.task_type in ("culturalbench", "culturellm"):
+        if self.task_type in ("culturalbench", "culturellm", "blend"):
             guardian_temp = 0.3
-            auditor_temp = 0.6   # MAD's Agent2 temp — encourage diverse perspectives
+            auditor_temp = 0.7 if self.task_type == "blend" else 0.6
             cb_max_tokens = 512
             self.guardian_sampling = SamplingParams(
                 temperature=guardian_temp,
@@ -215,6 +217,26 @@ class HF_CAC_MAS:
                 f"Survey Question:\n{question}\n"
                 f"Answer:"
             )
+        elif self.task_type == "blend":
+            # BLEnD: everyday factual cultural knowledge MCQ (4-way)
+            # Key differences from CulturalBench:
+            #   - Questions are factual recall (specific names, numbers, places)
+            #   - Distractors are correct answers for OTHER countries
+            #   - "not-applicable" may be a valid answer option
+            #   - Focus on daily life facts, not interpretive cultural practices
+            user = (
+                f"Task: You will be given a question about everyday life and daily "
+                f"cultural knowledge in {target_country}. Select the correct option number.\n\n"
+                f"IMPORTANT:\n"
+                f"- Focus ONLY on {target_country}. Some options may be correct for "
+                f"other countries but wrong for {target_country}.\n"
+                f"- If 'not-applicable' is an option, it may be correct when the "
+                f"premise does not apply to {target_country}.\n"
+                f"- Base your answer on specific factual knowledge (names, places, "
+                f"times, customs) of {target_country}.\n\n"
+                f"Question:\n{question}\n"
+                f"Answer (1, 2, 3, or 4):"
+            )
         elif self.task_type == "culturalbench":
             # CulturalBench: factual cultural knowledge MCQ (4-way)
             # MAD-inspired: simple, concise prompt — "explain in less than three sentences"
@@ -263,7 +285,7 @@ class HF_CAC_MAS:
 
         if self.task_type == "cultureatlas":
             answer_hint = "<1 or 2>"
-        elif self.task_type == "culturalbench":
+        elif self.task_type in ("culturalbench", "blend"):
             answer_hint = "<1, 2, 3, or 4>"
         else:
             answer_hint = "<number>"  # covers normad and culturellm (variable scale)
@@ -297,6 +319,21 @@ class HF_CAC_MAS:
                     f"values and attitudes of {target_country} and make your final decision. "
                     f"Respond with the most representative option number.\n"
                     f"Answer:"
+                )
+            elif self.task_type == "blend":
+                # BLEnD: encourage independent critical thinking, don't blindly follow
+                user = (
+                    f"Task: You are discussing the following everyday cultural knowledge "
+                    f"question about {target_country} with another expert.\n\n"
+                    f"Question:\n{question}\n"
+                    f"Other expert's answer: {guardian_response.strip()}\n\n"
+                    f"Critically evaluate their answer. Remember:\n"
+                    f"- Some options are facts about OTHER countries, not {target_country}.\n"
+                    f"- If you have different knowledge about {target_country}, trust your "
+                    f"own reasoning.\n"
+                    f"- 'not-applicable' can be correct if the premise doesn't apply.\n"
+                    f"Provide your own answer with brief reasoning.\n"
+                    f"Answer (1, 2, 3, or 4):"
                 )
             elif self.task_type == "culturalbench":
                 # MAD-inspired: concise feedback + clear answer at end
@@ -353,6 +390,22 @@ class HF_CAC_MAS:
                     f"option number. Explain your reasoning in less than three sentences.\n\n"
                     f"Survey Question:\n{question}\n"
                     f"Answer:"
+                )
+            elif self.task_type == "blend":
+                # BLEnD: independent factual recall — same structure as Guardian
+                # but slightly different framing to encourage diversity
+                user = (
+                    f"Task: You will be given a question about everyday life and daily "
+                    f"cultural knowledge in {target_country}. Select the correct option number.\n\n"
+                    f"IMPORTANT:\n"
+                    f"- Focus ONLY on {target_country}. Some options may be correct for "
+                    f"other countries but wrong for {target_country}.\n"
+                    f"- If 'not-applicable' is an option, it may be correct when the "
+                    f"premise does not apply to {target_country}.\n"
+                    f"- Base your answer on specific factual knowledge (names, places, "
+                    f"times, customs) of {target_country}.\n\n"
+                    f"Question:\n{question}\n"
+                    f"Answer (1, 2, 3, or 4):"
                 )
             elif self.task_type == "culturalbench":
                 # MAD-inspired: same simple format as Guardian
@@ -434,6 +487,25 @@ class HF_CAC_MAS:
                 f"*** End opinions ***\n\n"
                 f"Final decision:"
             )
+        elif self.task_type == "blend":
+            # BLEnD Judge: focus on factual accuracy, warn about cross-country confusion
+            responses_text = ""
+            for name, resp, is_guard in agent_responses:
+                label = "Guardian" if is_guard else "Auditor"
+                responses_text += f"  [{name}] ({label}): {resp.strip()}\n"
+            user = (
+                f"Task: You are a judge resolving a disagreement between experts "
+                f"about everyday cultural knowledge in {target_country}.\n\n"
+                f"IMPORTANT: Some options may be facts true for other countries but "
+                f"wrong for {target_country}. Evaluate which expert provides the most "
+                f"accurate factual knowledge specifically about {target_country}.\n"
+                f"If experts disagree, prefer the answer with concrete evidence "
+                f"specific to {target_country}.\n\n"
+                f"Question:\n{question}\n\n"
+                f"*** Expert opinions ***\n{responses_text}"
+                f"*** End opinions ***\n\n"
+                f"Final decision (1, 2, 3, or 4):"
+            )
         elif self.task_type == "culturalbench":
             # MAD-inspired Judge: concise, debate-evidence-focused
             responses_text = ""
@@ -482,7 +554,7 @@ class HF_CAC_MAS:
         """Extract answer from response text. Respects task_type for valid range."""
         if self.task_type == "cultureatlas":
             max_choice = 2
-        elif self.task_type == "culturalbench":
+        elif self.task_type in ("culturalbench", "blend"):
             max_choice = 4
         elif self.task_type == "culturellm":
             # CultureLLM has variable scales; detect max from question text
@@ -501,8 +573,8 @@ class HF_CAC_MAS:
         else:
             pattern = f"[1-{max_choice}]"
 
-        # For culturalbench/culturellm: use MAD-style extraction
-        if self.task_type in ("culturalbench", "culturellm"):
+        # For culturalbench/culturellm/blend: use MAD-style extraction
+        if self.task_type in ("culturalbench", "culturellm", "blend"):
             tl = text.strip()
             # Pattern 1: "Answer: 3" or "Final decision: 2" or "answer is 1"
             m = re.search(rf'(?:Final\s+decision|Answer)\s*(?:is|[:\-])\s*({pattern})\b', tl, re.IGNORECASE)
@@ -553,8 +625,8 @@ class HF_CAC_MAS:
         if not guardian_response or not guardian_response.strip():
             return True
 
-        # For culturalbench/culturellm, response may be just a digit — skip length check
-        if self.task_type not in ("culturalbench", "culturellm"):
+        # For culturalbench/culturellm/blend, response may be just a digit — skip length check
+        if self.task_type not in ("culturalbench", "culturellm", "blend"):
             if len(guardian_response.strip()) < 10:
                 return True
 
@@ -645,7 +717,7 @@ class HF_CAC_MAS:
                 f"cultural attitude of {target_country}.\n\n"
                 f"Final decision:"
             )
-        elif self.task_type == "culturalbench":
+        elif self.task_type in ("culturalbench", "blend"):
             user += (
                 f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
                 f"Final decision (1, 2, 3, or 4):"
@@ -757,7 +829,7 @@ class HF_CAC_MAS:
         for name, resp in other_responses:
             discussion += f"  [{name}]: {resp.strip()}\n"
 
-        if self.task_type in ("culturalbench", "culturellm"):
+        if self.task_type in ("culturalbench", "culturellm", "blend"):
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
                 f"{question}\n\n"
@@ -811,7 +883,7 @@ class HF_CAC_MAS:
         for name, fb in other_feedbacks:
             feedback_text += f"  [{name}]: {fb.strip()}\n"
 
-        if self.task_type in ("culturalbench", "culturellm"):
+        if self.task_type in ("culturalbench", "culturellm", "blend"):
             # For culturellm: don't hardcode option range, just ask for option number
             if self.task_type == "culturellm":
                 answer_instruction = (
@@ -892,7 +964,7 @@ class HF_CAC_MAS:
                 f"*** Debate ends ***\n\n"
                 f"Final decision:"
             )
-        elif self.task_type == "culturalbench":
+        elif self.task_type in ("culturalbench", "blend"):
             user = (
                 f"Task: You are a judge responsible for making a final decision "
                 f"based on the debate history between cultural experts. They have "
@@ -951,8 +1023,8 @@ class HF_CAC_MAS:
 
         # ---- Phase 2: Auditors generate ----
         auditor_responses = {}  # agent_idx -> response text
-        if self.negotiation_rounds > 0 and self.task_type not in ("culturalbench", "culturellm"):
-            # Non-culturalbench/culturellm: Auditors SEE Guardian's response (one-directional)
+        if self.negotiation_rounds > 0 and self.task_type not in ("culturalbench", "culturellm", "blend"):
+            # Non-culturalbench/culturellm/blend: Auditors SEE Guardian's response (one-directional)
             auditor_prompts = []
             for ai in auditor_indices:
                 prompt = self._build_auditor_prompt(
@@ -980,10 +1052,10 @@ class HF_CAC_MAS:
                 for ai, out in zip(auditor_indices, auditor_outputs):
                     auditor_responses[ai] = out.outputs[0].text.strip()
 
-        # ---- Phase 2.5: MAD-style debate for CulturalBench/CultureLLM ----
-        # When negotiation_rounds > 0 AND culturalbench/culturellm: do feedback + final decision
+        # ---- Phase 2.5: MAD-style debate for CulturalBench/CultureLLM/BLEnD ----
+        # When negotiation_rounds > 0 AND culturalbench/culturellm/blend: do feedback + final decision
         # This lets agents reconsider after seeing others' answers (can fix minority-correct cases)
-        if self.negotiation_rounds > 0 and self.task_type in ("culturalbench", "culturellm"):
+        if self.negotiation_rounds > 0 and self.task_type in ("culturalbench", "culturellm", "blend"):
             # All initial responses (Guardian + Auditors)
             all_initial = {guardian_idx: guardian_response, **auditor_responses}
 
@@ -1061,7 +1133,7 @@ class HF_CAC_MAS:
         # Determine consensus levels:
         # For culturalbench/culturellm (MCQ-style): use pure majority vote
         # For other tasks: use Guardian-weighted consensus
-        if self.task_type in ("culturalbench", "culturellm"):
+        if self.task_type in ("culturalbench", "culturellm", "blend"):
             # Pure majority vote — no Guardian privilege for factual QA
             from collections import Counter as _Counter
             vote_counts = _Counter(a for a in valid_answers if a is not None)
@@ -1092,7 +1164,7 @@ class HF_CAC_MAS:
             )
         elif guardian_has_support:
             # Majority agrees → accept majority answer
-            if self.task_type in ("culturalbench", "culturellm"):
+            if self.task_type in ("culturalbench", "culturellm", "blend"):
                 judge_response = (
                     f"[GUARDIAN-MAJORITY] Majority vote ({majority_count}/{total_voters}). "
                     f"Answer: {majority_answer}"
@@ -1232,8 +1304,8 @@ class HF_CAC_MAS:
         for si in range(n):
             g_idx = guardian_indices[si]
             g_name = self.culture_roles[g_idx]["name"]
-            # For culturalbench/culturellm: always independent (no guardian context)
-            if self.task_type in ("culturalbench", "culturellm") or self.negotiation_rounds == 0:
+            # For culturalbench/culturellm/blend: always independent (no guardian context)
+            if self.task_type in ("culturalbench", "culturellm", "blend") or self.negotiation_rounds == 0:
                 g_resp = None
             else:
                 g_resp = guardian_responses[si]
@@ -1279,7 +1351,7 @@ class HF_CAC_MAS:
             valid_ans = [a for a in all_ans.values() if a is not None]
 
             # Determine consensus type
-            if self.task_type in ("culturalbench", "culturellm"):
+            if self.task_type in ("culturalbench", "culturellm", "blend"):
                 # Pure majority vote — no Guardian privilege for MCQ-style QA
                 from collections import Counter as _Counter
                 vote_counts = _Counter(a for a in valid_ans if a is not None)
@@ -1326,7 +1398,7 @@ class HF_CAC_MAS:
                     f"[CONSENSUS] All agents agree. Answer: {valid_ans[0]}"
                 )
             elif consensus_types[si] == "guardian_majority":
-                if self.task_type in ("culturalbench", "culturellm"):
+                if self.task_type in ("culturalbench", "culturellm", "blend"):
                     judge_responses[si] = (
                         f"[GUARDIAN-MAJORITY] Majority vote ({majority_counts[si]}/{len(valid_ans)}). "
                         f"Answer: {majority_answers[si]}"

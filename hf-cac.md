@@ -84,12 +84,12 @@ source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
       --input_file /autodl-fs/data/blend_mas_after.json \
-      --output_file /autodl-fs/data/qwen/blend_hf_cac_4agents.jsonl \
+      --output_file /autodl-fs/data/qwen/blend_hf_cac_3agents.jsonl \
       --config_path Cul/configs/hf_cac_config_blend.yaml \
       --model_name qwen \
       --use_vllm --tensor_parallel_size 2 \
       --max_samples 0 --negotiation_rounds 1 \
-      --include_judge true --num_agents 4
+      --include_judge true --num_agents 3
 
 python Cul/generate_hf_cac_data.py \
     --input_file /autodl-fs/data/cultureLLM_mas.json \
@@ -145,7 +145,7 @@ python Cul/split_data.py \
     --seed 42
 
 python Cul/split_data.py \
-    --input /autodl-fs/data/qwen/blend_hf_cac_6agents_<timestamp>.jsonl \
+    --input /autodl-fs/data/qwen/blend_hf_cac_3agents_<timestamp>.jsonl \
     --output /autodl-fs/data/qwen/blend_splits.pkl \
     --seed 42
 ```

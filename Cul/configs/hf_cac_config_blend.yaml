@@ -12,10 +12,16 @@
 #   - North Korea → East-Asian (explicit entry)
 #   - Northern Nigeria → Sub-Saharan African (explicit entry)
 #
-# DESIGN: Same MAD-inspired prompts as CulturalBench (task_type: culturalbench).
-# BLEnD's everyday cultural questions work well with the existing concise prompt style.
+# DESIGN: BLEnD-specific prompts (task_type: blend).
+# Key optimizations over generic culturalbench:
+#   - Guardian/Auditor prompts reframed for factual daily-life recall
+#   - Cross-country distractor warnings in prompts
+#   - "not-applicable" awareness
+#   - Higher Auditor temperature (0.7) to prevent excessive conformity
+#   - num_agents=3 (1 Guardian + 2 Auditors) — empirically best diversity/consensus balance
+#     (4+ agents cause Auditors to conform too readily, reducing corrective diversity)
 
-num_agents: 6
+num_agents: 3
 num_debate_rounds: 0
 temperature: 0.9
 max_tokens: 512
@@ -42,7 +48,7 @@ guardian_failure_indicators:
 # ---------------------------------------------------------------------------
 # Task type identifier
 # ---------------------------------------------------------------------------
-task_type: "culturalbench"
+task_type: "blend"
 answer_choices: [1, 2, 3, 4]
 
 # ---------------------------------------------------------------------------
