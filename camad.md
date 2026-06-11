@@ -544,11 +544,56 @@ PRM 须为预先在**纯基座**上训练好的 Process Reward Model，通过 `-
 | SFT 分支 | 无 | $\beta \cdot w_{sft}\cdot L_{SFT}$ |
 | 优化方式 | 仅 $L_{GRPO}$ | $L = L_{GRPO}(A_i) + \beta \cdot w_{sft}\cdot L_{SFT}$ |
 
-通过对比 RL-only 与 CAMAD，可量化"在纯 RL 之上叠加在线监督蒸馏 + Guardian 文化引导"带来的净增益；同时与 SFT-only 对照，可判断纯监督与纯强化各自的能力边界。
+### 2.2.3 运行命令
 
-### 2.2.3 运行思路
+前置数据（与 CAMAD / SFT-only 共用同一份 split，若已生成可跳过）：
 
-复用 CAMAD 训练脚本的 GRPO 实现，关闭 SFT 分支（令 $\beta=0$）、并关闭 Guardian 优势引导（令 $\lambda_g=0$），即退化为朴素 GRPO 的 RL-only 配置。PRM 路径经 `--prm_path` 传入预训练好的基座 PRM。该消融的实现改动留待后续统一处理，本节先固定设计口径，暂不改动代码。
+```bash
+python Cul/split_data.py \
+    --input  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output /autodl-fs/data/qwen/normad_splits.pkl \
+    --seed 42
+```
+
+训练（双卡，需 PRM；无需 `--guardian_data`）：
+
+```bash
+python Cul/grpo/train_grpo_mixed_policy.py \
+    --mode rl_only \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/qwen/camad_prm/best \
+    --output_dir /autodl-fs/data/model/qwen/normad_rl_only \
+    --alpha 0.6 \
+    --n_samples 8 --temperature 1.0 \
+    --max_rounds 30 --batches_per_round 130 \
+    --prompt_batch_size 4 \
+    --lr 1e-6 --lora_r 16
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--mode rl_only` | 切换到 RL-only 消融路径（朴素 GRPO，脚本内部关闭 Guardian 引导与在线 SFT，无需手动设 $\beta/\lambda_g$）|
+| `--prm_path` | 预训练好的**基座** PRM 检查点目录（adapter + score_head.pt），提供过程分；RL-only 与 CAMAD 同一口径，必传 |
+| `--alpha` | 结果奖励权重 $\alpha$（默认 0.6，结果主导）|
+| `--n_samples` / `--temperature` | 每条 prompt 的 rollout 数与采样温度（GRPO 组内归一化）|
+| `--max_rounds` / `--batches_per_round` | 训练轮数与每轮 batch 数（RL 收敛较慢，轮数高于 SFT-only）|
+| `--lr` / `--lora_r` | LoRA 学习率与 rank；RL 阶段学习率取 1e-6，低于 SFT 的 1e-5 |
+
+说明：本模式**无需** `--guardian_data`（不引入 Judge 监督目标，也不用 Guardian 文化信号）；即便误传该参数，脚本也会跳过 SFT/Guardian 分支，不影响结果。
+
+评估（复用统一评估脚本，加载 RL-only 的 LoRA adapter）：
+
+```bash
+python Cul/evaluate.py \
+    --mode rl \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --grpo_adapter /autodl-fs/data/model/qwen/normad_rl_only/best \
+    --output_json /autodl-fs/data/model/qwen/eval_rl_only.json
+```
+
+---
 
 ## 2.3 SFT+RL（顺序学习）
 
@@ -556,7 +601,7 @@ PRM 须为预先在**纯基座**上训练好的 Process Reward Model，通过 `-
 
 ### 2.3.1 两阶段流程
 
-**阶段一（SFT）**：与 §2.1 的 SFT-only 完全一致——从基座出发，以 Judge 最终答案 $y_{judge}$ 为目标、按 $w_{sft}=\max(1-hitrate, w_{min})$ 加权做监督蒸馏，训练至验证集收敛，保存 SFT 检查点。
+**阶段一（SFT）**：与 SFT-only 完全一致——从基座出发，以 Judge 最终答案 $y_{judge}$ 为目标、按 $w_{sft}=\max(1-hitrate, w_{min})$ 加权做监督蒸馏，训练至验证集收敛，保存 SFT 检查点。
 
 **阶段二（RL）**：**以阶段一的 SFT 检查点为起点**，接着做强化学习。为与 §2.2 的 RL-only 保持口径一致，此阶段同样采用**朴素 GRPO**（奖励 $R_{total} = \alpha R_{outcome} + (1-\alpha)\mathrm{Mean}(R_{process})$，优势 $A_i = A_{base}$，**不含** Guardian 文化引导），PRM 仍为预训练好的基座 PRM，经 `--prm_path` 加载。两阶段使用的监督目标、奖励构成、PRM 与其余三组完全相同，唯一变化是"组织方式"。
 

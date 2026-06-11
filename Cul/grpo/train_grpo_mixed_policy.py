@@ -902,8 +902,14 @@ def train(args):
     policy_device = torch.device("cuda:0")
     prm_device = torch.device("cuda:1")
 
+    # RL-only ablation (camad.md §2.2): plain GRPO from base, i.e. NO Guardian
+    # advantage guidance and NO online SFT term. The reward stays the same
+    # (alpha*R_outcome + PRM process), the advantage degenerates to A_i=A_base.
+    rl_only = (getattr(args, "mode", "camad") == "rl_only")
+    tag = "RL-only" if rl_only else "CAMAD"
+
     model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
-    print(f"[CAMAD] Base model: {model_path}")
+    print(f"[{tag}] Base model: {model_path}")
 
     # --- Tokenizer ---
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -911,14 +917,14 @@ def train(args):
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"  # left padding for generation
 
-    # --- Policy model: BASE + new trainable LoRA (joint SFT+RL trained) ---
-    # CAMAD trains directly from the base model. There is NO separate SFT
-    # warm-up stage: the supervised (SFT) signal is injected ONLINE through the
-    # joint loss L = L_GRPO + beta * w_sft * L_SFT during this very run. This is
-    # what distinguishes CAMAD's "mixed" strategy from classic RLHF
-    # (base -> SFT -> RL), and is precisely why it avoids the catastrophic
-    # forgetting that the staged pipeline suffers from.
-    print("[CAMAD] Loading policy model (from BASE, no SFT warm-up) ...")
+    # --- Policy model: BASE + new trainable LoRA ---
+    # Both CAMAD and RL-only train directly from the base model. CAMAD injects
+    # the supervised (SFT) signal ONLINE via the joint loss
+    # L = L_GRPO + beta * w_sft * L_SFT, which is what distinguishes CAMAD's
+    # "mixed" strategy from classic RLHF (base -> SFT -> RL) and avoids the
+    # catastrophic forgetting of the staged pipeline. RL-only drops the SFT
+    # term and the Guardian guidance, leaving plain GRPO.
+    print(f"[{tag}] Loading policy model (from BASE, no SFT warm-up) ...")
     base = AutoModelForCausalLM.from_pretrained(
         model_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
     )
@@ -942,7 +948,7 @@ def train(args):
     # to be set if the PRM was trained on a base that had an SFT adapter merged
     # in; for the CAMAD-from-base setup the PRM should likewise be trained on
     # the plain base model, so this is None by default.
-    print("[CAMAD] Loading PRM ...")
+    print(f"[{tag}] Loading PRM ...")
     prm = CulturePRM_v3(
         prm_checkpoint_dir=args.prm_path,
         backbone_path=model_path,
@@ -958,7 +964,7 @@ def train(args):
     val_samples = splits.get("val", splits.get("test", []))
     if args.max_train_samples > 0:
         train_samples = train_samples[:args.max_train_samples]
-    print(f"[CAMAD] Train={len(train_samples)}  Val={len(val_samples)}")
+    print(f"[{tag}] Train={len(train_samples)}  Val={len(val_samples)}")
 
     train_ds = GRPOPromptDataset(train_samples)
     loader = DataLoader(
@@ -985,9 +991,10 @@ def train(args):
     best_acc = 0.0
     global_step = 0
 
-    print(f"[CAMAD] Hyper-params: beta={args.beta} lambda_g={args.lambda_g} "
+    print(f"[{tag}] Hyper-params: beta={args.beta} lambda_g={args.lambda_g} "
           f"w_min={args.w_min} ema={args.use_ema}(m={args.ema_momentum}) "
-          f"alpha={args.alpha} n_samples={args.n_samples}")
+          f"alpha={args.alpha} n_samples={args.n_samples}"
+          + (" | plain GRPO (no Guardian, no SFT)" if rl_only else ""))
 
     for rnd in range(args.max_rounds):
         print(f"\n========== Round {rnd + 1}/{args.max_rounds} ==========")
@@ -1071,12 +1078,14 @@ def train(args):
                     build_judge_sft_target(judge_ans, judge_text)
                 )
 
-                # A_i = A_base + lambda_g * w * S_guardian  (per-rollout)
-                for si in range(args.n_samples):
-                    s_guard = guardian_cultural_match(
-                        preds[pi][si], guardian_ans
-                    )
-                    adv[pi, si] = adv[pi, si] + args.lambda_g * w * s_guard
+                # A_i = A_base + lambda_g * w * S_guardian  (per-rollout).
+                # RL-only: skip Guardian guidance -> advantage stays A_base.
+                if not rl_only:
+                    for si in range(args.n_samples):
+                        s_guard = guardian_cultural_match(
+                            preds[pi][si], guardian_ans
+                        )
+                        adv[pi, si] = adv[pi, si] + args.lambda_g * w * s_guard
 
             # ---- Step 6: joint backward  L = L_GRPO + beta * w_sft * L_SFT ----
             # Flatten rollouts for GRPO log-probs.
@@ -1111,14 +1120,17 @@ def train(args):
             l_grpo = pg_loss.mean()
 
             # Judge SFT loss (weighted per prompt by w_sft).
+            # RL-only: no online SFT term at all -> skip building it entirely
+            # (avoids a wasted forward pass even if --guardian_data is given).
             sft_prompts = []
             sft_targets = []
             sft_weights = []
-            for pi in range(n_prompts):
-                if judge_targets[pi] is not None:
-                    sft_prompts.append(prompts[pi])
-                    sft_targets.append(judge_targets[pi])
-                    sft_weights.append(w_sft_per_prompt[pi])
+            if not rl_only:
+                for pi in range(n_prompts):
+                    if judge_targets[pi] is not None:
+                        sft_prompts.append(prompts[pi])
+                        sft_targets.append(judge_targets[pi])
+                        sft_weights.append(w_sft_per_prompt[pi])
 
             if sft_prompts:
                 # Weighted SFT: the loss is token-normalized, so we scale it by
@@ -1156,19 +1168,19 @@ def train(args):
                 policy, tokenizer, val_samples, policy_device,
                 max_eval=args.max_eval,
             )
-            print(f"[CAMAD] Round {rnd + 1} val acc = {acc:.4f}")
+            print(f"[{tag}] Round {rnd + 1} val acc = {acc:.4f}")
             if acc > best_acc:
                 best_acc = acc
                 save_path = os.path.join(args.output_dir, "best")
                 policy.save_pretrained(save_path)
                 tokenizer.save_pretrained(save_path)
-                print(f"[CAMAD] New best ({acc:.4f}) saved to {save_path}")
+                print(f"[{tag}] New best ({acc:.4f}) saved to {save_path}")
 
     # Final save.
     final_path = os.path.join(args.output_dir, "final")
     policy.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
-    print(f"[CAMAD] Training done. Best val acc = {best_acc:.4f}. "
+    print(f"[{tag}] Training done. Best val acc = {best_acc:.4f}. "
           f"Final adapter saved to {final_path}")
 
 
@@ -1182,10 +1194,13 @@ def main():
                     "(joint SFT+RL)"
     )
     # Mode
-    p.add_argument("--mode", choices=["camad", "sft_only"], default="camad",
+    p.add_argument("--mode", choices=["camad", "sft_only", "rl_only"],
+                   default="camad",
                    help="camad = joint SFT+RL (default); "
                         "sft_only = ablation §2.1 (supervised distillation "
-                        "only, single GPU, no PRM)")
+                        "only, single GPU, no PRM); "
+                        "rl_only = ablation §2.2 (plain GRPO from base, no "
+                        "Guardian guidance, no online SFT; needs PRM)")
 
     # Paths
     p.add_argument("--model_name", default="qwen",
@@ -1199,7 +1214,8 @@ def main():
                    help="splits pickle from split_data.py (train/val/test)")
     p.add_argument("--prm_path", default=None,
                    help="PRM checkpoint dir (adapter + score_head.pt). "
-                        "Required for --mode camad; unused for --mode sft_only.")
+                        "Required for --mode camad and --mode rl_only; "
+                        "unused for --mode sft_only.")
     p.add_argument("--guardian_data", default=None,
                    help="HF-CAC inference JSONL (Guardian signal + Judge SFT "
                         "target), from generate_hf_cac_data.py")
@@ -1248,9 +1264,9 @@ def main():
 
     args = p.parse_args()
 
-    if args.mode == "camad":
+    if args.mode in ("camad", "rl_only"):
         if not args.prm_path:
-            p.error("--prm_path is required for --mode camad")
+            p.error(f"--prm_path is required for --mode {args.mode}")
         train(args)
     else:  # sft_only
         train_sft_only(args)
