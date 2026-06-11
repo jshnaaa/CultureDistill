@@ -685,8 +685,6 @@ python Cul/evaluate.py \
     --output_json /autodl-fs/data/model/qwen/eval_sft_rl.json
 ```
 
-> 快速跑通：三种消融与 CAMAD 均支持 `--max_samples N` 仅取前 N 条样本参与训练（默认 0 = 全量）。例如各命令追加 `--max_samples 10 --max_rounds 2` 即可在小样本上快速验证流程是否打通。
-
 ## 3. 消融实验设计
 
 ### 3.1 主实验
