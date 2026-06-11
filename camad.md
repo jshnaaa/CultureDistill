@@ -501,6 +501,7 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 | `--ema_momentum` | hitrate EMA 动量（与 CAMAD 一致，默认 0.9；加 `--no_ema` 可关闭）|
 | `--max_rounds` / `--batches_per_round` | 训练轮数与每轮 batch 数 |
 | `--lr` / `--lora_r` | LoRA 学习率与 rank（与 CAMAD 对齐）|
+| `--max_samples` | 仅取前 N 条训练样本（默认 0 = 全量），用于快速跑通 |
 
 评估（复用统一评估脚本，加载 SFT-only 的 LoRA adapter）：
 
@@ -579,6 +580,7 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 | `--n_samples` / `--temperature` | 每条 prompt 的 rollout 数与采样温度（GRPO 组内归一化）|
 | `--max_rounds` / `--batches_per_round` | 训练轮数与每轮 batch 数（RL 收敛较慢，轮数高于 SFT-only）|
 | `--lr` / `--lora_r` | LoRA 学习率与 rank；RL 阶段学习率取 1e-6，低于 SFT 的 1e-5 |
+| `--max_samples` | 仅取前 N 条训练样本（默认 0 = 全量），用于快速跑通 |
 
 说明：本模式**无需** `--guardian_data`（不引入 Judge 监督目标，也不用 Guardian 文化信号）；即便误传该参数，脚本也会跳过 SFT/Guardian 分支，不影响结果。
 
@@ -618,9 +620,72 @@ SFT→RL 与 CAMAD 都同时用到了监督与强化两种信号，但组织方�
 
 **核心论点**：传统 RLHF 的串联范式中，进入阶段二后监督信号彻底退场，RL 仅靠优化奖励驱动参数漂移，容易侵蚀阶段一蒸馏到的文化知识，产生灾难性遗忘。CAMAD 的设计动机正是为此——把 SFT 项以 $\beta \cdot w_{sft}\cdot L_{SFT}$ 的形式在每一步与 GRPO 联合优化，让监督锚定贯穿强化全程（见 §1.1、§1.7）。因此 SFT→RL 与 CAMAD 的对比，是本消融最关键的一组：它直接验证"联合优化优于先后串联"这一核心假设。
 
-### 2.3.3 运行思路
+### 2.3.3 运行命令
 
-阶段一复用 SFT-only 配置（§2.1.3）训练并保存 SFT 检查点；阶段二复用 CAMAD 脚本的 GRPO 实现，从该 SFT 检查点出发、关闭 SFT 分支（$\beta=0$）与 Guardian 引导（$\lambda_g=0$）做朴素 GRPO。该消融的实现改动留待后续统一处理，本节先固定设计口径，暂不改动代码。
+两阶段串行：**阶段一**直接复用 SFT-only（§2.1.3）训练并保存 SFT 检查点；**阶段二**复用 RL-only（§2.2.3）脚本，但通过新增的 `--init_adapter` 把阶段一的 SFT adapter 合并进基座作为 RL 起点（脚本内部会把参考策略 / KL 锚点也对齐到该 SFT 检查点，符合传统 RLHF 语义）。
+
+前置数据（与其余三组共用同一份 split，若已生成可跳过）：
+
+```bash
+python Cul/split_data.py \
+    --input  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output /autodl-fs/data/qwen/normad_splits.pkl \
+    --seed 42
+```
+
+阶段一 —— SFT（单卡，无需 PRM；与 §2.1.3 完全相同的配置，只是输出目录单列）：
+
+```bash
+python Cul/grpo/train_grpo_mixed_policy.py \
+    --mode sft_only \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_dir /autodl-fs/data/model/qwen/normad_sft_rl_stage1_sft \
+    --beta 1.0 --w_min 0.1 \
+    --ema_momentum 0.9 \
+    --max_rounds 20 --batches_per_round 130 \
+    --prompt_batch_size 4 \
+    --lr 1e-5 --lora_r 16
+```
+
+阶段二 —— RL（双卡，需 PRM；`--init_adapter` 指向阶段一的 `best`）：
+
+```bash
+python Cul/grpo/train_grpo_mixed_policy.py \
+    --mode rl_only \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/qwen/camad_prm/best \
+    --init_adapter /autodl-fs/data/model/qwen/normad_sft_rl_stage1_sft/best \
+    --output_dir /autodl-fs/data/model/qwen/normad_sft_rl_stage2_rl \
+    --alpha 0.6 \
+    --n_samples 8 --temperature 1.0 \
+    --max_rounds 30 --batches_per_round 130 \
+    --prompt_batch_size 4 \
+    --lr 1e-6 --lora_r 16
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--mode rl_only` | 阶段二采用朴素 GRPO（与 RL-only 同口径：无 Guardian 引导、无在线 SFT）|
+| `--init_adapter` | 阶段一 SFT 检查点（`best`）；脚本将其合并进基座作为 RL 起点，KL 参考策略亦锚定于此 |
+| `--prm_path` | 预训练好的基座 PRM，提供过程分；必传 |
+| 其余 RL 超参 | 与 §2.2.3 RL-only 保持一致（$\alpha=0.6$、`--n_samples 8`、`--lr 1e-6` 等）|
+
+评估（先合并 SFT adapter 再叠加 RL adapter，与训练时的起点构造一致）：
+
+```bash
+python Cul/evaluate.py \
+    --mode sft_rl \
+    --model_name qwen \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --sft_adapter  /autodl-fs/data/model/qwen/normad_sft_rl_stage1_sft/best \
+    --grpo_adapter /autodl-fs/data/model/qwen/normad_sft_rl_stage2_rl/best \
+    --output_json /autodl-fs/data/model/qwen/eval_sft_rl.json
+```
+
+> 快速跑通：三种消融与 CAMAD 均支持 `--max_samples N` 仅取前 N 条样本参与训练（默认 0 = 全量）。例如各命令追加 `--max_samples 10 --max_rounds 2` 即可在小样本上快速验证流程是否打通。
 
 ## 3. 消融实验设计
 

@@ -50,7 +50,7 @@ Usage:
         --prm_path       /path/to/camad_prm/best \\
         --guardian_data  /path/to/normad_hf_cac_inference.jsonl \\
         --output_dir     /path/to/models/camad \\
-        --max_train_samples 10 \\
+        --max_samples    10 \\
         --max_rounds     3 \\
         --n_samples      5
 
@@ -105,6 +105,28 @@ MAX_GEN_LEN = 128
 MAX_PROMPT_LEN = 512
 KL_COEF = 0.05
 DEFAULT_ALPHA = 0.6
+
+
+# ---------------------------------------------------------------------------
+# Shared utilities
+# ---------------------------------------------------------------------------
+
+def limit_train_samples(train_samples, args):
+    """
+    Cap the number of training samples for a quick smoke run.
+
+    Priority: --max_samples (0 = use ALL, the default) takes precedence; if it
+    is 0 we fall back to the legacy --max_train_samples (>0 caps, the historical
+    default of -1/0 means "all"). Shared by all three ablations (SFT-only /
+    RL-only / CAMAD) so e.g. `--max_samples 10` trains on only 10 samples.
+    """
+    n = getattr(args, "max_samples", 0)
+    if not n or n <= 0:
+        legacy = getattr(args, "max_train_samples", 0)
+        n = legacy if legacy and legacy > 0 else 0
+    if n and n > 0:
+        return train_samples[:n]
+    return train_samples
 
 
 # ---------------------------------------------------------------------------
@@ -765,8 +787,7 @@ def train_sft_only(args):
         splits = pickle.load(f)
     train_samples = splits["train"]
     val_samples = splits.get("val", splits.get("test", []))
-    if args.max_train_samples > 0:
-        train_samples = train_samples[:args.max_train_samples]
+    train_samples = limit_train_samples(train_samples, args)
     print(f"[SFT-only] Train={len(train_samples)}  Val={len(val_samples)}")
 
     train_ds = GRPOPromptDataset(train_samples)
@@ -924,10 +945,27 @@ def train(args):
     # "mixed" strategy from classic RLHF (base -> SFT -> RL) and avoids the
     # catastrophic forgetting of the staged pipeline. RL-only drops the SFT
     # term and the Guardian guidance, leaving plain GRPO.
-    print(f"[{tag}] Loading policy model (from BASE, no SFT warm-up) ...")
-    base = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    )
+    init_adapter = getattr(args, "init_adapter", None)
+    if init_adapter:
+        # SFT->RL stage 2 (camad.md §2.3): the RL stage starts FROM the SFT
+        # checkpoint. We merge the SFT LoRA into the base weights so that (a)
+        # the new trainable LoRA is initialized on top of the SFT-converged
+        # model, and (b) the reference policy used by KL (policy.disable_adapter)
+        # points at the SFT model -- i.e. RL is anchored on the SFT checkpoint,
+        # exactly the classic RLHF semantics. This is ONLY a stage-2 starting
+        # point; CAMAD / RL-only leave it None and start from the plain base.
+        print(f"[{tag}] Loading policy model (from SFT checkpoint: "
+              f"{init_adapter}) ...")
+        base = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
+        )
+        base = PeftModel.from_pretrained(base, init_adapter)
+        base = base.merge_and_unload()
+    else:
+        print(f"[{tag}] Loading policy model (from BASE, no SFT warm-up) ...")
+        base = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
+        )
 
     lora_cfg = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -962,8 +1000,7 @@ def train(args):
         splits = pickle.load(f)
     train_samples = splits["train"]
     val_samples = splits.get("val", splits.get("test", []))
-    if args.max_train_samples > 0:
-        train_samples = train_samples[:args.max_train_samples]
+    train_samples = limit_train_samples(train_samples, args)
     print(f"[{tag}] Train={len(train_samples)}  Val={len(val_samples)}")
 
     train_ds = GRPOPromptDataset(train_samples)
@@ -1219,6 +1256,12 @@ def main():
     p.add_argument("--guardian_data", default=None,
                    help="HF-CAC inference JSONL (Guardian signal + Judge SFT "
                         "target), from generate_hf_cac_data.py")
+    p.add_argument("--init_adapter", default=None,
+                   help="(optional) SFT-LoRA adapter to MERGE into the base as "
+                        "the RL starting point. Used by SFT->RL stage 2 "
+                        "(camad.md §2.3) so RL starts from the SFT checkpoint. "
+                        "Leave unset for CAMAD / RL-only / SFT-only (start "
+                        "from plain base).")
     p.add_argument("--output_dir", required=True)
 
     # CAMAD joint objective
@@ -1245,7 +1288,13 @@ def main():
     p.add_argument("--max_rounds", type=int, default=20)
     p.add_argument("--batches_per_round", type=int, default=130)
     p.add_argument("--prompt_batch_size", type=int, default=4)
-    p.add_argument("--max_train_samples", type=int, default=-1)
+    p.add_argument("--max_samples", type=int, default=0,
+                   help="cap #training samples for a quick smoke run; "
+                        "0 = use ALL (default). e.g. --max_samples 10 trains "
+                        "on only 10 samples. Applies to all three ablations.")
+    p.add_argument("--max_train_samples", type=int, default=0,
+                   help="(deprecated) legacy alias; prefer --max_samples. "
+                        ">0 caps #train samples, 0 = all.")
     p.add_argument("--max_eval", type=int, default=100)
 
     # LoRA / optim
