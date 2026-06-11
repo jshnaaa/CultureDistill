@@ -706,6 +706,195 @@ def validate(model, tokenizer, val_samples: list, device,
 
 
 # ---------------------------------------------------------------------------
+# Ablation: SFT-only (camad.md §2.1)
+# ---------------------------------------------------------------------------
+
+def train_sft_only(args):
+    """
+    Ablation §2.1 SFT-only: train DIRECTLY FROM THE BASE model with ONLY the
+    supervised distillation term, no RL branch at all.
+
+    To keep this a strictly controlled ablation (口径 A), the supervised signal
+    is IDENTICAL to CAMAD's online SFT term:
+        - target  = Judge final answer y_judge   (build_judge_sft_target)
+        - loss    = L_SFT = mean(-log P(y_judge | x))   (compute_sft_loss)
+        - weight  = w_sft = max(1 - hitrate, w_min)     (HitRateTracker)
+
+    The only differences vs CAMAD are that there is NO GRPO advantage term and
+    NO Guardian guidance, i.e. the objective is just  beta * w_sft * L_SFT
+    (beta defaults to 1.0 for SFT-only so the supervised term is not scaled
+    down; pass --beta to override if you want the exact CAMAD scaling).
+
+    Because there is no RL, this runs on a SINGLE GPU (cuda:0) and needs NO
+    PRM. The hitrate that drives w_sft is estimated from a lightweight greedy
+    decode of the current policy (n=1 per prompt), so the difficulty-adaptive
+    weighting follows the exact same formula/path as CAMAD.
+    """
+    policy_device = torch.device("cuda:0")
+
+    model_path = MODEL_ALIASES.get(args.model_name, args.model_name)
+    print(f"[SFT-only] Base model: {model_path}")
+
+    # --- Tokenizer ---
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    # --- Policy model: BASE + new trainable LoRA (supervised only) ---
+    print("[SFT-only] Loading policy model (from BASE) ...")
+    base = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
+    )
+    lora_cfg = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=args.lora_r, lora_alpha=args.lora_alpha,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    )
+    policy = get_peft_model(base, lora_cfg)
+    policy.to(policy_device)
+    policy.train()
+    if args.grad_checkpoint:
+        policy.gradient_checkpointing_enable()
+        policy.enable_input_require_grads()
+    policy.print_trainable_parameters()
+
+    # --- Data ---
+    with open(args.data_pkl, "rb") as f:
+        splits = pickle.load(f)
+    train_samples = splits["train"]
+    val_samples = splits.get("val", splits.get("test", []))
+    if args.max_train_samples > 0:
+        train_samples = train_samples[:args.max_train_samples]
+    print(f"[SFT-only] Train={len(train_samples)}  Val={len(val_samples)}")
+
+    train_ds = GRPOPromptDataset(train_samples)
+    loader = DataLoader(
+        train_ds, batch_size=args.prompt_batch_size,
+        shuffle=True, collate_fn=lambda b: b,
+    )
+
+    # --- HF-CAC index (Judge SFT target; Guardian unused in SFT-only) ---
+    hf_cac_index = {}
+    if args.guardian_data:
+        hf_cac_index = load_hf_cac_index(args.guardian_data)
+    else:
+        print("[SFT-only] WARNING: --guardian_data not provided; no Judge "
+              "targets will be available and nothing will be learned.")
+
+    # --- Difficulty-adaptive weight tracker (same as CAMAD) ---
+    tracker = HitRateTracker(
+        w_min=args.w_min, momentum=args.ema_momentum, use_ema=args.use_ema,
+    )
+
+    optimizer = torch.optim.AdamW(
+        [p for p in policy.parameters() if p.requires_grad], lr=args.lr,
+    )
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    best_acc = 0.0
+    global_step = 0
+
+    print(f"[SFT-only] Hyper-params: beta={args.beta} w_min={args.w_min} "
+          f"ema={args.use_ema}(m={args.ema_momentum})")
+
+    for rnd in range(args.max_rounds):
+        print(f"\n========== Round {rnd + 1}/{args.max_rounds} ==========")
+        round_batches = 0
+
+        for batch in loader:
+            if round_batches >= args.batches_per_round:
+                break
+            round_batches += 1
+            global_step += 1
+
+            prompts = [
+                build_prompt(s["query"], s["country"], tokenizer) for s in batch
+            ]
+            golds = [s["gt"] for s in batch]
+            countries = [s["country"] for s in batch]
+            queries = [s["query"] for s in batch]
+            n_prompts = len(batch)
+
+            # ---- Estimate hitrate via a lightweight greedy decode (n=1) ----
+            # This keeps w_sft on the exact same formula/path as CAMAD without
+            # needing RL rollouts or a PRM.
+            policy.eval()
+            greedy_resps = batch_generate_responses(
+                policy, tokenizer, prompts, n_samples=1,
+                max_new_tokens=MAX_GEN_LEN, temperature=1.0,
+                device=policy_device, mini_batch_size=args.gen_mini_batch,
+            )
+            policy.train()
+
+            # ---- Build Judge SFT targets + per-prompt w_sft ----
+            sft_prompts = []
+            sft_targets = []
+            sft_weights = []
+            for pi in range(n_prompts):
+                pred = extract_answer(greedy_resps[pi][0])
+                acc_cur = 1.0 if pred == golds[pi] else 0.0
+                hr = tracker.update(countries[pi], queries[pi], acc_cur)
+                _, w_sft = tracker.weights(hr)
+
+                rec = lookup_hf_cac(hf_cac_index, countries[pi], queries[pi])
+                judge_ans = rec["judge_answer"] if rec else None
+                judge_text = rec["judge_text"] if rec else ""
+                target = build_judge_sft_target(judge_ans, judge_text)
+                if target is not None:
+                    sft_prompts.append(prompts[pi])
+                    sft_targets.append(target)
+                    sft_weights.append(w_sft)
+
+            # ---- Supervised backward: beta * w_sft * L_SFT ----
+            optimizer.zero_grad()
+            if sft_prompts:
+                l_sft = compute_sft_loss(
+                    policy, tokenizer, sft_prompts, sft_targets,
+                    policy_device, mini_batch_size=args.sft_mini_batch,
+                )
+                w_sft_mean = sum(sft_weights) / len(sft_weights)
+                loss = args.beta * w_sft_mean * l_sft
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    [p for p in policy.parameters() if p.requires_grad], 1.0
+                )
+                optimizer.step()
+            else:
+                l_sft = torch.zeros((), device=policy_device)
+                loss = torch.zeros((), device=policy_device)
+                w_sft_mean = 0.0
+
+            if global_step % args.log_every == 0:
+                print(
+                    f"  step {global_step} | loss {loss.item():.4f} "
+                    f"(sft {l_sft.item():.4f}) | w_sft {w_sft_mean:.3f} | "
+                    f"targets {len(sft_prompts)}/{n_prompts}"
+                )
+
+        # ---- Validation per round ----
+        if val_samples:
+            acc = validate(
+                policy, tokenizer, val_samples, policy_device,
+                max_eval=args.max_eval,
+            )
+            print(f"[SFT-only] Round {rnd + 1} val acc = {acc:.4f}")
+            if acc > best_acc:
+                best_acc = acc
+                save_path = os.path.join(args.output_dir, "best")
+                policy.save_pretrained(save_path)
+                tokenizer.save_pretrained(save_path)
+                print(f"[SFT-only] New best ({acc:.4f}) saved to {save_path}")
+
+    final_path = os.path.join(args.output_dir, "final")
+    policy.save_pretrained(final_path)
+    tokenizer.save_pretrained(final_path)
+    print(f"[SFT-only] Training done. Best val acc = {best_acc:.4f}. "
+          f"Final adapter saved to {final_path}")
+
+
+# ---------------------------------------------------------------------------
 # Training (CAMAD joint SFT + RL)
 # ---------------------------------------------------------------------------
 
@@ -992,6 +1181,12 @@ def main():
         description="CAMAD: Culture-Aware Adaptive Mixed Distillation "
                     "(joint SFT+RL)"
     )
+    # Mode
+    p.add_argument("--mode", choices=["camad", "sft_only"], default="camad",
+                   help="camad = joint SFT+RL (default); "
+                        "sft_only = ablation §2.1 (supervised distillation "
+                        "only, single GPU, no PRM)")
+
     # Paths
     p.add_argument("--model_name", default="qwen",
                    help="alias (llama/qwen) or HF path")
@@ -1002,8 +1197,9 @@ def main():
                         "the plain base model (CAMAD has no SFT warm-up).")
     p.add_argument("--data_pkl", required=True,
                    help="splits pickle from split_data.py (train/val/test)")
-    p.add_argument("--prm_path", required=True,
-                   help="PRM checkpoint dir (adapter + score_head.pt)")
+    p.add_argument("--prm_path", default=None,
+                   help="PRM checkpoint dir (adapter + score_head.pt). "
+                        "Required for --mode camad; unused for --mode sft_only.")
     p.add_argument("--guardian_data", default=None,
                    help="HF-CAC inference JSONL (Guardian signal + Judge SFT "
                         "target), from generate_hf_cac_data.py")
@@ -1051,7 +1247,13 @@ def main():
     p.add_argument("--log_every", type=int, default=10)
 
     args = p.parse_args()
-    train(args)
+
+    if args.mode == "camad":
+        if not args.prm_path:
+            p.error("--prm_path is required for --mode camad")
+        train(args)
+    else:  # sft_only
+        train_sft_only(args)
 
 
 if __name__ == "__main__":

@@ -439,107 +439,77 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 
 ## 2.1 SFT-only
 
-### 3.1 动机
+> 定位：消融实验"蒸馏训练范式对比"（§3.2）中的第一组。**从基座模型起点出发，只做监督蒸馏，不引入任何强化学习信号**，用于剥离出"纯监督蒸馏"能达到的上限。
 
-HF-CAC 生成的多智能体对话数据中，包含了 Guardian（主场守护者）和 Auditor（客场审视者）两种角色的完整推理轨迹。Auditor 在辩论早期可能输出带有文化混淆、偏见或引导错误的内容。如果使用传统 SFT（对所有 Token 平等计算交叉熵），单体模型会在自回归预测中拟合这些"毒草 Token"。
+### 2.1.1 设计原则：与 CAMAD 在线 SFT 项严格对齐
 
-### 3.2 核心策略：Token 级加权与掩码
+为保证四组方案的唯一变量是"训练范式"，SFT-only 的监督目标与加权方式与 CAMAD 联合损失中的在线 SFT 项 $\beta \cdot w_{sft} \cdot L_{SFT}$ **完全一致**，区别仅在于：CAMAD 的 SFT 项与 GRPO 项在同一优化步内联合更新，而 SFT-only 只保留这一监督项、关闭 RL 分支。
 
-**原则**：
+具体对齐口径：
 
-- Guardian 的确权和纠偏 Token → 保留，loss 权重乘以 α（放大学习信号）
-- Auditor 最终轮之前的对抗性输出（质疑、混淆、偏离目标文化的内容）→ labels 填充 -100（完全掩码，不参与梯度计算）
-- Auditor 最终轮中被 Guardian 说服后的正确表态 → 保留，loss 权重 = 1.0（不放大，但允许学习"认知转换模式"）
+- **监督目标统一为 Judge 的最终答案 $y_{judge}$**。即对每条样本，以 HF-CAC 中 Judge 角色给出的最终结论作为蒸馏标签，对 student 做自回归交叉熵。这与 CAMAD 中"Judge → SFT 蒸馏目标"的角色分工一致。
+- **样本级文化难度加权 $w_{sft}$ 一致**。沿用 $w_{sft} = \max(1 - hitrate, w_{min})$（$w_{min}=0.1$，见 §1.4、§1.6）。难题（命中率低）权重大，简单题随掌握度衰减但保留 $\geq 0.1$ 的知识锚定下限。
+- **不使用 Guardian/Auditor 的 Token 级加权或掩码**。该 Token 级方案属于另一条独立的 SFT 设计，会引入"训练范式"以外的变量，破坏与 CAMAD 在线 SFT 项的对照关系，因此在本消融中不采用。
 
-### 3.3 运行命令
+这样，SFT-only 与 CAMAD 的差异被压缩为唯一一项：**是否叠加 RL 分支（GRPO 优势项 + Guardian 文化引导 + 联合优化）**。
 
-双卡 DDP 并行训练（推荐）：
+### 2.1.2 与 CAMAD 的对照关系
+
+| 维度 | SFT-only | CAMAD |
+|------|----------|-------|
+| 起点 | 基座 | 基座 |
+| 监督目标 | Judge 最终答案 $y_{judge}$ | 同左 |
+| SFT 加权 | $w_{sft}=\max(1-hitrate, w_{min})$ | 同左 |
+| RL 分支 | 无 | GRPO 优势 + Guardian 引导 |
+| 优化方式 | 仅 $L_{SFT}$ | $L = L_{GRPO}(A_i) + \beta \cdot w_{sft} \cdot L_{SFT}$ |
+
+
+### 2.1.3 运行命令
+
+前置数据（与 CAMAD 共用，由 HF-CAC 推理数据划分 train/val/test（若已生成可跳过））：
 
 ```bash
-cd autodl-tmp/distill
-source /etc/network_turbo
-sh git.sh
-accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
-    --model_name llama \
-    --data_pkl /autodl-fs/data/llama/normad_splits.pkl \
-    --output_dir /root/autodl-tmp/model/llama/normad_camad_sft \
-    --alpha 2.0 \
-    --epochs 5 \
-    --batch_size 4 \
-    --lr 2e-4 \
-    --lora_r 32 \
-    --eval_every_n_epochs 1
+python Cul/split_data.py \
+    --input  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output /autodl-fs/data/qwen/normad_splits.pkl \
+    --seed 42
+```
 
-accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
-    --model_name llama \
-    --data_pkl /autodl-fs/data/llama/culturalBench_splits.pkl \
-    --output_dir /root/autodl-tmp/model/llama/culturalBench_camad_sft \
-    --alpha 2.0 \
-    --epochs 5 \
-    --batch_size 4 \
-    --lr 2e-4 \
-    --lora_r 32 \
-    --eval_every_n_epochs 1
+训练（单卡，无需 PRM）：
 
-accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
-    --model_name llama \
-    --data_pkl /autodl-fs/data/qwen/culturalBench_splits.pkl \
-    --output_dir /root/autodl-tmp/model/qwen/culturalBench_camad_sft \
-    --alpha 2.0 \
-    --epochs 5 \
-    --batch_size 4 \
-    --lr 2e-4 \
-    --lora_r 32 \
-    --eval_every_n_epochs 1
-
-accelerate launch --num_processes 2 Cul/sft/train_sft_weighted.py \
+```bash
+python Cul/grpo/train_grpo_mixed_policy.py \
+    --mode sft_only \
     --model_name qwen \
     --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --output_dir /root/autodl-tmp/model/qwen/normad_camad_sft \
-    --alpha 2.0 \
-    --epochs 5 \
-    --batch_size 4 \
-    --lr 2e-4 \
-    --lora_r 32 \
-    --eval_every_n_epochs 1 \
-    --max_samples 0
+    --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+    --output_dir /autodl-fs/data/model/qwen/normad_sft_only \
+    --beta 1.0 --w_min 0.1 \
+    --ema_momentum 0.9 \
+    --max_rounds 20 --batches_per_round 130 \
+    --prompt_batch_size 4 \
+    --lr 1e-5 --lora_r 16
 ```
 
 | 参数 | 含义 |
 |------|------|
-| `--data_pkl` | split_data.py 生成的 pkl 文件（包含 train/val/test 划分）|
-| `--alpha` | Guardian Token 的 loss 权重放大系数（默认 2.0）|
-| `--lora_r` | LoRA rank（默认 32，保证文化知识充分学习）|
-| `--lr` | 学习率（LoRA 默认 2e-4，高于全参微调）|
-| `--eval_every_n_epochs` | 每 N 个 epoch 在验证集上评估一次（默认 1）|
-| `--batch_size` | 每张卡的 batch size（默认 4，双卡时全局有效 batch size = 4×2 = 8）|
-| `--grad_accum_steps` | 梯度累积步数（默认 1，可增大以模拟更大 batch）|
+| `--mode sft_only` | 切换到 SFT-only 消融路径（纯监督蒸馏，关闭 RL 分支与 PRM）|
+| `--data_pkl` | split_data.py 生成的 pkl（train 训练 / val 验证）|
+| `--guardian_data` | HF-CAC 推理 JSONL，提供 Judge 最终答案作为蒸馏目标 $y_{judge}$ |
+| `--beta` | SFT 项系数；SFT-only 下取 1.0（不缩放监督项），若要与 CAMAD 完全同尺度可传 0.3 |
+| `--w_min` | SFT 权重地板 $w_{min}$（与 CAMAD 一致，默认 0.1）|
+| `--ema_momentum` | hitrate EMA 动量（与 CAMAD 一致，默认 0.9；加 `--no_ema` 可关闭）|
+| `--max_rounds` / `--batches_per_round` | 训练轮数与每轮 batch 数 |
+| `--lr` / `--lora_r` | LoRA 学习率与 rank（与 CAMAD 对齐）|
 
-
-单卡训练：
-
-```bash
-python Cul/sft/train_sft_weighted.py \
-    --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --output_dir /root/autodl-tmp/model/qwen/normad_camad_sft \
-    --alpha 2.0 \
-    --epochs 5 \
-    --batch_size 4 \
-    --lr 2e-4 \
-    --lora_r 32 \
-    --eval_every_n_epochs 1 \
-    --max_samples 0
-```
-
-评估：
+评估（复用统一评估脚本，加载 SFT-only 的 LoRA adapter）：
 
 ```bash
 python Cul/evaluate.py \
     --mode sft \
     --model_name qwen \
     --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --sft_adapter /root/autodl-tmp/model/qwen/normad_camad_sft/best \
+    --sft_adapter /autodl-fs/data/model/qwen/normad_sft_only/best \
     --output_json /autodl-fs/data/model/qwen/eval_sft_only.json
 ```
 
@@ -547,125 +517,65 @@ python Cul/evaluate.py \
 
 ## 2.2 RL-only
 
-#### 6.1.1 Reward：加权平均形式
+> 定位：消融实验"蒸馏训练范式对比"（§3.2）中的第二组。**从基座模型起点出发，只做强化学习，不引入任何监督蒸馏项**，用于剥离出"纯强化学习"能达到的水平。
 
-```
-R_total = alpha * R_outcome + (1 - alpha) * Mean(R_process)
-```
+### 2.2.1 设计原则：朴素 GRPO，无 Guardian 文化引导
+
+为干净地隔离出"联合训练范式"本身的贡献，RL-only 阶段采用**朴素 GRPO**，奖励中**不包含** CAMAD 的 Guardian 文化引导优势项。即优势只来自标准的组内归一化，奖励只由结果正确性与 PRM 过程分构成：
+
+$$R_{total} = \alpha \cdot R_{outcome} + (1 - \alpha)\cdot \mathrm{Mean}(R_{process})$$
 
 其中：
-- `R_outcome ∈ {0, 1}`：答案正确性（规则可验证，答错为 0，答对为 1）
-- `Mean(R_process) ∈ [0.1, 0.9]`：当前推理链中所有步骤的 PRM 得分（经 Sigmoid）的算术平均值。中间全走偏为 ~0.1，全中立为 ~0.5，完美主场确权为 ~0.9
-- `alpha = 0.6`：结果奖励占主导
 
-#### 6.1.2 运行命令
+- $R_{outcome}\in\{0,1\}$：答案正确性（规则可验证，答错为 0，答对为 1）。
+- $\mathrm{Mean}(R_{process})\in[0.1, 0.9]$：当前推理链中所有步骤的 PRM 得分（经 Sigmoid）的算术平均值。中间全走偏 ≈0.1，全中立 ≈0.5，完美主场确权 ≈0.9。
+- $\alpha = 0.6$：结果奖励占主导。
+- **不叠加** $\lambda_g \cdot w \cdot S_{guardian}$ 的 per-rollout 文化方向引导（这是 CAMAD 的专属设计）。优势退化为标准 GRPO/RLOO 形式 $A_i = A_{base}$。
 
-**GRPO （SFT+RL 模式，LoRA，无 DeepSpeed）**
-```bash
-python Cul/grpo/train_grpo_v3.py \
-    --model_name qwen \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
-    --prm_backbone /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
-    --output_dir /autodl-fs/data/model/qwen/normad_camad_grpo \
-    --alpha 0.6 \
-    --n_samples 10 \
-    --max_rounds 20 \
-    --eval_every 5 \
-    --lr 2e-5 \
-    --lora_r 16
-```
+PRM 须为预先在**纯基座**上训练好的 Process Reward Model，通过 `--prm_path` 加载（与 CAMAD 的 PRM 加载口径一致）。
 
-| 参数 | 含义 |
-|------|------|
-| `--data_pkl` | split_data.py 生成的 pkl 文件（GRPO 使用 train 作为 prompt 来源，val 做验证）|
-| `--sft_adapter` | SFT LoRA adapter 路径（RL-only 模式不传此参数）|
-| `--prm_path` | PRM checkpoint（含 LoRA adapter + score_head.pt）|
-| `--prm_backbone` | PRM 基座模型路径（原始 base model）|
-| `--alpha` | R_total 中 R_outcome 的权重（默认 0.6）|
-| `--n_samples` | 每 prompt 每轮采样数 G（默认 10）|
-| `--max_rounds` | 最大训练轮数（SFT+RL 建议 20，RL-only 建议 30）|
-| `--eval_every` | 每 N 轮在验证集上评估一次（默认 5）|
-| `--lr` | GRPO LoRA 学习率（SFT+RL 用 2e-5，RL-only 用 5e-5）|
-| `--lora_r` | GRPO LoRA rank（默认 16）|
+### 2.2.2 与 CAMAD 的对照关系
 
+| 维度 | RL-only | CAMAD |
+|------|---------|-------|
+| 起点 | 基座 | 基座 |
+| 奖励 | $\alpha R_{outcome} + (1-\alpha)\mathrm{Mean}(R_{process})$ | 同左 |
+| 优势 | $A_i = A_{base}$（朴素 GRPO）| $A_i = A_{base} + \lambda_g w\, S_{guardian}$（Guardian 引导）|
+| SFT 分支 | 无 | $\beta \cdot w_{sft}\cdot L_{SFT}$ |
+| 优化方式 | 仅 $L_{GRPO}$ | $L = L_{GRPO}(A_i) + \beta \cdot w_{sft}\cdot L_{SFT}$ |
 
-**GRPO（无 SFT adapter，lr=5e-5，max_rounds=30）**
-```bash
-python Cul/grpo/train_grpo_v3.py \
-    --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
-    --prm_backbone /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
-    --output_dir /autodl-fs/data/model/qwen/normad_camad_grpo_rl_only \
-    --alpha 0.6 \
-    --n_samples 10 \
-    --max_rounds 30 \
-    --eval_every 5 \
-    --lr 5e-5 \
-    --lora_r 16
-```
-与 SFT+RL 模式的关键差异：不传 `--sft_adapter`（从 base model 出发），学习率 5e-5（高于 SFT+RL 的 2e-5），最大轮数 30（多于 SFT+RL 的 20）。
+通过对比 RL-only 与 CAMAD，可量化"在纯 RL 之上叠加在线监督蒸馏 + Guardian 文化引导"带来的净增益；同时与 SFT-only 对照，可判断纯监督与纯强化各自的能力边界。
 
-**备选: GRPO（DeepSpeed ZeRO-3 版，train_grpo.py）**
-```bash
-deepspeed --num_gpus 2 Cul/grpo/train_grpo.py \
-    --model_name     qwen \
-    --grpo_data      /autodl-fs/data/qwen/normad_splits/grpo_train.jsonl \
-    --val_data       /autodl-fs/data/qwen/normad_splits/prm_val.jsonl \
-    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
-    --prm_base_path  /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
-    --output_dir     /autodl-fs/data/model/qwen/grpo_qwen_culture \
-    --n_samples      10 \
-    --max_rounds     30 \
-    --eval_every     5
-```
+### 2.2.3 运行思路
 
-| 参数 | 含义 |
-|------|------|
-| `--grpo_data` | GRPO 训练数据（prompt 来源）|
-| `--val_data` | 验证数据 |
-| `--prm_path` | PRM checkpoint 路径（含 LoRA adapter + score_head.pt）|
-| `--prm_base_path` | PRM 基座模型路径（Qwen2.5-7B-Instruct）|
-| `--output_dir` | 输出目录 |
-| `--n_samples` | 每 prompt 采样数 G |
-| `--max_rounds` | 最大训练轮数 |
-| `--eval_every` | 每 N 轮评估一次 |
-
-与 `train_grpo_v3.py` 的区别：使用 DeepSpeed ZeRO-3 进行多卡并行（显存效率更高），R_total = 0.7×R_ans + 0.3×R_cultural，PRM 使用 step-level scoring（与 `train_prm_mse.py` 训练的 PRM 完全适配）。
-
-#### 6.1.3 评估的运行命令
-
-```bash
-# 评估 RL-only 模型
-python Cul/evaluate.py \
-    --mode rl \
-    --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --grpo_adapter /autodl-fs/data/model/qwen/normad_camad_grpo/best \
-    --output_json /autodl-fs/data/model/qwen/eval_rl.json
-
-# 评估 SFT+RL 模型
-python Cul/evaluate.py \
-    --mode sft_rl \
-    --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --grpo_adapter /autodl-fs/data/model/qwen/normad_camad_grpo/best \
-    --output_json /autodl-fs/data/model/qwen/eval_sft_rl.json
-```
-
-| 参数 | 含义 |
-|------|------|
-| `--mode` | 评估模式：`sft`、`rl`、`sft_rl` |
-| `--data_pkl` | pkl 文件路径（使用其中的 test 集）|
-| `--sft_adapter` | SFT LoRA adapter 路径（sft 和 sft_rl 模式需要）|
-| `--grpo_adapter` | GRPO LoRA adapter 路径（rl 和 sft_rl 模式需要）|
-| `--output_json` | 可选，保存详细结果（含每条样本的预测和按国家分组准确率）|
+复用 CAMAD 训练脚本的 GRPO 实现，关闭 SFT 分支（令 $\beta=0$）、并关闭 Guardian 优势引导（令 $\lambda_g=0$），即退化为朴素 GRPO 的 RL-only 配置。PRM 路径经 `--prm_path` 传入预训练好的基座 PRM。该消融的实现改动留待后续统一处理，本节先固定设计口径，暂不改动代码。
 
 ## 2.3 SFT+RL（顺序学习）
 
+> 定位：消融实验"蒸馏训练范式对比"（§3.2）中的第三组，即**传统 RLHF 范式**。**从基座出发，先做监督蒸馏直至收敛，再在 SFT 收敛后的检查点上接着做强化学习**，两阶段串行。它是 CAMAD"联合训练"的最直接对照：相同的监督信号与强化信号，但以"先后串联"而非"同步联合"的方式组织。
+
+### 2.3.1 两阶段流程
+
+**阶段一（SFT）**：与 §2.1 的 SFT-only 完全一致——从基座出发，以 Judge 最终答案 $y_{judge}$ 为目标、按 $w_{sft}=\max(1-hitrate, w_{min})$ 加权做监督蒸馏，训练至验证集收敛，保存 SFT 检查点。
+
+**阶段二（RL）**：**以阶段一的 SFT 检查点为起点**，接着做强化学习。为与 §2.2 的 RL-only 保持口径一致，此阶段同样采用**朴素 GRPO**（奖励 $R_{total} = \alpha R_{outcome} + (1-\alpha)\mathrm{Mean}(R_{process})$，优势 $A_i = A_{base}$，**不含** Guardian 文化引导），PRM 仍为预训练好的基座 PRM，经 `--prm_path` 加载。两阶段使用的监督目标、奖励构成、PRM 与其余三组完全相同，唯一变化是"组织方式"。
+
+### 2.3.2 与 CAMAD 的本质区别：串联 vs 联合
+
+SFT→RL 与 CAMAD 都同时用到了监督与强化两种信号，但组织方式根本不同：
+
+| 维度 | SFT→RL（顺序学习） | CAMAD（联合训练）|
+|------|--------------------|------------------|
+| RL 起点 | SFT 收敛后的检查点 | 基座 |
+| 信号组织 | 先 SFT 收敛，再 RL（两阶段串行）| SFT 与 RL 在同一优化步内联合 |
+| 监督项在 RL 阶段 | 不再存在，仅由初始权重隐式保留 | 始终在线 $\beta \cdot w_{sft}\cdot L_{SFT}$ 锚定 |
+| 主要风险 | RL 阶段缺乏监督锚定，易**灾难性遗忘** SFT 习得的文化知识 | 在线 SFT 项持续约束，缓解遗忘 |
+
+**核心论点**：传统 RLHF 的串联范式中，进入阶段二后监督信号彻底退场，RL 仅靠优化奖励驱动参数漂移，容易侵蚀阶段一蒸馏到的文化知识，产生灾难性遗忘。CAMAD 的设计动机正是为此——把 SFT 项以 $\beta \cdot w_{sft}\cdot L_{SFT}$ 的形式在每一步与 GRPO 联合优化，让监督锚定贯穿强化全程（见 §1.1、§1.7）。因此 SFT→RL 与 CAMAD 的对比，是本消融最关键的一组：它直接验证"联合优化优于先后串联"这一核心假设。
+
+### 2.3.3 运行思路
+
+阶段一复用 SFT-only 配置（§2.1.3）训练并保存 SFT 检查点；阶段二复用 CAMAD 脚本的 GRPO 实现，从该 SFT 检查点出发、关闭 SFT 分支（$\beta=0$）与 Guardian 引导（$\lambda_g=0$）做朴素 GRPO。该消融的实现改动留待后续统一处理，本节先固定设计口径，暂不改动代码。
 
 ## 3. 消融实验设计
 

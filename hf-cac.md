@@ -116,7 +116,6 @@ shutdown
 |------|--------|------|
 | `--negotiation_rounds` | 1 | 协商轮次。0=独立生成（Auditor 不看 Guardian），1=标准协商 |
 | `--include_judge` | true | 是否包含 Judge 裁决。false 时仅输出 Solution 1-N |
-| `--max_samples` | 0 | 0=全量 |
 | `--num_agents` | 6 | 文化智能体数量（2/3/4/5/6）。用于消融实验，< 6 时自动合并文化亲缘角色 |
 | `--config_path` | None | 手动指定配置文件路径。不指定时根据数据集自动检测 |
 
