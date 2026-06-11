@@ -43,7 +43,7 @@ class HF_CAC_MAS:
 
     def __init__(self, model_name, tensor_parallel_size=1, config_path=None,
                  temperature=0.7, max_tokens=1024, include_judge=True,
-                 negotiation_rounds=1, num_agents=None):
+                 negotiation_rounds=1, num_agents=None, temp_ladder=False):
         """
         Args:
             model_name: HuggingFace model path or alias
@@ -56,7 +56,10 @@ class HF_CAC_MAS:
             num_agents: number of agents to use (None=all from config).
                         For culturalbench, fewer agents (2-3) with structured debate
                         can outperform many agents.
+            temp_ladder: if True, assign each agent a distinct temperature spread
+                        across a ladder (B1 diversity boost for culturalbench).
         """
+        self.temp_ladder = temp_ladder
         if config_path is None:
             config_path = os.path.join(
                 os.path.dirname(__file__), "configs", "hf_cac_config.yaml"
@@ -145,6 +148,33 @@ class HF_CAC_MAS:
                 max_tokens=self.max_tokens,
                 stop=stop_tokens,
             )
+
+    # ------------------------------------------------------------------
+    # Per-agent temperature ladder (B1 diversity)
+    # ------------------------------------------------------------------
+
+    def _auditor_sampling_for(self, position: int, total_auditors: int):
+        """Return a SamplingParams for an auditor at a given ladder position.
+
+        When temp_ladder is enabled (culturalbench), auditors get distinct
+        temperatures evenly spread over [0.3, 1.0] so the ensemble explores
+        genuinely different generations instead of near-identical outputs.
+        Falls back to the shared auditor_sampling otherwise.
+        """
+        if not self.temp_ladder or self.task_type not in ("culturalbench", "culturellm", "blend"):
+            return self.auditor_sampling
+
+        lo, hi = 0.3, 1.0
+        if total_auditors <= 1:
+            temp = (lo + hi) / 2
+        else:
+            temp = lo + (hi - lo) * (position / (total_auditors - 1))
+        return SamplingParams(
+            temperature=round(temp, 3),
+            max_tokens=self.auditor_sampling.max_tokens,
+            stop=self.auditor_sampling.stop,
+            top_p=0.95,
+        )
 
     # ------------------------------------------------------------------
     # Home-Field Detection
@@ -408,13 +438,17 @@ class HF_CAC_MAS:
                     f"Answer (1, 2, 3, or 4):"
                 )
             elif self.task_type == "culturalbench":
-                # MAD-inspired: same simple format as Guardian
+                # B1: inject the auditor's own cultural lens so agents reason from
+                # genuinely different cultural priors (raises ensemble diversity / oracle).
                 user = (
-                    f"Task: You will be given a cultural knowledge question about "
-                    f"{target_country}. Select the correct option number. Do not make any "
+                    f"From your perspective as an expert in [{agent_name}], you will be "
+                    f"given a cultural knowledge question about {target_country}. "
+                    f"Select the correct option number. Do not make any "
                     f"extra inferences outside of the given context and country. "
                     f"Only align to the country given. "
-                    f"Think step by step about the cultural practices of {target_country}, then respond "
+                    f"Draw on your cultural expertise and reason step by step about the "
+                    f"cultural practices of {target_country} (noting any similarities or "
+                    f"contrasts with cultures you know best), then respond "
                     f"with the correct option number (1, 2, 3, or 4). Explain your answer in less "
                     f"than three sentences.\n\n"
                     f"Question:\n{question}\n"
@@ -1040,14 +1074,19 @@ class HF_CAC_MAS:
         else:
             # Independent mode: Auditors don't see Guardian (CulturalBench/CultureLLM always starts independent)
             auditor_prompts = []
-            for ai in auditor_indices:
+            auditor_sampling_list = []  # per-agent temp ladder (B1)
+            n_auditors = len(auditor_indices)
+            for pos, ai in enumerate(auditor_indices):
                 prompt = self._build_auditor_prompt(
                     ai, question, target_country, guardian_name, None
                 )
                 auditor_prompts.append(prompt)
+                auditor_sampling_list.append(
+                    self._auditor_sampling_for(pos, n_auditors)
+                )
             if auditor_prompts:
                 auditor_outputs = self.llm.generate(
-                    auditor_prompts, self.auditor_sampling
+                    auditor_prompts, auditor_sampling_list
                 )
                 for ai, out in zip(auditor_indices, auditor_outputs):
                     auditor_responses[ai] = out.outputs[0].text.strip()
@@ -1301,6 +1340,7 @@ class HF_CAC_MAS:
         # ---- Phase 2: All Auditors generate with Guardian context (high temp) ----
         auditor_prompts = []
         auditor_meta = []  # (sample_idx, agent_idx)
+        auditor_sampling_list = []  # per-prompt SamplingParams (B1 temp ladder)
         for si in range(n):
             g_idx = guardian_indices[si]
             g_name = self.culture_roles[g_idx]["name"]
@@ -1309,16 +1349,22 @@ class HF_CAC_MAS:
                 g_resp = None
             else:
                 g_resp = guardian_responses[si]
-            for ai in auditor_indices_per_sample[si]:
+            n_auditors = len(auditor_indices_per_sample[si])
+            for pos, ai in enumerate(auditor_indices_per_sample[si]):
                 prompt = self._build_auditor_prompt(
                     ai, questions[si], countries[si], g_name, g_resp
                 )
                 auditor_prompts.append(prompt)
                 auditor_meta.append((si, ai))
+                auditor_sampling_list.append(
+                    self._auditor_sampling_for(pos, n_auditors)
+                )
 
         if auditor_prompts:
+            # vLLM accepts a list of SamplingParams (one per prompt) for the
+            # temperature ladder; falls back to identical params when disabled.
             auditor_outputs = self.llm.generate(
-                auditor_prompts, self.auditor_sampling
+                auditor_prompts, auditor_sampling_list
             )
             for out, (si, ai) in zip(auditor_outputs, auditor_meta):
                 auditor_responses[si][ai] = out.outputs[0].text.strip()

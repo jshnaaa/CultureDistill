@@ -252,10 +252,16 @@ def main():
                         help="Whether to compute and save accuracy metrics "
                              "after inference. Results saved as JSON beside "
                              "the output file. Default: true.")
+    parser.add_argument("--temp_ladder", type=str, default="false",
+                        choices=["true", "false"],
+                        help="B1 diversity: give each auditor a distinct "
+                             "temperature spread over [0.3, 1.0] to raise "
+                             "ensemble diversity / oracle. Default: false.")
 
     args = parser.parse_args()
     args.include_judge = args.include_judge.lower() == "true"
     args.eval_accuracy = args.eval_accuracy.lower() == "true"
+    args.temp_ladder = args.temp_ladder.lower() == "true"
 
     # ------------------------------------------------------------------
     # Model alias resolution
@@ -336,12 +342,14 @@ def main():
         include_judge=args.include_judge,
         negotiation_rounds=args.negotiation_rounds,
         num_agents=args.num_agents,
+        temp_ladder=args.temp_ladder,
     )
     print(f"HF-CAC initialized:")
     print(f"  Num agents: {mas.num_agents}")
     print(f"  Task type: {mas.task_type}")
     print(f"  Include Judge: {args.include_judge}")
     print(f"  Negotiation rounds: {args.negotiation_rounds}")
+    print(f"  Temp ladder: {args.temp_ladder}")
 
     lock = threading.Lock()
 
