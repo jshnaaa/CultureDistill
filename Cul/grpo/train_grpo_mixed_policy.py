@@ -2,6 +2,11 @@
 CAMAD: Culture-Aware Adaptive Mixed Distillation (joint SFT+RL).
 
 Core method (see camad.md §6.2):
+  - Trains DIRECTLY FROM THE BASE MODEL (no separate SFT warm-up stage). The
+    supervised signal is injected ONLINE via the joint loss below. This is the
+    key difference from classic RLHF (base -> SFT -> RL): by mixing SFT and RL
+    in one optimization step from the base, CAMAD avoids the catastrophic
+    forgetting that the staged SFT->RL pipeline suffers from.
   - Joint objective in ONE optimization step:
         L = L_GRPO(A_i) + beta * w_sft * L_SFT
   - RL part (exploration + cultural guidance):
@@ -30,17 +35,17 @@ Performance optimizations (inherited):
   - Mini-batch backward: accumulate gradients over small groups.
 
 Architecture (LoRA, no DeepSpeed):
-  - Policy: base + (optional) SFT-LoRA merged + new GRPO-LoRA (trainable) on cuda:0
+  - Policy: BASE model + new trainable LoRA on cuda:0 (joint SFT+RL trained;
+    NO pre-merged SFT adapter)
   - Reference: same model with adapter disabled (zero extra memory)
   - PRM: loaded on cuda:1 for parallel scoring (frozen, eval mode)
 
 Hardware requirement: 2x vGPU-48GB (policy on cuda:0, PRM on cuda:1)
 
 Usage:
-    # Quick test with 10 samples
+    # Quick test with 10 samples (trains from BASE; no SFT adapter)
     python Cul/grpo/train_grpo_mixed_policy.py \\
         --model_name     qwen \\
-        --sft_adapter    /path/to/camad_sft_qwen/best \\
         --data_pkl       /path/to/normad_splits.pkl \\
         --prm_path       /path/to/camad_prm/best \\
         --guardian_data  /path/to/normad_hf_cac_inference.jsonl \\
@@ -49,10 +54,9 @@ Usage:
         --max_rounds     3 \\
         --n_samples      5
 
-    # Full CAMAD joint SFT+RL training
+    # Full CAMAD joint SFT+RL training (from BASE model)
     python Cul/grpo/train_grpo_mixed_policy.py \\
         --model_name     qwen \\
-        --sft_adapter    /path/to/camad_sft_qwen/best \\
         --data_pkl       /path/to/normad_splits.pkl \\
         --prm_path       /path/to/camad_prm/best \\
         --guardian_data  /path/to/normad_hf_cac_inference.jsonl \\
@@ -718,15 +722,17 @@ def train(args):
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"  # left padding for generation
 
-    # --- Policy model: base + merged SFT-LoRA + new trainable GRPO-LoRA ---
-    print("[CAMAD] Loading policy model ...")
+    # --- Policy model: BASE + new trainable LoRA (joint SFT+RL trained) ---
+    # CAMAD trains directly from the base model. There is NO separate SFT
+    # warm-up stage: the supervised (SFT) signal is injected ONLINE through the
+    # joint loss L = L_GRPO + beta * w_sft * L_SFT during this very run. This is
+    # what distinguishes CAMAD's "mixed" strategy from classic RLHF
+    # (base -> SFT -> RL), and is precisely why it avoids the catastrophic
+    # forgetting that the staged pipeline suffers from.
+    print("[CAMAD] Loading policy model (from BASE, no SFT warm-up) ...")
     base = AutoModelForCausalLM.from_pretrained(
         model_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
     )
-    if args.sft_adapter:
-        print(f"[CAMAD] Merging SFT adapter: {args.sft_adapter}")
-        base = PeftModel.from_pretrained(base, args.sft_adapter)
-        base = base.merge_and_unload()
 
     lora_cfg = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -743,11 +749,15 @@ def train(args):
     policy.print_trainable_parameters()
 
     # --- PRM (frozen, cuda:1) ---
+    # The PRM is an independently trained scorer. --prm_sft_adapter only needs
+    # to be set if the PRM was trained on a base that had an SFT adapter merged
+    # in; for the CAMAD-from-base setup the PRM should likewise be trained on
+    # the plain base model, so this is None by default.
     print("[CAMAD] Loading PRM ...")
     prm = CulturePRM_v3(
         prm_checkpoint_dir=args.prm_path,
         backbone_path=model_path,
-        sft_adapter_path=args.sft_adapter,
+        sft_adapter_path=args.prm_sft_adapter,
     )
     prm.to(prm_device)
     prm.eval()
@@ -985,8 +995,11 @@ def main():
     # Paths
     p.add_argument("--model_name", default="qwen",
                    help="alias (llama/qwen) or HF path")
-    p.add_argument("--sft_adapter", default=None,
-                   help="SFT-LoRA adapter to merge into the policy/PRM backbone")
+    p.add_argument("--prm_sft_adapter", default=None,
+                   help="(optional) SFT-LoRA adapter to merge into the PRM "
+                        "backbone, ONLY if the PRM was trained on an "
+                        "SFT-merged base. The policy is ALWAYS trained from "
+                        "the plain base model (CAMAD has no SFT warm-up).")
     p.add_argument("--data_pkl", required=True,
                    help="splits pickle from split_data.py (train/val/test)")
     p.add_argument("--prm_path", required=True,

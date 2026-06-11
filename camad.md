@@ -525,6 +525,8 @@ CAMAD 的核心训练算法是一种**联合 SFT+RL 的混合蒸馏方法**。�
 
 HF-CAC 多智能体跨文化推理虽然准确，但推理成本高、难以直接部署到线上单体模型。若仅用 RL（如纯 GRPO）训练单体模型，模型会在探索过程中**遗忘已有的文化知识**，对稀有文化和复杂文化尤其明显。CAMAD 的目标是得到一个**同时保留文化知识与探索能力**的单体模型：既能像 Judge 一样给出正确的文化判断，又能像 Guardian 一样把握文化推理的正确方向，还能保留 RL 带来的泛化与自我纠错能力。
 
+**与传统 RLHF 的本质区别——CAMAD 直接从基座模型起点训练。** 传统 RLHF 采用「基座 → SFT 收敛 → 在 SFT 起点上接着 RL」的**分阶段串联**范式：RL 阶段没有任何监督约束，模型会逐步偏离并**灾难性遗忘**掉 SFT 阶段学到的文化知识。CAMAD 不设独立的 SFT 预热阶段，而是**直接在基座模型上让 SFT 损失与 RL 损失在同一次优化步内联合作用**——SFT 项全程在线提供 Judge 监督锚定（防遗忘），RL 项同时进行探索与文化引导。这正是"混合（Mixed）"策略的含义所在：不是先后两段，而是自始至终的一体化联合训练。因此 CAMAD 训练入口**不接收任何预训练 SFT adapter 作为起点**；监督能力完全由训练过程中的在线 SFT 损失习得。
+
 #### 6.2.2 核心思想与角色类比
 
 CAMAD 把 HF-CAC 的两类专家信号映射为两种互补的学习方式：
@@ -631,13 +633,12 @@ RL 部分负责**探索 + 文化引导并行**，SFT 部分负责**以难度自�
 
 #### 6.2.10 运行命令
 
-CAMAD 联合 SFT+RL 训练入口为 `Cul/grpo/train_grpo_mixed_policy.py`（在原 CGM-GRPO 脚本基础上改造）。其中 `--guardian_data` 为 Stage 0 由 `Cul/generate_hf_cac_data.py` 产出的 HF-CAC 推理 JSONL，脚本会从中同时解析 Guardian 的判断（per-rollout 文化方向信号 $S_{guardian}$）与 Judge 的最终答案（SFT 蒸馏目标 $y_{judge}$）。
+CAMAD 联合 SFT+RL 训练入口为 `Cul/grpo/train_grpo_mixed_policy.py`。它**直接从基座模型起点训练，不接收任何预训练 SFT adapter**（监督能力由在线 SFT 损失习得）。其中 `--guardian_data` 为 Stage 0 由 `Cul/generate_hf_cac_data.py` 产出的 HF-CAC 推理 JSONL，脚本会从中同时解析 Guardian 的判断（per-rollout 文化方向信号 $S_{guardian}$）与 Judge 的最终答案（SFT 蒸馏目标 $y_{judge}$）。
 
-**冒烟测试（10 条样本，验证流程跑通）**
+**冒烟测试（10 条样本，验证流程跑通；从基座起点）**
 ```bash
 python Cul/grpo/train_grpo_mixed_policy.py \
 --model_name qwen \
---sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
 --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
 --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
 --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
@@ -647,11 +648,10 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 --n_samples 5
 ```
 
-**完整 CAMAD 联合 SFT+RL 训练**
+**完整 CAMAD 联合 SFT+RL 训练（从基座起点）**
 ```bash
 python Cul/grpo/train_grpo_mixed_policy.py \
 --model_name qwen \
---sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
 --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
 --prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
 --guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
@@ -665,6 +665,8 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 --batches_per_round 130
 ```
 
+> 注：`--prm_sft_adapter` 为可选参数，仅当 PRM 是在「基座 + SFT adapter 合并」之上训练时才需要传入，以还原 PRM 的基座。CAMAD 全流程基于基座，PRM 也应基于纯基座训练，故默认不传。
+
 核心超参对应关系：
 
 | 参数 | 含义 | 默认值 | 公式位置 |
@@ -675,6 +677,7 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 | `--ema_momentum` | hitrate EMA 动量 $m$ | 0.9 | $hitrate \leftarrow m\cdot prev + (1-m)\cdot acc_{cur}$ |
 | `--use_ema` / `--no_ema` | 是否启用 EMA（否则用当轮命中率） | 启用 | 见 6.2.4 |
 | `--alpha` | PRM 过程奖励权重 $\alpha$ | 0.6 | $R = R_{outcome} + \alpha \cdot R_{process}$ |
+| `--prm_sft_adapter` | （可选）PRM 基座的 SFT adapter，仅 PRM 训练时合并过才需要 | 无 | 与 policy 起点无关 |
 
 说明：$w = 1 - hitrate$ 可降到 0（RL 引导随掌握度退场），而 $w_{sft}$ 受 $w_{min}$ 约束始终 $\geq 0.1$（维持 Judge 知识锚定，防遗忘）。$S_{guardian}\in\{0,1\}$ 为 per-rollout 信号：当前 rollout 的文化推理方向（以解析出的选项为代理）与 Guardian 判断一致时取 1，从而放大组内"方向正确"的 rollout 优势。
 
@@ -697,14 +700,14 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 
 ### 8.2 消融实验：蒸馏训练范式对比
 
-本消融在均使用 HF-CAC 数据的前提下，对比不同蒸馏训练范式，验证 CAMAD 联合 SFT+RL 混合蒸馏相对于纯 SFT、纯 RL、以及分阶段 SFT→RL 的有效性。
+本消融在均使用 HF-CAC 数据的前提下，对比不同蒸馏训练范式，验证 CAMAD 联合 SFT+RL 混合蒸馏相对于纯 SFT、纯 RL、以及分阶段 SFT→RL 的有效性。**四种方案均从同一基座模型起点出发**，唯一变量是训练范式（监督/强化/串联/混合），以保证对比公平。
 
-| 实验组 | 训练范式 | 说明 | NormAd |
-|--------|---------|------|--|
-| SFT-only | 仅监督蒸馏 | 仅用 Judge 输出做加权 SFT |  |
-| RL-only | 仅强化学习 | 从 base model 出发的 GRPO |  |
-| SFT→RL（分阶段） | 先 SFT 再 RL | RL 从 SFT 后的模型出发，两阶段串联 |  |
-| CAMAD | 联合 SFT+RL | 同一目标内联合优化（$L = L_{GRPO} + w\cdot L_{SFT}$）|  |
+| 实验组 | 起点 | 训练范式 | 说明 | NormAd |
+|--------|------|---------|------|--|
+| SFT-only | 基座 | 仅监督蒸馏 | 基座 → 仅用 Judge 输出做加权 SFT |  |
+| RL-only | 基座 | 仅强化学习 | 基座 → GRPO（无监督约束）|  |
+| SFT→RL（分阶段） | 基座 | 先 SFT 再 RL | 基座 → SFT 收敛 → 在 SFT 起点上接着 RL，两阶段串联（传统 RLHF 范式）|  |
+| CAMAD | 基座 | 联合 SFT+RL | 基座 → SFT 与 RL 在同一优化步内联合优化（$L = L_{GRPO}(A_i) + \beta \cdot w_{sft}\cdot L_{SFT}$）|  |
 
 ### 8.3 蒸馏方案对比（都使用HF-CAC的情况下）
 
