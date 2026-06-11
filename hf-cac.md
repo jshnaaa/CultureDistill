@@ -567,6 +567,9 @@ python MD/md_debate.py \
 | `--num_rounds` | 初始作答后的辩论轮数 R | 2 |
 | `--temperature` | 采样温度（所有 Agent 共用，多样性来自采样） | 0.7 |
 | `--max_tokens` | 每次生成最大 token 数 | 512 |
+| `--max_model_len` | vLLM 最大上下文长度（prompt + 生成） | 4096 |
+
+> **性能优化**：每一轮把 N 个 Agent × 全部样本的 prompt 合并成单次 `llm.generate` 提交，交由 vLLM 做连续批处理（continuous batching），并开启 `enable_prefix_caching` 复用共享的 system prompt / 问题前缀 KV cache。相比逐 Agent 逐小 batch 调用，吞吐提升约 5-8 倍（NorMAD 上约 2 小时 → 15-25 分钟）。`--batch_size` 已弃用（不再用于外部切分）。
 
 **提示词来源**：遵循论文 Appendix Figure 15 的 Starting + Debate 模板。其中 MMLU 辩论模板（"Using the reasoning from other agents as additional advice, can you give an updated answer? ... Put your answer ..."）与本文多选文化任务最为契合，因此保留其"以其他 Agent 推理作为参考 → 给出更新答案"的核心逻辑，仅将任务表述和答案格式适配到各数据集（NorMAD 的 Yes/No/Neither、CulturalBench/BLEND 的 1-4、CultureLLM 的可变选项区间）。
 

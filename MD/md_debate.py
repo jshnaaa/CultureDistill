@@ -42,7 +42,6 @@ import os
 import sys
 import json
 import argparse
-from tqdm import tqdm
 
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
@@ -301,8 +300,12 @@ def run_md(args):
         model=model_path,
         tensor_parallel_size=args.tensor_parallel_size,
         trust_remote_code=True,
-        gpu_memory_utilization=0.85,
+        gpu_memory_utilization=0.92,
         dtype="bfloat16",
+        max_model_len=args.max_model_len,
+        # Many agents/samples share the same system-prompt + question prefix;
+        # prefix caching reuses their KV cache across rounds for a big speedup.
+        enable_prefix_caching=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -317,7 +320,16 @@ def run_md(args):
         stop=stop_tokens,
         top_p=0.95,
     )
-    batch_size = args.batch_size
+
+    def _generate_all(prompts):
+        """Submit ALL prompts at once and let vLLM do continuous batching.
+
+        vLLM internally schedules thousands of concurrent sequences far more
+        efficiently than feeding it tiny external mini-batches, so we pass the
+        whole list in a single call (use_tqdm shows real-time progress).
+        """
+        outs = llm.generate(prompts, sampling, use_tqdm=True)
+        return [o.outputs[0].text.strip() for o in outs]
 
     def _extract(text, item):
         if ds_type == DATASET_CULTURELLM:
@@ -341,18 +353,19 @@ def run_md(args):
         return kw
 
     # -------- Round 0: independent generation (Starting prompt) --------
-    print("\n=== Round 0: Independent Generation ===")
+    # All agents share the SAME starting prompt per sample, so we build the
+    # per-sample prompt once and replicate it A times into one big batch.
+    print(f"\n=== Round 0: Independent Generation ({A} agents x {n} samples) ===")
+    start_prompts = [apply_chat(tokenizer, tpl_start.format(**_start_kwargs(p)), sys_prompt)
+                     for p in parsed]
+    # Flat layout: index = a * n + i  (agent a, sample i)
+    flat_prompts = [start_prompts[i] for _ in range(A) for i in range(n)]
+    flat_texts = _generate_all(flat_prompts)
     for a in range(A):
-        prompts = [apply_chat(tokenizer, tpl_start.format(**_start_kwargs(p)), sys_prompt)
-                   for p in parsed]
-        for i in tqdm(range(0, n, batch_size), desc=f"R0-Agent{a+1}"):
-            be = min(i + batch_size, n)
-            out = llm.generate(prompts[i:be], sampling, use_tqdm=False)
-            for j in range(be - i):
-                idx = i + j
-                txt = out[j].outputs[0].text.strip()
-                agent_responses[a][idx] = txt
-                agent_answers[a][idx] = _extract(txt, parsed[idx])
+        for i in range(n):
+            txt = flat_texts[a * n + i]
+            agent_responses[a][i] = txt
+            agent_answers[a][i] = _extract(txt, parsed[i])
 
     for i in range(n):
         debate_history[i]["rounds"].append({
@@ -370,8 +383,10 @@ def run_md(args):
         new_responses = [["" for _ in range(n)] for _ in range(A)]
         new_answers = [["" for _ in range(n)] for _ in range(A)]
 
+        # Build every agent's debate prompt for every sample, then submit the
+        # whole (A * n) batch in one call. Flat layout: index = a * n + i.
+        flat_prompts = []
         for a in range(A):
-            prompts = []
             for i, p in enumerate(parsed):
                 other = build_other_responses(
                     [prev_responses[aa][i] for aa in range(A)], a
@@ -380,16 +395,14 @@ def run_md(args):
                       "other_responses": other}
                 if ds_type == DATASET_CULTURELLM:
                     kw["option_range"] = p["_option_range"]
-                prompts.append(apply_chat(tokenizer, tpl_debate.format(**kw), sys_prompt))
+                flat_prompts.append(apply_chat(tokenizer, tpl_debate.format(**kw), sys_prompt))
 
-            for i in tqdm(range(0, n, batch_size), desc=f"R{r}-Agent{a+1}"):
-                be = min(i + batch_size, n)
-                out = llm.generate(prompts[i:be], sampling, use_tqdm=False)
-                for j in range(be - i):
-                    idx = i + j
-                    txt = out[j].outputs[0].text.strip()
-                    new_responses[a][idx] = txt
-                    new_answers[a][idx] = _extract(txt, parsed[idx])
+        flat_texts = _generate_all(flat_prompts)
+        for a in range(A):
+            for i in range(n):
+                txt = flat_texts[a * n + i]
+                new_responses[a][i] = txt
+                new_answers[a][i] = _extract(txt, parsed[i])
 
         agent_responses = new_responses
         agent_answers = new_answers
@@ -465,7 +478,11 @@ def main():
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory (default: /autodl-fs/data/md)")
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=0,
+                        help="Deprecated/unused: vLLM does continuous batching "
+                             "over the full prompt list internally")
+    parser.add_argument("--max_model_len", type=int, default=4096,
+                        help="vLLM max context length (prompt + generation)")
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Max samples (0=all)")
     parser.add_argument("--num_agents", type=int, default=3,

@@ -1,16 +1,22 @@
-# CAMAD：基于 HF-CAC 的文化感知蒸馏框架（创新点二）
+# CAMAD：文化感知自适应混合蒸馏框架（创新点二）
 
-CAMAD 是基于 HF-CAC 生成的结构化推理数据构建的三阶段蒸馏框架，目标是将多智能体系统的跨文化推理能力注入单体语言模型，使其具备主场文化确权能力（Guardian 的知识精度）、跨文化边界感知能力（Auditor 的对比视角）、以及文化一致性的自我过程监督能力（PRM 引导的推理路径优化）。三阶段如下：
+> **创新点二**：提出文化感知自适应蒸馏方法 CAMAD，通过将文化专家产生的文化一致性信号引入策略优化过程，并根据模型文化掌握程度动态调节专家干预强度，实现多智能体文化推理能力向单体模型的高效迁移。
+
+**CAMAD（Culture-Aware Adaptive Mixed Distillation，文化感知自适应混合蒸馏）** 是基于 HF-CAC 多智能体系统生成的结构化推理数据构建的蒸馏框架，目标是将多智能体系统的跨文化推理能力高效迁移到单体语言模型，使其在保留文化知识（尤其是稀有/复杂文化）的同时，仍具备自主探索与推理能力。
+
+CAMAD 的核心是一种**联合 SFT+RL 的混合蒸馏训练方法**（见第 6.2 节）：在同一优化目标中，一方面将 HF-CAC 的最终决策（Judge）作为监督蒸馏目标以"保知识、防遗忘"，另一方面用 GRPO 进行在线探索，并将文化专家（Guardian）产生的文化一致性信号作为优势函数增强项注入 RL 过程；同时根据模型对每条样本的文化掌握程度（在线命中率）动态调节监督强度与专家干预强度，实现"越不会越强监督、已掌握则少干预"的自适应蒸馏。
+
+CAMAD 在数据侧复用 HF-CAC 三类角色的结构化轨迹：
 
 ```
-Stage 1: 主场权威加权SFT → 单体模型学习 Guardian 的确权推理模式，掩码 Auditor 早期混淆 Token
+Judge（裁决者）   → 提供多智能体最终答案，作为联合训练中 SFT 监督蒸馏的目标（"老师给出标准答案"）
 
-Stage 2: 开卷式步骤标注 + PRM 训练 → 审计器在 Ground Truth 先验下，对推理步骤打离散标签 {0.1, 0.5, 0.9}
+Guardian（守护者）→ 判断模型生成答案的文化推理方向是否正确，返回 0/1 文化一致性信号，注入 RL 优势函数（"向导给出文化正确方向"）
 
-Stage 3: 文化感知过程奖励 → GRPO 强化学习 → 使用加权平均 R_total 优化推理路径（量纲统一于 [0,1]）
+Auditor（审视者）→ 提供跨文化对比视角，用于加权 SFT 的 Token 级权威加权与混淆掩码（见第 3 节）
 ```
 
-融合策略
+为支撑联合训练中的过程级奖励，CAMAD 在 RL 前先完成 Token 级加权 SFT 的数据准备（第 3 节）、开卷式步骤标注（第 4 节）与 Culture-Aware PRM 训练（第 5 节）；这些组件为第 6.2 节的联合 SFT+RL 训练提供监督数据、过程奖励模型与文化专家信号。
 
 ## 3. 主场权威加权 SFT
 
@@ -511,151 +517,174 @@ python Cul/evaluate.py \
 | `--grpo_adapter` | GRPO LoRA adapter 路径（rl 和 sft_rl 模式需要）|
 | `--output_json` | 可选，保存详细结果（含每条样本的预测和按国家分组准确率）|
 
-### 6.2 CGM-GRPO
+### 6.2 CAMAD 联合 SFT+RL 混合蒸馏方法（核心方法）
 
-CGM-GRPO（Culture-Guided Mixed-Policy GRPO）是 CAMAD 框架的核心创新训练算法，在标准 GRPO 的 advantage estimation 中注入来自 HF-CAC Guardian 的文化专家引导信号，实现「文化难度感知的混合策略强化学习」。
+CAMAD 的核心训练算法是一种**联合 SFT+RL 的混合蒸馏方法**。它在同一个优化目标中同时完成两件事：用 HF-CAC 的 **Judge 最终决策**做监督蒸馏以保留文化知识（防止 RL 遗忘稀有/复杂文化），用 **GRPO** 进行在线探索并以 HF-CAC 的 **Guardian 文化一致性信号**增强优势函数；并通过模型对每条样本的**文化掌握程度**动态调节监督强度与专家干预强度。
 
-**核心思想**：保持 RLOO 对 on-policy 轨迹的计算完全不变，额外叠加一个 Guardian 引导项作为 advantage 增强（uniform bonus，对同一 prompt 的所有 rollout 施加相同偏移）。引导强度由三因子文化难度系数 $w_{culture}$ 动态调制。Guardian 不参与 policy gradient 的梯度计算（不需要 importance sampling），也不参与 RLOO baseline 计算，只通过自身的 reward 值影响 on-policy 轨迹被鼓励/抑制的程度。
+#### 6.2.1 动机
 
-**核心公式**：
+HF-CAC 多智能体跨文化推理虽然准确，但推理成本高、难以直接部署到线上单体模型。若仅用 RL（如纯 GRPO）训练单体模型，模型会在探索过程中**遗忘已有的文化知识**，对稀有文化和复杂文化尤其明显。CAMAD 的目标是得到一个**同时保留文化知识与探索能力**的单体模型：既能像 Judge 一样给出正确的文化判断，又能像 Guardian 一样把握文化推理的正确方向，还能保留 RL 带来的泛化与自我纠错能力。
 
-$$A_i = A_i^{base} + \lambda \cdot w_{culture} \cdot S_{guardian}$$
+#### 6.2.2 核心思想与角色类比
+
+CAMAD 把 HF-CAC 的两类专家信号映射为两种互补的学习方式：
+
+- **Judge = 老师（Teacher）**：提供该问题的最终答案，作为**监督学习（SFT）目标**，让模型直接记住"标准答案"，承担"保知识、防遗忘"的职责。
+- **Guardian = 向导（Guide）**：判断模型自己生成的答案在**文化推理方向**上是否正确，返回 0/1 信号，作为 **RL 奖励增强**，承担"指方向、促文化对齐"的职责。
+
+二者在同一步训练中并行作用：SFT 项把模型拉向 Judge 的知识，RL 项让模型在探索中被 Guardian 引导向文化正确的方向，难度权重 `w` 同时调度两者的强度。
+
+#### 6.2.3 每条样本的输入
+
+| 输入 | 来源 | 作用 |
+|------|------|------|
+| Prompt + 目标文化 | 原始数据集 | 模型生成与训练的输入 |
+| HF-CAC 输出（Judge 最终答案 $y_{judge}$）| HF-CAC 多智能体推理 | 作为 SFT 监督蒸馏的目标 |
+| Guardian 判断 | HF-CAC Guardian | 判断模型生成答案是否符合目标文化，返回 0/1 文化一致性信号 $S_{guardian}$ |
+| 模型在线表现（命中率 $hitrate$）| 当前模型对该 prompt 的采样正确率 | 衡量学习难度，驱动动态权重 |
+
+#### 6.2.4 文化难度权重
+
+文化难度由模型对该 prompt 的掌握程度 $hitrate$ 驱动。RL 引导项与 SFT 监督项共享同一 $hitrate$，但权重略有差异：
+
+$$w = 1 - hitrate \qquad w_{sft} = \max(1 - hitrate,\ w_{min})$$
+
+- $w = 1 - hitrate$：RL 阶段 Guardian 引导权重，可降到 0（已掌握时不再外部引导，回归纯探索）
+- $w_{sft} = \max(1-hitrate,\ w_{min})$：SFT 阶段监督权重，带**地板值** $w_{min}$（默认 0.1），即使 $hitrate=1$ 也保留弱监督锚定，防止长期训练遗忘
+
+含义：**模型越不会（$hitrate$ 低，权重大）→ 监督越强、文化引导越强；模型已掌握（$hitrate$ 高，权重小）→ 减少干预**，使训练对每条样本的干预强度随掌握程度自适应。
+
+**$hitrate$ 的计算**：取当前模型对该 prompt 的 on-policy 采样正确率，并用 EMA 滑动平均平滑（动量默认 0.9）：
+
+$$hitrate \leftarrow m \cdot hitrate_{prev} + (1-m) \cdot acc_{cur}$$
+
+其中 $acc_{cur}$ 为当轮 $G$ 个 rollout 的正确率。EMA 用于降低小采样数（如 $G=5$，正确率只有 6 个离散取值）下的噪声；也可关闭 EMA 直接使用当轮值。
+
+#### 6.2.5 RL 阶段：文化引导的优势函数
+
+标准 GRPO 的优势函数为组内 baseline 归一：
+
+$$A_i^{base} = R_i - \bar{R}$$
+
+其中 $R_i$ 为第 $i$ 个 rollout 的奖励（$R_{total} = \alpha \cdot R_{outcome} + (1-\alpha)\cdot \text{Mean}(R_{process})$，见 6.1.1），$\bar{R}$ 为同一 prompt 下所有 rollout 的奖励均值。
+
+CAMAD 在此基础上叠加文化专家引导项（带全局强度系数 $\lambda_g$）：
+
+$$A_i = A_i^{base} + \lambda_g \cdot w \cdot S_{guardian}$$
 
 其中：
 
-- $A_i^{base} = R_i - \bar{R}_{on}$：标准 RLOO advantage（leave-one-out baseline，仅在 on-policy 轨迹之间计算）
-- $S_{guardian} = R_{outcome}^{guardian} \cdot (R_{guardian} - \bar{R}_{on}^{full})$：质量门控的 Guardian 信号
-- $R_{guardian} = 1.0$（Guardian 已通过质量门控过滤，只有答对时才参与计算）
-- $\bar{R}_{on}^{full}$：当前 prompt 所有 on-policy rollout 的 $R_{total}$ 均值
-- $\lambda$：全局引导强度超参（默认 0.5，建议搜索 {0.3, 0.5, 0.7}）
-- bonus 对同一 prompt 的所有 $n\_samples$ 个 rollout 统一施加，起到整体抬升/压低 advantage 的效果
+- $S_{guardian} \in \{0, 1\}$ 为 **per-rollout** 信号（对每个 rollout 单独判断），定义为该 rollout 的**文化推理方向**是否与 Guardian 判断一致：
+  - $S_{guardian} = 1$：该 rollout 的文化推理方向正确（即使最终选项答错，只要文化方向对也给正信号）
+  - $S_{guardian} = 0$：文化推理方向错误
+- $\lambda_g$：Guardian 引导全局强度系数（默认 **0.5**），用于平衡原始 reward 与 Guardian 信号，防止二值信号完全主导 advantage 的符号
 
-**三因子文化难度系数**（支持三种模式）：
+采用 per-rollout（而非对同一 prompt 统一偏移）能充分利用组内差异：在同一 prompt 的 $G$ 个 rollout 中，文化方向正确的轨迹被相对鼓励、错误的被相对抑制。
 
-$$w_{culture} = \lambda_1 \cdot (1 - hit\_rate) + \lambda_2 \cdot rarity_i + \lambda_3 \cdot isolation_i$$
+直观含义：在文化掌握程度低（$w$ 大）的样本上，文化推理方向正确的 rollout 会获得更高的优势、被更强地鼓励；模型已掌握（$w$ 小）时，引导项自动衰减，回归标准 GRPO 探索。
 
-- `hit_only` 模式（MVP）：$w = 1 - hit\_rate$
-- `hit_rarity` 模式（标准推荐）：$w = 0.67 \cdot (1 - hit\_rate) + 0.33 \cdot rarity_i$
-- `full` 模式（三因子）：$w = 0.6 \cdot (1 - hit\_rate) + 0.3 \cdot rarity_i + 0.1 \cdot isolation_i$
+#### 6.2.6 SFT 阶段：Judge 输出的监督蒸馏
 
-其中 $hit\_rate$ 为当前 prompt 的 on-policy 正确率，$rarity_i = 1 - freq_i$ 为文化圈在训练集中的稀缺度，$isolation_i = 1 - avg\_affinity_i$ 为文化圈的孤立度（从 `hf_cac_config.yaml` 的 6×6 亲缘矩阵计算）。
+将 Judge 的最终答案 $y_{judge}$ 作为监督目标，标准交叉熵：
 
-**门控机制**：
+$$L_{SFT} = -\log P(y_{judge} \mid x)$$
 
-- 质量门控：Guardian 答错时 $R_{outcome}^{guardian}=0$，整个 $S_{guardian}=0$，引导项自动消失
-- 必要性门控：$hit\_rate \geq 0.8$ 时强制 $w_{culture}=0$（模型对该 prompt 已足够好，无需外部引导）
+按文化难度加权（SFT 使用带地板值的权重 $w_{sft}$，见 6.2.4）：
 
-**显存布局**（2×48GB vGPU）：
+$$L_{SFT}^{weighted} = w_{sft} \cdot L_{SFT}$$
 
-- cuda:0（Policy）：base model bf16 ~15GB + LoRA ~0.2GB + KV cache（20 seq × 640 tok）~4.5GB + 梯度/激活（gradient checkpointing）~8-12GB → 峰值 ~32-38GB
+模型越不会的样本，监督信号越强，从而优先把 Judge 的文化知识"补"进单体模型；地板值 $w_{min}$ 保证即使 $hitrate=1$ 也保留弱监督锚定，防止长期训练遗忘。
+
+#### 6.2.7 最终联合损失
+
+$$L = L_{GRPO}(A_i) + \beta \cdot L_{SFT}^{weighted} = L_{GRPO}(A_i) + \beta \cdot w_{sft} \cdot L_{SFT}$$
+
+其中：
+
+- $L_{GRPO}(A_i)$ 使用 6.2.5 中文化引导后的优势 $A_i$（含 KL 惩罚项，KL 系数默认 0.05）
+- $\beta$：两项 loss 的**平衡系数**（默认区间 **0.1~0.5**，可实验搜索）。由于 $L_{GRPO}$（on-policy，量级较小）与 $L_{SFT}$（交叉熵，量级较大）量纲不同，必须用 $\beta$ 缩放 SFT 项，否则 SFT 会碾压 RL、联合训练退化为加权 SFT
+
+RL 部分负责**探索 + 文化引导并行**，SFT 部分负责**以难度自适应的方式保留 Judge 知识**。两项在同一步反向传播中联合优化，使单体模型在探索的同时持续锚定多智能体的文化决策。
+
+#### 6.2.8 已确认的最终设计与默认超参
+
+以下设计决策已确认，作为编码实现的基准：
+
+| 项 | 决策 | 默认值 | 说明 |
+|----|------|--------|------|
+| 平衡系数 $\beta$ | 必须引入 | 0.1~0.5（搜索）| 缩放 SFT 项，防止 SFT 碾压 RL，确保联合训练有效 |
+| Guardian 全局强度 $\lambda_g$ | 保留 | 0.5 | 平衡原始 reward 与 Guardian 信号，避免二值信号主导 advantage |
+| $S_{guardian}$ 粒度 | per-rollout | — | 对每个 rollout 单独判断，利用组内差异精准引导 |
+| $S_{guardian}$ 语义 | 文化推理方向正确性 | — | 判断文化方向（非最终选项对错），与 $R_{outcome}$ 互补 |
+| $hitrate$ 统计 | 当轮 on-policy 正确率 + EMA | EMA 动量 0.9 | EMA 平滑降低小采样数（$G=5$）下的离散噪声，可退化为当轮值 |
+| SFT 权重地板 $w_{min}$ | 引入 | 0.1 | $w_{sft}=\max(1-hitrate,\ w_{min})$，防长期遗忘 |
+
+说明：RL 引导权重 $w = 1 - hitrate$（可降到 0），SFT 权重 $w_{sft} = \max(1-hitrate,\ w_{min})$（保留地板）。二者共享同一 $hitrate$，但 SFT 额外带地板以维持持续的知识锚定。
+
+#### 6.2.9 显存布局（2×48GB vGPU）
+
+联合训练相比纯 GRPO 仅增加一次对 $y_{judge}$ 的前向 + 交叉熵反传，显存占用基本不变：
+
+- cuda:0（Policy）：base model bf16 ~15GB + LoRA ~0.2GB + KV cache ~4.5GB + 梯度/激活（gradient checkpointing）~8-12GB → 峰值 ~32-38GB
 - cuda:1（PRM）：base model bf16 ~15GB + score_head ~0.01GB + 推理激活 ~2-3GB → 峰值 ~18-20GB
-- Guardian 引导不增加任何 GPU 开销（纯 CPU 查表 + 标量运算）
+- Judge 监督目标为离线数据，Guardian 信号为查表 + 标量运算，二者均不增加 GPU 开销
 
-**与标准 GRPO 的关键区别**：Guardian 轨迹不参与 RLOO baseline 计算，不参与 policy gradient 的 backward，不需要 importance sampling，不需要 Sim 相似度调制。它只是一个标量 bonus 统一叠加到 on-policy 轨迹的 advantage 上。
+#### 6.2.10 运行命令
 
-**训练命令**（双卡，SFT+CGM-GRPO 模式，少数样本快速验证）：
+CAMAD 联合 SFT+RL 训练入口为 `Cul/grpo/train_grpo_mixed_policy.py`（在原 CGM-GRPO 脚本基础上改造）。其中 `--guardian_data` 为 Stage 0 由 `Cul/generate_hf_cac_data.py` 产出的 HF-CAC 推理 JSONL，脚本会从中同时解析 Guardian 的判断（per-rollout 文化方向信号 $S_{guardian}$）与 Judge 的最终答案（SFT 蒸馏目标 $y_{judge}$）。
 
+**冒烟测试（10 条样本，验证流程跑通）**
 ```bash
 python Cul/grpo/train_grpo_mixed_policy.py \
-    --model_name     qwen \
-    --sft_adapter    /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --data_pkl       /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm/best \
-    --guardian_data  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --affinity_config Cul/configs/hf_cac_config.yaml \
-    --output_dir     /autodl-fs/data/model/qwen/normad_camad_cgm_grpo \
-    --max_train_samples 10 \
-    --max_rounds     3 \
-    --n_samples      5 \
-    --prompt_batch   4 \
-    --guardian_lambda 0.5 \
-    --w_culture_mode hit_only \
-    --gen_mini_batch 4 \
-    --logprob_mini_batch 8 \
-    --logprob_mini_batch_grad 4
+--model_name qwen \
+--sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+--data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+--prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+--guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+--output_dir /autodl-fs/data/model/qwen/normad_camad \
+--max_train_samples 10 \
+--max_rounds 3 \
+--n_samples 5
 ```
 
-**训练命令**（双卡，SFT+CGM-GRPO 模式，全量训练）：
-
+**完整 CAMAD 联合 SFT+RL 训练**
 ```bash
 python Cul/grpo/train_grpo_mixed_policy.py \
-    --model_name     qwen \
-    --sft_adapter    /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --data_pkl       /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm/best \
-    --guardian_data  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --affinity_config Cul/configs/hf_cac_config.yaml \
-    --output_dir     /autodl-fs/data/model/qwen/normad_camad_cgm_grpo \
-    --max_train_samples 0 \
-    --max_rounds     20 \
-    --n_samples      5 \
-    --prompt_batch   8 \
-    --guardian_lambda 0.5 \
-    --w_culture_mode hit_rarity \
-    --alpha          0.6 \
-    --lr             2e-5 \
-    --lora_r         16 \
-    --batches_per_round 130 \
-    --eval_every     5 \
-    --gen_mini_batch 4 \
-    --logprob_mini_batch 8 \
-    --logprob_mini_batch_grad 4
+--model_name qwen \
+--sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
+--data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+--prm_path /autodl-fs/data/model/qwen/normad_camad_prm/best \
+--guardian_data /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
+--output_dir /autodl-fs/data/model/qwen/normad_camad \
+--beta 0.3 \
+--lambda_g 0.5 \
+--w_min 0.1 \
+--ema_momentum 0.9 \
+--n_samples 5 \
+--max_rounds 20 \
+--batches_per_round 130
 ```
 
-**RL-only 模式**（不使用 SFT adapter，从 base model 出发）：
+核心超参对应关系：
 
-```bash
-python Cul/grpo/train_grpo_mixed_policy.py \
-    --model_name     qwen \
-    --data_pkl       /autodl-fs/data/qwen/normad_splits.pkl \
-    --prm_path       /autodl-fs/data/model/qwen/normad_camad_prm_rl_only/best \
-    --guardian_data  /autodl-fs/data/qwen/normad_hf_cac_inference.jsonl \
-    --affinity_config Cul/configs/hf_cac_config.yaml \
-    --output_dir     /autodl-fs/data/model/qwen/normad_camad_cgm_grpo_rl_only \
-    --max_train_samples 0 \
-    --max_rounds     30 \
-    --n_samples      5 \
-    --prompt_batch   8 \
-    --guardian_lambda 0.5 \
-    --w_culture_mode hit_rarity \
-    --alpha          0.6 \
-    --lr             5e-5 \
-    --lora_r         16 \
-    --batches_per_round 130 \
-    --eval_every     5
-```
+| 参数 | 含义 | 默认值 | 公式位置 |
+| --- | --- | --- | --- |
+| `--beta` | SFT 项平衡系数 $\beta$ | 0.3 | $L = L_{GRPO} + \beta \cdot w_{sft} \cdot L_{SFT}$ |
+| `--lambda_g` | Guardian 全局强度 $\lambda_g$ | 0.5 | $A_i = A_i^{base} + \lambda_g \cdot w \cdot S_{guardian}$ |
+| `--w_min` | SFT 权重地板 $w_{min}$ | 0.1 | $w_{sft} = \max(1-hitrate,\ w_{min})$ |
+| `--ema_momentum` | hitrate EMA 动量 $m$ | 0.9 | $hitrate \leftarrow m\cdot prev + (1-m)\cdot acc_{cur}$ |
+| `--use_ema` / `--no_ema` | 是否启用 EMA（否则用当轮命中率） | 启用 | 见 6.2.4 |
+| `--alpha` | PRM 过程奖励权重 $\alpha$ | 0.6 | $R = R_{outcome} + \alpha \cdot R_{process}$ |
 
-**评估命令**：
-
-```bash
-python Cul/evaluate.py \
-    --mode sft_rl \
-    --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
-    --sft_adapter /autodl-fs/data/model/qwen/normad_camad_sft/best \
-    --grpo_adapter /autodl-fs/data/model/qwen/normad_camad_cgm_grpo/best \
-    --output_json /autodl-fs/data/results/cgm_grpo_eval.json
-```
-
-**关键参数说明**：
-
-| 参数 | 说明 |
-|------|------|
-| `--guardian_data` | HF-CAC 推理 JSONL 文件路径（包含 Guardian 响应，必需）|
-| `--guardian_lambda` | Guardian 引导强度（默认 0.5，建议搜索 {0.3, 0.5, 0.7}）|
-| `--w_culture_mode` | 文化难度系数模式：`hit_only`（MVP）/ `hit_rarity`（推荐）/ `full`（三因子）|
-| `--affinity_config` | 亲缘度矩阵配置路径（`hit_rarity` 和 `full` 模式需要，指向 hf_cac_config.yaml）|
-| `--max_train_samples` | 训练样本数限制：0=全部，N=只用前 N 条（调试用）|
-| `--gen_mini_batch` | Batch Generate 每批 prompt 数（默认 4，OOM 时降为 2）|
-| `--logprob_mini_batch` | Phase A ref log-prob 每批样本数（默认 8，无梯度）|
-| `--logprob_mini_batch_grad` | Phase B policy log-prob 每批样本数（默认 4，有梯度，OOM 时降为 2）|
-| `--no_prm` | 禁用 PRM 评分（R_total = R_outcome，单卡即可运行）|
+说明：$w = 1 - hitrate$ 可降到 0（RL 引导随掌握度退场），而 $w_{sft}$ 受 $w_{min}$ 约束始终 $\geq 0.1$（维持 Judge 知识锚定，防遗忘）。$S_{guardian}\in\{0,1\}$ 为 per-rollout 信号：当前 rollout 的文化推理方向（以解析出的选项为代理）与 Guardian 判断一致时取 1，从而放大组内"方向正确"的 rollout 优势。
 
 ---
 
 ## 8. 消融实验设计
 
 ### 8.1 主实验
+
+主实验仅对比 **CAMAD 与其他 Baseline**，验证 CAMAD 相对于单 teacher 蒸馏、多 teacher 蒸馏与多智能体协作方法的整体优势。
 
 | 实验组 | 方法 | NormAd |
 |--------|---------|--|
@@ -664,12 +693,20 @@ python Cul/evaluate.py \
 | 多智能体协作 | HF-CAC |  |
 | 多teacher蒸馏 | MAGDi |  |
 | 多teacher蒸馏 | AgentArk |  |
-| Ours | CAMAD(SFT-only) |  |
-| Ours | CAMAD(RL-only) |  |
-| Ours | CAMAD(SFT+RL) |  |
-| Ours | CAMAD(CGM-RL) |  |
+| Ours | CAMAD |  |
 
-### 8.2 蒸馏方案对比（都使用HF-CAC的情况下）
+### 8.2 消融实验：蒸馏训练范式对比
+
+本消融在均使用 HF-CAC 数据的前提下，对比不同蒸馏训练范式，验证 CAMAD 联合 SFT+RL 混合蒸馏相对于纯 SFT、纯 RL、以及分阶段 SFT→RL 的有效性。
+
+| 实验组 | 训练范式 | 说明 | NormAd |
+|--------|---------|------|--|
+| SFT-only | 仅监督蒸馏 | 仅用 Judge 输出做加权 SFT |  |
+| RL-only | 仅强化学习 | 从 base model 出发的 GRPO |  |
+| SFT→RL（分阶段） | 先 SFT 再 RL | RL 从 SFT 后的模型出发，两阶段串联 |  |
+| CAMAD | 联合 SFT+RL | 同一目标内联合优化（$L = L_{GRPO} + w\cdot L_{SFT}$）|  |
+
+### 8.3 蒸馏方案对比（都使用HF-CAC的情况下）
 
 | 实验组 | NormAd | CulturalBench |
 |--------|---------|---------|
@@ -677,7 +714,7 @@ python Cul/evaluate.py \
 | MAGDi(HF-CAC) | |  |
 | AgentArk(HF-CAC) | |  |
 
-### 8.3 多智能体协作方法对比
+### 8.4 多智能体协作方法对比
 
 | 实验组 | NormAd | CulturalBench |
 |--------|--------|---------|
@@ -687,7 +724,7 @@ python Cul/evaluate.py \
 | OG-MAR |        |  |
 | HF-CAC |        |  |
 
-### 8.4 分析实验一：HF-CAC中的智能体的数量
+### 8.5 分析实验一：HF-CAC中的智能体的数量
 
 | 智能体数量 | NormAd | CulturalBench |
 |--------|---------|---------|
@@ -697,7 +734,7 @@ python Cul/evaluate.py \
 | 3 | |  |
 | 2 | |  |
 
-### 8.5 分析实验二：HF-CAC中的辩论的轮次
+### 8.6 分析实验二：HF-CAC中的辩论的轮次
 
 | 辩论轮次 | NormAd | CulturalBench |
 |--------|---------|---------|
@@ -738,7 +775,8 @@ Cul/
 │   ├── train_prm_mse.py            # ★ Stage 3-PRM: 类别加权 MSE 训练
 │   └── eval_prm.py                 # ★ PRM 验证（三分类准确率、Spearman）
 ├── grpo/
-│   └── train_grpo_v3.py            # ★ Stage 3-GRPO: Mean(R_process) reward + LoRA
+│   ├── train_grpo_v3.py            # ★ GRPO: Mean(R_process) reward + LoRA（基础 RL，6.1 节）
+│   └── train_grpo_mixed_policy.py  # ★ CAMAD 联合 SFT+RL 训练脚本（核心方法 6.2 节）
 └── data/                           # 数据存放目录
     ├── normad.jsonl                # 原始 NormAD 数据集
     ├── normad_mas.json             # NormAD 转换后（instruction/input/output/country）
@@ -752,7 +790,7 @@ Cul/
 
 | 文件 | 功能 |
 |------|------|
-| `run_camad_pipeline.py` | 一键运行 CAMA-D 全流程，支持 `full`、`sft_only`、`rl_only`、`sft_rl` 四种模式，自动串联 Phase 0-5 |
+| `run_camad_pipeline.py` | 一键运行 CAMAD 全流程，支持 `full`、`sft_only`、`rl_only`、`sft_rl` 四种模式，自动串联 Phase 0-5 |
 | `split_data.py` | 将 HF-CAC 推理数据按 8:1:1 划分训练集/验证集/测试集，输出 pkl 文件供所有训练和评估脚本使用 |
 | `evaluate.py` | 在 pkl 测试集上评估最佳模型，支持 `sft`/`rl`/`sft_rl` 三种模式，输出整体准确率和按国家分组准确率 |
 | `scripts/convert_normad.py` | 将原始 NormAD 数据集（JSONL）转换为 HF-CAC MAS 输入格式（JSON 数组），执行标签映射 yes→1/no→2/neutral→3，构建 instruction/input/output/country 四字段结构 |
