@@ -30,6 +30,35 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
+# ----------------------------------------------------------------------
+# CultureLLM debiasing guidance (small, task-specific prompt patch).
+# Rationale: the base model systematically (a) avoids the extreme
+# "Strongly agree/disagree" options and (b) overrides the real poll
+# majority with its own progressive/egalitarian preferences, predicting
+# "Disagree" on traditional-value items (gender roles, family duty, etc.)
+# even for conservative cultures. The task is to PREDICT what the real
+# survey population most often answered, not to express a personal or
+# normatively-correct opinion. The text below is injected into every
+# culturellm prompt branch to correct this bias without touching the
+# HF-CAC orchestration logic.
+# ----------------------------------------------------------------------
+CULTURELLM_PREDICTION_GUIDANCE = (
+    "IMPORTANT - how to answer:\n"
+    "- This is a PREDICTION task. Predict the option that the LARGEST share of "
+    "real World Values Survey respondents in {country} actually chose (the "
+    "statistical majority / mode), NOT your own opinion and NOT the most "
+    "ethically 'correct' or progressive answer.\n"
+    "- Many cultures hold strong TRADITIONAL or conservative views on family "
+    "duty, religion, gender roles, and authority. Do NOT shift the answer "
+    "toward modern/egalitarian positions because of your own values - report "
+    "what the population most likely answered.\n"
+    "- Be willing to pick the EXTREME options ('Strongly agree' / 'Strongly "
+    "disagree'). When a culture holds a strong, widely-shared stance, the "
+    "majority often lands on the extreme option, not the moderate middle. Do "
+    "not default to a softer middle option just to hedge.\n"
+)
+
+
 class HF_CAC_MAS:
     """
     Home-Field Culture-Activated Collaboration MAS.
@@ -239,11 +268,13 @@ class HF_CAC_MAS:
             user = (
                 f"Task: You will be given a World Values Survey question about the "
                 f"cultural values and attitudes of {target_country}. "
-                f"Select the option number that BEST represents the typical attitude "
-                f"or value orientation of people in {target_country}. "
-                f"Think about the dominant cultural values, social norms, and common "
-                f"worldviews in {target_country}, then respond with the most representative "
-                f"option number. Explain your reasoning in less than three sentences.\n\n"
+                f"Predict the option number that the MAJORITY of real survey "
+                f"respondents in {target_country} actually selected.\n\n"
+                + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
+                + f"\nThink about the dominant cultural values, social norms, and "
+                f"common worldviews in {target_country}, then respond with the most "
+                f"representative option number. Explain your reasoning in less than "
+                f"three sentences.\n\n"
                 f"Survey Question:\n{question}\n"
                 f"Answer:"
             )
@@ -345,8 +376,10 @@ class HF_CAC_MAS:
                     f"question about {target_country} with the other discussant.\n\n"
                     f"Survey Question:\n{question}\n"
                     f"Discussant: {guardian_response.strip()}\n\n"
-                    f"Based on the above discussion, critically think about the cultural "
-                    f"values and attitudes of {target_country} and make your final decision. "
+                    + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
+                    + f"\nBased on the above discussion, critically think about which "
+                    f"option the MAJORITY of real survey respondents in {target_country} "
+                    f"actually chose, and make your final decision. "
                     f"Respond with the most representative option number.\n"
                     f"Answer:"
                 )
@@ -413,11 +446,13 @@ class HF_CAC_MAS:
                 user = (
                     f"Task: You will be given a World Values Survey question about the "
                     f"cultural values and attitudes of {target_country}. "
-                    f"Select the option number that BEST represents the typical attitude "
-                    f"or value orientation of people in {target_country}. "
-                    f"Think about the dominant cultural values, social norms, and common "
-                    f"worldviews in {target_country}, then respond with the most representative "
-                    f"option number. Explain your reasoning in less than three sentences.\n\n"
+                    f"Predict the option number that the MAJORITY of real survey "
+                    f"respondents in {target_country} actually selected.\n\n"
+                    + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
+                    + f"\nThink about the dominant cultural values, social norms, and "
+                    f"common worldviews in {target_country}, then respond with the most "
+                    f"representative option number. Explain your reasoning in less than "
+                    f"three sentences.\n\n"
                     f"Survey Question:\n{question}\n"
                     f"Answer:"
                 )
@@ -512,10 +547,16 @@ class HF_CAC_MAS:
             user = (
                 f"Task: You are a judge responsible for making a final decision "
                 f"based on the opinions of cultural value experts about {target_country}. "
-                f"Do NOT make any independent judgments; base your final decision "
-                f"solely on the expert opinions below. Evaluate which option number "
-                f"best represents the typical cultural attitude of {target_country}. "
-                f"Respond with the most representative option number.\n\n"
+                f"Base your final decision mainly on the expert opinions below, but "
+                f"keep in mind the goal is to predict which option the MAJORITY of "
+                f"real World Values Survey respondents in {target_country} actually "
+                f"chose.\n\n"
+                + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
+                + f"\nIf an expert overrode the likely poll majority with their own "
+                f"progressive/egalitarian opinion, or hedged toward a moderate middle "
+                f"option instead of the extreme one the culture strongly holds, weigh "
+                f"that opinion less. Respond with the most representative option "
+                f"number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Expert opinions ***\n{responses_text}"
                 f"*** End opinions ***\n\n"
@@ -747,8 +788,9 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturellm":
             user += (
-                f"Respond with the option number that best represents the typical "
-                f"cultural attitude of {target_country}.\n\n"
+                CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
+                + f"\nRespond with the option number that the MAJORITY of real survey "
+                f"respondents in {target_country} most likely chose.\n\n"
                 f"Final decision:"
             )
         elif self.task_type in ("culturalbench", "blend"):
@@ -921,9 +963,11 @@ class HF_CAC_MAS:
             # For culturellm: don't hardcode option range, just ask for option number
             if self.task_type == "culturellm":
                 answer_instruction = (
-                    f"Based on the above discussion, critically think and make "
-                    f"your final decision. Respond with the option number that best "
-                    f"represents the typical cultural attitude of {target_country}.\n"
+                    CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
+                    + f"\nBased on the above discussion, critically think and make "
+                    f"your final decision. Respond with the option number that the "
+                    f"MAJORITY of real survey respondents in {target_country} most "
+                    f"likely chose.\n"
                     f"Answer:"
                 )
             else:
@@ -987,10 +1031,15 @@ class HF_CAC_MAS:
                 f"Task: You are a judge responsible for making a final decision "
                 f"based on the debate history between cultural value experts. They have "
                 f"debated the following cultural attitude question about {target_country}. "
-                f"Do NOT make any independent judgments; base your final decision "
-                f"solely on the debate. Evaluate which option best represents the "
-                f"typical cultural attitude of {target_country}. "
-                f"Respond with the most representative option number.\n\n"
+                f"Base your final decision mainly on the debate, but the goal is to "
+                f"predict which option the MAJORITY of real World Values Survey "
+                f"respondents in {target_country} actually chose.\n\n"
+                + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
+                + f"\nIf an expert overrode the likely poll majority with their own "
+                f"progressive/egalitarian opinion, or hedged toward a moderate middle "
+                f"option instead of the extreme one the culture strongly holds, weigh "
+                f"that opinion less. Respond with the most representative option "
+                f"number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Debate starts ***\n"
                 f"{feedback_text}"
