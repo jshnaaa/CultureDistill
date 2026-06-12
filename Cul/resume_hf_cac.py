@@ -41,6 +41,66 @@ def load_dataset(path):
     return data
 
 
+def detect_dataset_type(data: list) -> str:
+    """
+    Auto-detect dataset type from data content.
+    Kept in sync with generate_hf_cac_data.detect_dataset_type so that resume
+    uses the SAME config (and therefore the same task_type) as the original run.
+    """
+    if not data:
+        return "normad"
+
+    sample = data[:min(10, len(data))]
+
+    # Check instruction content — most reliable signal
+    for item in sample:
+        instruction = item.get("instruction", "")
+        instr_lower = instruction.lower()
+        if "world values survey" in instr_lower:
+            return "culturellm"
+        if "cultural knowledge question" in instr_lower:
+            return "culturalbench"
+        if "correct option number" in instr_lower:
+            return "culturalbench"
+        if "more culturally specific" in instr_lower:
+            return "cultureatlas"
+        if "response 1" in instr_lower and "response 2" in instr_lower:
+            return "cultureatlas"
+        if "acceptable" in instr_lower or "unacceptable" in instr_lower:
+            return "normad"
+        if "determine whether the behavior" in instr_lower:
+            return "normad"
+
+    # Check input content for CultureLLM (WVS survey pattern)
+    for item in sample:
+        inp = item.get("input", "")
+        if "Give me the answer from" in inp and "You can only choose one option" in inp:
+            return "culturellm"
+
+    for item in sample:
+        inp = item.get("input", "")
+        if "Response 1:" in inp and "Response 2:" in inp:
+            return "cultureatlas"
+
+    for item in sample:
+        inp = item.get("input", "")
+        if "\n1. " in inp and "\n2. " in inp and "\n3. " in inp and "\n4. " in inp:
+            return "culturalbench"
+
+    # Fallback: check output distribution
+    check_size = min(100, len(data))
+    outputs = set(str(item.get("output", "")).strip()
+                  for item in data[:check_size])
+    if "4" in outputs:
+        return "culturalbench"
+    if "3" in outputs and "4" not in outputs:
+        return "normad"
+    if outputs and outputs <= {"1", "2"}:
+        return "cultureatlas"
+
+    return "normad"
+
+
 def convert_sample(item):
     """Convert dataset sample to internal format."""
     if "input" in item and item["input"] and "country" in item:
@@ -99,6 +159,10 @@ def main():
     parser.add_argument("--negotiation_rounds", type=int, default=1)
     parser.add_argument("--include_judge", type=str, default="true",
                         choices=["true", "false"])
+    parser.add_argument("--num_agents", type=int, default=6,
+                        choices=[2, 3, 4, 5, 6],
+                        help="Number of cultural agents. MUST match the original "
+                             "run. Default: 6.")
 
     args = parser.parse_args()
     args.include_judge = args.include_judge.lower() == "true"
@@ -117,6 +181,21 @@ def main():
     dataset = [convert_sample(item) for item in raw_data]
     total_samples = len(dataset)
     print(f"Total samples in dataset: {total_samples}")
+
+    # Auto-detect dataset type and resolve config path (same logic as generate)
+    dataset_type = detect_dataset_type(raw_data)
+    print(f"Detected dataset type: {dataset_type}")
+    if args.config_path is None:
+        config_dir = os.path.join(os.path.dirname(__file__), "configs")
+        if dataset_type == "cultureatlas":
+            args.config_path = os.path.join(config_dir, "hf_cac_config_cultureatlas.yaml")
+        elif dataset_type == "culturalbench":
+            args.config_path = os.path.join(config_dir, "hf_cac_config_culturalbench.yaml")
+        elif dataset_type == "culturellm":
+            args.config_path = os.path.join(config_dir, "hf_cac_config_culturellm.yaml")
+        else:
+            args.config_path = os.path.join(config_dir, "hf_cac_config.yaml")
+        print(f"Auto-selected config: {args.config_path}")
 
     # Filter out already-processed
     processed_queries = get_processed_queries(args.output_file)
@@ -140,8 +219,11 @@ def main():
         max_tokens=args.max_tokens,
         include_judge=args.include_judge,
         negotiation_rounds=args.negotiation_rounds,
+        num_agents=args.num_agents,
     )
     print(f"HF-CAC initialized:")
+    print(f"  Num agents: {mas.num_agents}")
+    print(f"  Task type: {mas.task_type}")
     print(f"  Include Judge: {args.include_judge}")
     print(f"  Negotiation rounds: {args.negotiation_rounds}")
     print(f"  Batch size: {args.batch_size}")
@@ -154,12 +236,14 @@ def main():
             batch = remaining[start: start + args.batch_size]
             results = mas.inference_batch(batch)
             for sample, result in zip(batch, results):
-                output = {**sample, **result}
+                output = {**sample, **result, "task_type": mas.task_type,
+                          "num_agents": mas.num_agents}
                 write_to_jsonl(lock, args.output_file, output)
     else:
         for sample in tqdm(remaining, desc="Samples"):
             result = mas.inference(sample)
-            output = {**sample, **result}
+            output = {**sample, **result, "task_type": mas.task_type,
+                      "num_agents": mas.num_agents}
             write_to_jsonl(lock, args.output_file, output)
 
     # Final count
