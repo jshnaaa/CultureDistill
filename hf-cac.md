@@ -84,11 +84,11 @@ source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
     --input_file /autodl-fs/data/cultureLLM_mas.json \
-    --output_file /autodl-fs/data/qwen/culturellm_hf_cac_4agents.jsonl \
+    --output_file /autodl-fs/data/qwen/culturellm_hf_cac_6agents.jsonl \
     --model_name qwen \
     --use_vllm --tensor_parallel_size 2 \
     --max_samples 200 --negotiation_rounds 1 \
-    --include_judge true --num_agents 4
+    --include_judge true --num_agents 6
 
 python Cul/generate_hf_cac_data.py \
   --input_file /autodl-fs/data/culturalBench_mas.json \
