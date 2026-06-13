@@ -32,39 +32,46 @@ def load_config(config_path):
 
 # ----------------------------------------------------------------------
 # CultureLLM debiasing guidance (small, task-specific prompt patch).
-# Rationale: the base model overrides the real poll majority with its own
-# progressive/egalitarian preferences, predicting "Disagree" on
-# traditional-value items (gender roles, family duty, etc.) even for
-# conservative cultures. The task is to PREDICT what the real survey
-# population most often answered, not to express a personal or
-# normatively-correct opinion.
 #
-# NOTE (calibration): an earlier version of this guidance over-corrected by
-# telling agents to "be willing to pick the EXTREME options", which caused
-# the model to collapse onto "Strongly agree" (option 1) for almost every
-# item and dropped accuracy from ~30% to ~14%. In real WVS data the modal
-# answer is usually the MODERATE option ("agree"/"disagree"), not the
-# extreme one. The guidance below therefore (1) removes the progressive
-# bias and (2) anchors the default to the moderate option, reserving the
-# "Strongly" extreme only when the item wording itself signals a strong,
-# near-unanimous stance. Injected into every culturellm prompt branch
-# without touching the HF-CAC orchestration logic.
+# Two systematic failure modes of the base model on this task:
+#   (1) Progressive bias: it overrides the real poll majority with its own
+#       egalitarian preferences, predicting "Disagree" on traditional-value
+#       items (gender roles, family duty, religion) even for conservative
+#       cultures whose real majority AGREES with those statements.
+#   (2) Strength miscalibration: it refuses to commit to the "Strongly"
+#       extreme option and gravitates to the safe middle ("agree"/"neither").
+#
+# Calibration history (do not re-introduce a fixed directional default):
+#   - v1 told agents to "be willing to pick EXTREME options" -> model
+#     collapsed onto "Strongly agree" (opt 1) everywhere -> acc 14%.
+#   - v2 told agents the mode is "usually the MODERATE option, do not pick
+#     Strongly by default" -> model parroted that line and refused opt 1
+#     even when the true mode WAS opt 1 (e.g. Arabic, where 55% of items
+#     have gt=1) -> acc still ~17%.
+# Lesson: a fixed "prefer extreme" / "prefer moderate" instruction makes the
+# model COLLAPSE onto one option. The correct strength is per-item and
+# per-culture. The guidance below gives NO directional default; instead it
+# asks the agent to (a) first decide the DIRECTION (agree vs disagree) free
+# of progressive bias, then (b) decide the STRENGTH from how intensely and
+# unanimously that culture holds the view. Injected into every culturellm
+# prompt branch without touching the HF-CAC orchestration logic.
 # ----------------------------------------------------------------------
 CULTURELLM_PREDICTION_GUIDANCE = (
-    "IMPORTANT - how to answer:\n"
-    "- This is a PREDICTION task. Predict the option that the LARGEST share of "
-    "real World Values Survey respondents in {country} actually chose (the "
-    "statistical majority / mode), NOT your own opinion and NOT the most "
-    "ethically 'correct' or progressive answer.\n"
-    "- Many cultures hold TRADITIONAL or conservative views on family duty, "
-    "religion, gender roles, and authority. Do NOT shift the answer toward "
-    "modern/egalitarian positions because of your own values - report what "
-    "the population most likely answered.\n"
-    "- Calibrate the STRENGTH carefully. In real survey data the most common "
-    "answer is usually the MODERATE option ('agree' or 'disagree'), not the "
-    "extreme one. Default to the moderate option, and only choose the extreme "
-    "'Strongly agree'/'Strongly disagree' when the statement is one a strong "
-    "majority would feel intensely about. Do NOT pick 'Strongly' by default.\n"
+    "IMPORTANT - how to answer (predict the real survey MAJORITY in {country}, "
+    "not your own opinion):\n"
+    "STEP 1 - DIRECTION: First decide whether most people in {country} AGREE or "
+    "DISAGREE with the statement. Many cultures hold TRADITIONAL/conservative "
+    "views on family duty, religion, gender roles and authority. Do NOT flip "
+    "the answer toward modern/egalitarian/'politically correct' positions "
+    "because of your own values - report what the population actually believes, "
+    "even if that view is traditional or non-egalitarian.\n"
+    "STEP 2 - STRENGTH: Then pick how strong the option should be. If the "
+    "culture holds the view INTENSELY and near-unanimously (e.g. core "
+    "religious or family values), the majority typically picks the EXTREME "
+    "option ('Strongly agree'/'Strongly disagree'). If the view is common but "
+    "milder or somewhat contested, pick the MODERATE option ('agree'/"
+    "'disagree'). Choose the strength that fits THIS item - do not always pick "
+    "the extreme, and do not always avoid it.\n"
 )
 
 

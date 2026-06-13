@@ -83,11 +83,19 @@ cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
 python Cul/generate_hf_cac_data.py \
+  --input_file /autodl-fs/data/cultureLLM_mas.json \
+  --output_file /autodl-fs/data/qwen/culturellm_check.jsonl \
+  --model_name qwen \
+  --use_vllm --tensor_parallel_size 2 \
+  --max_samples 300 --random_sample true --seed 42 \
+  --negotiation_rounds 1 --include_judge true
+  
+python Cul/generate_hf_cac_data.py \
     --input_file /autodl-fs/data/cultureLLM_mas.json \
     --output_file /autodl-fs/data/qwen/culturellm_hf_cac_6agents.jsonl \
     --model_name qwen \
     --use_vllm --tensor_parallel_size 2 \
-    --max_samples 200 --negotiation_rounds 1 \
+    --max_samples 0 --negotiation_rounds 1 \
     --include_judge true --num_agents 6
 
 python Cul/generate_hf_cac_data.py \
