@@ -32,46 +32,19 @@ def load_config(config_path):
 
 # ----------------------------------------------------------------------
 # CultureLLM debiasing guidance (small, task-specific prompt patch).
-#
-# Two systematic failure modes of the base model on this task:
-#   (1) Progressive bias: it overrides the real poll majority with its own
-#       egalitarian preferences, predicting "Disagree" on traditional-value
-#       items (gender roles, family duty, religion) even for conservative
-#       cultures whose real majority AGREES with those statements.
-#   (2) Strength miscalibration: it refuses to commit to the "Strongly"
-#       extreme option and gravitates to the safe middle ("agree"/"neither").
-#
-# Calibration history (do not re-introduce a fixed directional default):
-#   - v1 told agents to "be willing to pick EXTREME options" -> model
-#     collapsed onto "Strongly agree" (opt 1) everywhere -> acc 14%.
-#   - v2 told agents the mode is "usually the MODERATE option, do not pick
-#     Strongly by default" -> model parroted that line and refused opt 1
-#     even when the true mode WAS opt 1 (e.g. Arabic, where 55% of items
-#     have gt=1) -> acc still ~17%.
-# Lesson: a fixed "prefer extreme" / "prefer moderate" instruction makes the
-# model COLLAPSE onto one option. The correct strength is per-item and
-# per-culture. The guidance below gives NO directional default; instead it
-# asks the agent to (a) first decide the DIRECTION (agree vs disagree) free
-# of progressive bias, then (b) decide the STRENGTH from how intensely and
-# unanimously that culture holds the view. Injected into every culturellm
-# prompt branch without touching the HF-CAC orchestration logic.
+# Counters two base-model failure modes: (1) progressive bias (flips
+# traditional-value items to "Disagree"), and (2) strength miscalibration.
+# Gives NO fixed directional default -- a fixed "prefer extreme/moderate"
+# instruction makes the model collapse onto one option. Injected into the
+# culturellm prompt branches without touching the HF-CAC orchestration.
 # ----------------------------------------------------------------------
 CULTURELLM_PREDICTION_GUIDANCE = (
-    "IMPORTANT - how to answer (predict the real survey MAJORITY in {country}, "
-    "not your own opinion):\n"
-    "STEP 1 - DIRECTION: First decide whether most people in {country} AGREE or "
-    "DISAGREE with the statement. Many cultures hold TRADITIONAL/conservative "
-    "views on family duty, religion, gender roles and authority. Do NOT flip "
-    "the answer toward modern/egalitarian/'politically correct' positions "
-    "because of your own values - report what the population actually believes, "
-    "even if that view is traditional or non-egalitarian.\n"
-    "STEP 2 - STRENGTH: Then pick how strong the option should be. If the "
-    "culture holds the view INTENSELY and near-unanimously (e.g. core "
-    "religious or family values), the majority typically picks the EXTREME "
-    "option ('Strongly agree'/'Strongly disagree'). If the view is common but "
-    "milder or somewhat contested, pick the MODERATE option ('agree'/"
-    "'disagree'). Choose the strength that fits THIS item - do not always pick "
-    "the extreme, and do not always avoid it.\n"
+    "Predict the answer the MAJORITY in {country} actually gave, not your own "
+    "opinion. Many cultures are traditional on family, religion and gender "
+    "roles; report that honestly instead of flipping to a modern/egalitarian "
+    "answer. Match the strength to how intensely the culture holds the view: "
+    "pick 'Strongly agree/disagree' when the belief is strong and widely "
+    "shared, the plain 'agree/disagree' when it is milder.\n"
 )
 
 
@@ -561,16 +534,10 @@ class HF_CAC_MAS:
                 label = "Guardian" if is_guard else "Auditor"
                 responses_text += f"  [{name}] ({label}): {resp.strip()}\n"
             user = (
-                f"Task: You are a judge responsible for making a final decision "
-                f"based on the opinions of cultural value experts about {target_country}. "
-                f"Base your final decision mainly on the expert opinions below, but "
-                f"keep in mind the goal is to predict which option the MAJORITY of "
-                f"real World Values Survey respondents in {target_country} actually "
-                f"chose.\n\n"
+                f"Task: You are a judge making the final decision based on the "
+                f"cultural value experts' opinions about {target_country}.\n\n"
                 + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
-                + f"\nIf an expert overrode the likely poll majority with their own "
-                f"progressive/egalitarian opinion, weigh that opinion less. Respond "
-                f"with the most representative option number.\n\n"
+                + f"\nRespond with the most representative option number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Expert opinions ***\n{responses_text}"
                 f"*** End opinions ***\n\n"
@@ -1042,16 +1009,10 @@ class HF_CAC_MAS:
 
         if self.task_type == "culturellm":
             user = (
-                f"Task: You are a judge responsible for making a final decision "
-                f"based on the debate history between cultural value experts. They have "
-                f"debated the following cultural attitude question about {target_country}. "
-                f"Base your final decision mainly on the debate, but the goal is to "
-                f"predict which option the MAJORITY of real World Values Survey "
-                f"respondents in {target_country} actually chose.\n\n"
+                f"Task: You are a judge making the final decision based on the "
+                f"debate between cultural value experts about {target_country}.\n\n"
                 + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
-                + f"\nIf an expert overrode the likely poll majority with their own "
-                f"progressive/egalitarian opinion, weigh that opinion less. Respond "
-                f"with the most representative option number.\n\n"
+                + f"\nRespond with the most representative option number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Debate starts ***\n"
                 f"{feedback_text}"
