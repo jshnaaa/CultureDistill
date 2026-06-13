@@ -40,11 +40,13 @@ def load_config(config_path):
 # ----------------------------------------------------------------------
 CULTURELLM_PREDICTION_GUIDANCE = (
     "Predict the answer the MAJORITY in {country} actually gave, not your own "
-    "opinion. Many cultures are traditional on family, religion and gender "
-    "roles; report that honestly instead of flipping to a modern/egalitarian "
-    "answer. Match the strength to how intensely the culture holds the view: "
-    "pick 'Strongly agree/disagree' when the belief is strong and widely "
-    "shared, the plain 'agree/disagree' when it is milder.\n"
+    "opinion. Decide in two steps. First the DIRECTION: many cultures are "
+    "traditional on family, religion and gender roles, so report that honestly "
+    "instead of flipping to a modern/egalitarian answer. Then the STRENGTH: do "
+    "not default to the mild middle option -- when a religious or traditional "
+    "conviction is strong and widely shared, the majority usually picks the "
+    "'Strongly agree/disagree' extreme, so choose it whenever the evidence "
+    "points that way.\n"
 )
 
 
