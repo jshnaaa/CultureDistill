@@ -32,15 +32,23 @@ def load_config(config_path):
 
 # ----------------------------------------------------------------------
 # CultureLLM debiasing guidance (small, task-specific prompt patch).
-# Rationale: the base model systematically (a) avoids the extreme
-# "Strongly agree/disagree" options and (b) overrides the real poll
-# majority with its own progressive/egalitarian preferences, predicting
-# "Disagree" on traditional-value items (gender roles, family duty, etc.)
-# even for conservative cultures. The task is to PREDICT what the real
-# survey population most often answered, not to express a personal or
-# normatively-correct opinion. The text below is injected into every
-# culturellm prompt branch to correct this bias without touching the
-# HF-CAC orchestration logic.
+# Rationale: the base model overrides the real poll majority with its own
+# progressive/egalitarian preferences, predicting "Disagree" on
+# traditional-value items (gender roles, family duty, etc.) even for
+# conservative cultures. The task is to PREDICT what the real survey
+# population most often answered, not to express a personal or
+# normatively-correct opinion.
+#
+# NOTE (calibration): an earlier version of this guidance over-corrected by
+# telling agents to "be willing to pick the EXTREME options", which caused
+# the model to collapse onto "Strongly agree" (option 1) for almost every
+# item and dropped accuracy from ~30% to ~14%. In real WVS data the modal
+# answer is usually the MODERATE option ("agree"/"disagree"), not the
+# extreme one. The guidance below therefore (1) removes the progressive
+# bias and (2) anchors the default to the moderate option, reserving the
+# "Strongly" extreme only when the item wording itself signals a strong,
+# near-unanimous stance. Injected into every culturellm prompt branch
+# without touching the HF-CAC orchestration logic.
 # ----------------------------------------------------------------------
 CULTURELLM_PREDICTION_GUIDANCE = (
     "IMPORTANT - how to answer:\n"
@@ -48,14 +56,15 @@ CULTURELLM_PREDICTION_GUIDANCE = (
     "real World Values Survey respondents in {country} actually chose (the "
     "statistical majority / mode), NOT your own opinion and NOT the most "
     "ethically 'correct' or progressive answer.\n"
-    "- Many cultures hold strong TRADITIONAL or conservative views on family "
-    "duty, religion, gender roles, and authority. Do NOT shift the answer "
-    "toward modern/egalitarian positions because of your own values - report "
-    "what the population most likely answered.\n"
-    "- Be willing to pick the EXTREME options ('Strongly agree' / 'Strongly "
-    "disagree'). When a culture holds a strong, widely-shared stance, the "
-    "majority often lands on the extreme option, not the moderate middle. Do "
-    "not default to a softer middle option just to hedge.\n"
+    "- Many cultures hold TRADITIONAL or conservative views on family duty, "
+    "religion, gender roles, and authority. Do NOT shift the answer toward "
+    "modern/egalitarian positions because of your own values - report what "
+    "the population most likely answered.\n"
+    "- Calibrate the STRENGTH carefully. In real survey data the most common "
+    "answer is usually the MODERATE option ('agree' or 'disagree'), not the "
+    "extreme one. Default to the moderate option, and only choose the extreme "
+    "'Strongly agree'/'Strongly disagree' when the statement is one a strong "
+    "majority would feel intensely about. Do NOT pick 'Strongly' by default.\n"
 )
 
 
@@ -553,10 +562,8 @@ class HF_CAC_MAS:
                 f"chose.\n\n"
                 + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
                 + f"\nIf an expert overrode the likely poll majority with their own "
-                f"progressive/egalitarian opinion, or hedged toward a moderate middle "
-                f"option instead of the extreme one the culture strongly holds, weigh "
-                f"that opinion less. Respond with the most representative option "
-                f"number.\n\n"
+                f"progressive/egalitarian opinion, weigh that opinion less. Respond "
+                f"with the most representative option number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Expert opinions ***\n{responses_text}"
                 f"*** End opinions ***\n\n"
@@ -1036,10 +1043,8 @@ class HF_CAC_MAS:
                 f"respondents in {target_country} actually chose.\n\n"
                 + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
                 + f"\nIf an expert overrode the likely poll majority with their own "
-                f"progressive/egalitarian opinion, or hedged toward a moderate middle "
-                f"option instead of the extreme one the culture strongly holds, weigh "
-                f"that opinion less. Respond with the most representative option "
-                f"number.\n\n"
+                f"progressive/egalitarian opinion, weigh that opinion less. Respond "
+                f"with the most representative option number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Debate starts ***\n"
                 f"{feedback_text}"

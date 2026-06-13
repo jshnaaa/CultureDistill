@@ -67,6 +67,7 @@ import os
 import sys
 import re
 import json
+import random
 import argparse
 import threading
 from collections import Counter
@@ -234,6 +235,14 @@ def main():
                         help="Samples per vLLM batch")
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Number of samples to process. 0 = all samples.")
+    parser.add_argument("--random_sample", type=str, default="false",
+                        choices=["true", "false"],
+                        help="If true, --max_samples are drawn RANDOMLY from the "
+                             "whole dataset (covering all countries) instead of "
+                             "taking the first N. Use --seed for reproducibility. "
+                             "Default: false (take first N).")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for --random_sample. Default: 42.")
     parser.add_argument("--negotiation_rounds", type=int, default=1,
                         help="Rounds of structured negotiation. "
                              "0 = independent (Guardian+Auditors don't see each other). "
@@ -262,6 +271,7 @@ def main():
     args.include_judge = args.include_judge.lower() == "true"
     args.eval_accuracy = args.eval_accuracy.lower() == "true"
     args.temp_ladder = args.temp_ladder.lower() == "true"
+    args.random_sample = args.random_sample.lower() == "true"
 
     # ------------------------------------------------------------------
     # Model alias resolution
@@ -315,8 +325,15 @@ def main():
         print(f"Auto-selected config: {args.config_path}")
 
     if args.max_samples > 0:
-        dataset = dataset[: args.max_samples]
-        print(f"Using first {args.max_samples} samples")
+        if args.random_sample:
+            n = min(args.max_samples, len(dataset))
+            rng = random.Random(args.seed)
+            dataset = rng.sample(dataset, n)
+            print(f"Using {n} RANDOM samples (seed={args.seed}, "
+                  f"covers all countries)")
+        else:
+            dataset = dataset[: args.max_samples]
+            print(f"Using first {args.max_samples} samples")
 
     # ------------------------------------------------------------------
     # Resume: skip already-processed samples
