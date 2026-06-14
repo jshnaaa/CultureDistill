@@ -40,13 +40,12 @@ def load_config(config_path):
 # ----------------------------------------------------------------------
 CULTURELLM_PREDICTION_GUIDANCE = (
     "Predict the answer the MAJORITY in {country} actually gave, not your own "
-    "opinion. Decide in two steps. First the DIRECTION: many cultures are "
-    "traditional on family, religion and gender roles, so report that honestly "
-    "instead of flipping to a modern/egalitarian answer. Then the STRENGTH: do "
-    "not default to the mild middle option -- when a religious or traditional "
-    "conviction is strong and widely shared, the majority usually picks the "
-    "'Strongly agree/disagree' extreme, so choose it whenever the evidence "
-    "points that way.\n"
+    "opinion. Decide in two steps. STEP 1 DIRECTION (agree vs disagree): many "
+    "cultures are traditional on family, religion and gender roles, so report "
+    "that honestly instead of flipping to a modern/egalitarian answer. STEP 2 "
+    "STRENGTH: judge how intensely and unanimously this culture holds the view "
+    "and pick the option that matches that intensity; do not assume a fixed "
+    "level.\n"
 )
 
 
@@ -536,10 +535,16 @@ class HF_CAC_MAS:
                 label = "Guardian" if is_guard else "Auditor"
                 responses_text += f"  [{name}] ({label}): {resp.strip()}\n"
             user = (
-                f"Task: You are a judge making the final decision based on the "
-                f"cultural value experts' opinions about {target_country}.\n\n"
+                f"Task: You are a judge responsible for making a final decision "
+                f"based on the opinions of cultural value experts about {target_country}. "
+                f"Base your final decision mainly on the expert opinions below, but "
+                f"keep in mind the goal is to predict which option the MAJORITY of "
+                f"real World Values Survey respondents in {target_country} actually "
+                f"chose.\n\n"
                 + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
-                + f"\nRespond with the most representative option number.\n\n"
+                + f"\nIf an expert overrode the likely poll majority with their own "
+                f"progressive/egalitarian opinion, weigh that opinion less. Respond "
+                f"with the most representative option number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Expert opinions ***\n{responses_text}"
                 f"*** End opinions ***\n\n"
@@ -1011,10 +1016,16 @@ class HF_CAC_MAS:
 
         if self.task_type == "culturellm":
             user = (
-                f"Task: You are a judge making the final decision based on the "
-                f"debate between cultural value experts about {target_country}.\n\n"
+                f"Task: You are a judge responsible for making a final decision "
+                f"based on the debate history between cultural value experts. They have "
+                f"debated the following cultural attitude question about {target_country}. "
+                f"Base your final decision mainly on the debate, but the goal is to "
+                f"predict which option the MAJORITY of real World Values Survey "
+                f"respondents in {target_country} actually chose.\n\n"
                 + CULTURELLM_PREDICTION_GUIDANCE.format(country=target_country)
-                + f"\nRespond with the most representative option number.\n\n"
+                + f"\nIf an expert overrode the likely poll majority with their own "
+                f"progressive/egalitarian opinion, weigh that opinion less. Respond "
+                f"with the most representative option number.\n\n"
                 f"Survey Question:\n{question}\n\n"
                 f"*** Debate starts ***\n"
                 f"{feedback_text}"
