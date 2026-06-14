@@ -18,7 +18,8 @@ class GCN(torch.nn.Module):
         x = torch.relu(x)
         x = F.dropout(x, p=0.5, training=self.training)
         x = self.gcn2(x, edge_index)
-        return x, F.log_softmax(x, dim=1)
+        # Return raw logits (NOT log_softmax) — cross_entropy expects raw logits
+        return x, x
 
 
 class MAGDi(torch.nn.Module):
@@ -172,13 +173,18 @@ class MAGDi(torch.nn.Module):
         
         # GCN node classification (normalize node embeddings to prevent overflow)
         node_x = graph_batch.x.float()
-        node_x = F.normalize(node_x, p=2, dim=-1)  # L2 normalize to unit sphere
+        # Replace any nan/inf in node embeddings with 0
+        node_x = torch.nan_to_num(node_x, nan=0.0, posinf=1.0, neginf=-1.0)
+        # Add small epsilon before normalize to avoid 0-norm → nan
+        node_x = F.normalize(node_x + 1e-8, p=2, dim=-1)
         gcn_output, logits = self.gcn(node_x, graph_batch.edge_index)
-        # ignore_index=2: label=2 means missing node (neither correct nor incorrect)
+        # logits are raw (no softmax applied) — F.cross_entropy handles softmax internally
         y = graph_batch.y.to(logits.device)
         valid_nodes = (y != 2)
         if valid_nodes.any():
-            node_loss = F.cross_entropy(logits[valid_nodes], y[valid_nodes])
+            # Clamp logits to prevent extreme values causing nan
+            logits_clamped = logits.clamp(-30, 30)
+            node_loss = F.cross_entropy(logits_clamped[valid_nodes], y[valid_nodes])
         else:
             node_loss = torch.tensor(0.0, device=self.aux_device, requires_grad=True)
         
