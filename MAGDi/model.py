@@ -61,6 +61,14 @@ class MAGDi(torch.nn.Module):
             param.requires_grad = True
         for param in self.mlp2.parameters():
             param.requires_grad = True
+        # Signal to HF Trainer that this model is already distributed
+        # Trainer checks hasattr(model, 'hf_device_map') to set is_model_parallel
+        self.hf_device_map = {
+            'decoder': self.decoder_device,
+            'gcn': self.aux_device,
+            'mlp1': self.aux_device,
+            'mlp2': self.aux_device,
+        }
         
     def _weighted_pool(self, hidden_states, attention_mask):
         """Weighted average pooling (recency-weighted)."""
@@ -71,14 +79,30 @@ class MAGDi(torch.nn.Module):
         denom = mask.sum(dim=1).clamp(min=1.0)  # avoid division by zero
         return sum_emb / denom
 
+    def _get_decoder_device(self):
+        """Dynamically detect the device of the decoder's embedding layer."""
+        # Works for both bare model and PEFT-wrapped model
+        base = self.decoder
+        if hasattr(base, 'base_model'):
+            base = base.base_model
+        if hasattr(base, 'model'):
+            base = base.model
+        # Qwen2: model.embed_tokens; Llama: model.embed_tokens
+        if hasattr(base, 'model') and hasattr(base.model, 'embed_tokens'):
+            return next(base.model.embed_tokens.parameters()).device
+        if hasattr(base, 'embed_tokens'):
+            return next(base.embed_tokens.parameters()).device
+        # Fallback
+        return self.decoder_device
+
     def forward(self, pos_input_ids, pos_attention_mask, pos_labels, neg_input_ids, neg_attention_mask, neg_labels, graph):
         
         graph_loader = DataLoader(graph, batch_size=len(graph), shuffle=False, pin_memory=False, num_workers=0)
         graph_batch = next(iter(graph_loader))
         graph_batch = graph_batch.to(self.aux_device)
         
-        # Route decoder inputs to decoder's device (cuda:1)
-        dec_device = self.decoder_device
+        # Route decoder inputs to decoder's actual device (detect dynamically)
+        dec_device = self._get_decoder_device()
         pos_input_ids = pos_input_ids.to(dec_device)
         pos_attention_mask = pos_attention_mask.to(dec_device)
         pos_labels = pos_labels.to(dec_device)
@@ -175,8 +199,15 @@ class MAGDi(torch.nn.Module):
 class MAGDiTrainer(Trainer):
     """
     Custom Trainer for MAGDi that handles multi-device model properly.
-    Prevents Trainer from wrapping model in DataParallel (we use device_map).
+    Prevents Trainer from wrapping model in DataParallel and from
+    moving our manually-placed multi-device model.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Tell Trainer this model is already distributed across devices
+        self.is_model_parallel = True
+        self.place_model_on_device = False
 
     def _move_model_to_device(self, model, device):
         """Override to prevent Trainer from moving our multi-device model."""
@@ -192,8 +223,12 @@ class MAGDiTrainer(Trainer):
         return inputs
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        # Inputs stay on CPU here; forward() routes them to correct devices
-        loss = model(
+        # Use the underlying MAGDi model directly, bypassing accelerate's
+        # forward wrapper which tries to move tensors to a single device.
+        # When accelerate wraps the model, the real model is at model.module or model itself.
+        raw_model = model.module if hasattr(model, 'module') else model
+        
+        loss = raw_model.forward(
             pos_input_ids=inputs["pos_input_ids"],
             pos_attention_mask=inputs["pos_attention_mask"],
             pos_labels=inputs["pos_labels"],
@@ -205,36 +240,44 @@ class MAGDiTrainer(Trainer):
 
         return loss
 
+    def _get_raw_model(self):
+        """Get the underlying MAGDi model, unwrapping accelerate if needed."""
+        m = self.model
+        if hasattr(m, 'module'):
+            m = m.module
+        return m
+
     def _save(self, output_dir=None, state_dict=None):
         """Custom save: save LoRA decoder + GCN/MLP weights separately."""
         import os
         output_dir = output_dir if output_dir is not None else self.args.output_dir
         os.makedirs(output_dir, exist_ok=True)
         
+        raw_model = self._get_raw_model()
+        
         # Save LoRA adapter (decoder)
-        self.model.decoder.save_pretrained(output_dir)
+        raw_model.decoder.save_pretrained(output_dir)
         
         # Save GCN + MLP weights
         aux_state = {
-            'gcn': self.model.gcn.state_dict(),
-            'mlp1': self.model.mlp1.state_dict(),
-            'mlp2': self.model.mlp2.state_dict(),
+            'gcn': raw_model.gcn.state_dict(),
+            'mlp1': raw_model.mlp1.state_dict(),
+            'mlp2': raw_model.mlp2.state_dict(),
         }
         torch.save(aux_state, os.path.join(output_dir, "aux_modules.pt"))
 
     def _load_best_model(self):
         """Load best checkpoint back into model for load_best_model_at_end."""
         import os
-        from peft import PeftModel
         
         best_model_path = self.state.best_model_checkpoint
         if best_model_path is None:
             return
         
+        raw_model = self._get_raw_model()
         print(f"\nLoading best model from: {best_model_path}")
         
         # Load LoRA adapter weights
-        # PeftModel.from_pretrained would create a new model; instead load state_dict
         adapter_path = os.path.join(best_model_path, "adapter_model.safetensors")
         if not os.path.exists(adapter_path):
             adapter_path = os.path.join(best_model_path, "adapter_model.bin")
@@ -246,7 +289,7 @@ class MAGDiTrainer(Trainer):
             else:
                 adapter_state = torch.load(adapter_path, map_location="cpu")
             # Load into decoder (PEFT model)
-            missing, unexpected = self.model.decoder.load_state_dict(adapter_state, strict=False)
+            missing, unexpected = raw_model.decoder.load_state_dict(adapter_state, strict=False)
             if missing:
                 print(f"  [Warning] Missing keys when loading adapter: {len(missing)}")
         
@@ -254,12 +297,12 @@ class MAGDiTrainer(Trainer):
         aux_path = os.path.join(best_model_path, "aux_modules.pt")
         if os.path.exists(aux_path):
             aux_state = torch.load(aux_path, map_location="cpu")
-            self.model.gcn.load_state_dict(aux_state['gcn'])
-            self.model.mlp1.load_state_dict(aux_state['mlp1'])
-            self.model.mlp2.load_state_dict(aux_state['mlp2'])
+            raw_model.gcn.load_state_dict(aux_state['gcn'])
+            raw_model.mlp1.load_state_dict(aux_state['mlp1'])
+            raw_model.mlp2.load_state_dict(aux_state['mlp2'])
             # Move back to correct device
-            self.model.gcn.to(self.model.aux_device)
-            self.model.mlp1.to(self.model.aux_device)
-            self.model.mlp2.to(self.model.aux_device)
+            raw_model.gcn.to(raw_model.aux_device)
+            raw_model.mlp1.to(raw_model.aux_device)
+            raw_model.mlp2.to(raw_model.aux_device)
         
         print(f"  Best model loaded successfully.")
