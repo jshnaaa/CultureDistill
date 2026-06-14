@@ -324,17 +324,17 @@ if __name__ == '__main__':
     # Training
     parser.add_argument('--num_train_samples', type=int, default=0,
                         help="Number of training samples (0 = use all)")
-    parser.add_argument('--num_epochs', type=int, default=5,
+    parser.add_argument('--num_epochs', type=int, default=3,
                         help="Number of training epochs")
     parser.add_argument('--lr', type=float, default=2e-5,
                         help="Learning rate")
-    parser.add_argument('--batch_size', type=int, default=4,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help="Per-device training batch size")
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=4,
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=2,
                         help="Gradient accumulation steps")
     parser.add_argument('--warmup_steps', type=int, default=50,
                         help="Warmup steps")
-    parser.add_argument('--max_length', type=int, default=256,
+    parser.add_argument('--max_length', type=int, default=192,
                         help="Max sequence length for tokenization")
     
     # LoRA
@@ -485,7 +485,8 @@ if __name__ == '__main__':
         warmup_steps=args.warmup_steps,
         num_train_epochs=args.num_epochs,
         learning_rate=args.lr,
-        fp16=False,  # Decoder already in float16; no GradScaler needed
+        fp16=False,
+        bf16=True,  # BF16 mixed precision: faster, no GradScaler needed, wider dynamic range
         logging_steps=10,
         output_dir='outputs',
         remove_unused_columns=False,
