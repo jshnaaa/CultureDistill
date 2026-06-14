@@ -329,7 +329,7 @@ if __name__ == '__main__':
                         help="Number of training epochs")
     parser.add_argument('--lr', type=float, default=2e-5,
                         help="Learning rate")
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help="Per-device training batch size")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=2,
                         help="Gradient accumulation steps")
@@ -440,9 +440,7 @@ if __name__ == '__main__':
     
     # Apply LoRA to decoder BEFORE assigning to MAGDi
     print("Applying LoRA...")
-    # NOTE: gradient_checkpointing disabled for speed (48GB VRAM is sufficient)
-    # Uncomment below if OOM occurs:
-    # decoder.gradient_checkpointing_enable()
+    decoder.gradient_checkpointing_enable()
     decoder.enable_input_require_grads()
     
     config = LoraConfig(
@@ -515,9 +513,7 @@ if __name__ == '__main__':
         dataloader_pin_memory=True,
         dataloader_num_workers=2,
         max_grad_norm=1.0,
-        # Speed optimizations
-        torch_compile=False,  # set True if torch>=2.1 and want extra speed (adds warmup time)
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
     )
     
     # Early stopping: stop if eval_loss doesn't improve for 2 consecutive epochs
