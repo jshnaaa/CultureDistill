@@ -510,8 +510,8 @@ if __name__ == '__main__':
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        dataloader_pin_memory=True,
-        dataloader_num_workers=2,
+        dataloader_pin_memory=False,
+        dataloader_num_workers=0,
         max_grad_norm=1.0,
     )
     
