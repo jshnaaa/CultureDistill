@@ -1,7 +1,7 @@
 import torch
 import logging
 import torch.nn.functional as F
-from torch_geometric.loader import DataLoader
+from torch_geometric.data import Batch
 from torch_geometric.nn import GCNConv, Linear
 from torch.nn import CrossEntropyLoss, MarginRankingLoss
 from transformers import Trainer, AutoModelForCausalLM, AutoTokenizer
@@ -81,26 +81,27 @@ class MAGDi(torch.nn.Module):
         return sum_emb / denom
 
     def _get_decoder_device(self):
-        """Dynamically detect the device of the decoder's embedding layer."""
-        # Works for both bare model and PEFT-wrapped model
+        """Get decoder device (cached after first call for speed)."""
+        if hasattr(self, '_cached_dec_device'):
+            return self._cached_dec_device
+        # Detect once from embedding layer
         base = self.decoder
         if hasattr(base, 'base_model'):
             base = base.base_model
         if hasattr(base, 'model'):
             base = base.model
-        # Qwen2: model.embed_tokens; Llama: model.embed_tokens
         if hasattr(base, 'model') and hasattr(base.model, 'embed_tokens'):
-            return next(base.model.embed_tokens.parameters()).device
-        if hasattr(base, 'embed_tokens'):
-            return next(base.embed_tokens.parameters()).device
-        # Fallback
-        return self.decoder_device
+            self._cached_dec_device = next(base.model.embed_tokens.parameters()).device
+        elif hasattr(base, 'embed_tokens'):
+            self._cached_dec_device = next(base.embed_tokens.parameters()).device
+        else:
+            self._cached_dec_device = self.decoder_device
+        return self._cached_dec_device
 
     def forward(self, pos_input_ids, pos_attention_mask, pos_labels, neg_input_ids, neg_attention_mask, neg_labels, graph):
         
-        graph_loader = DataLoader(graph, batch_size=len(graph), shuffle=False, pin_memory=False, num_workers=0)
-        graph_batch = next(iter(graph_loader))
-        graph_batch = graph_batch.to(self.aux_device)
+        # Batch graphs directly using PyG's Batch (avoids DataLoader overhead per step)
+        graph_batch = Batch.from_data_list(list(graph)).to(self.aux_device)
         
         # Route decoder inputs to decoder's actual device (detect dynamically)
         dec_device = self._get_decoder_device()
@@ -119,15 +120,6 @@ class MAGDi(torch.nn.Module):
         # Only keep last hidden state, discard the rest immediately
         pos_last_hidden = pos_output.hidden_states[-1]
         del pos_output
-        
-        # Debug: print loss components on first few steps
-        if not hasattr(self, '_debug_count'):
-            self._debug_count = 0
-        if self._debug_count < 3:
-            print(f"\n[DEBUG step {self._debug_count}] nll_loss={nll_loss.item():.6f}, "
-                  f"requires_grad={nll_loss.requires_grad}, "
-                  f"pos_input_ids shape={pos_input_ids.shape}")
-            self._debug_count += 1
         
         pos_seq_emb = self._weighted_pool(pos_last_hidden, pos_attention_mask)
         del pos_last_hidden
@@ -154,9 +146,9 @@ class MAGDi(torch.nn.Module):
         # Move embeddings to auxiliary device for MLP computation
         pos_seq_emb = pos_seq_emb.to(self.aux_device).float()
         neg_seq_emb = neg_seq_emb.to(self.aux_device).float()
-        # Normalize to prevent overflow in MLP
-        pos_seq_emb = F.normalize(pos_seq_emb, p=2, dim=-1)
-        neg_seq_emb = F.normalize(neg_seq_emb.detach(), p=2, dim=-1)
+        # Normalize to prevent overflow in MLP (add eps to avoid 0-norm → nan)
+        pos_seq_emb = F.normalize(pos_seq_emb + 1e-8, p=2, dim=-1)
+        neg_seq_emb = F.normalize(neg_seq_emb.detach() + 1e-8, p=2, dim=-1)
             
         pos_h = torch.relu(self.mlp1(pos_seq_emb))
         pos_score = torch.tanh(self.mlp2(pos_h))
@@ -194,10 +186,6 @@ class MAGDi(torch.nn.Module):
         nll_loss = nll_loss.to(self.aux_device).float()
         
         total_loss = self.alpha * nll_loss + self.beta * node_loss + self.gamma * mr_loss
-        
-        if self._debug_count <= 3:
-            print(f"[DEBUG] node_loss={node_loss.item():.6f}, mr_loss={mr_loss.item():.6f}, "
-                  f"total_loss={total_loss.item():.6f}, requires_grad={total_loss.requires_grad}")
         
         return total_loss
 

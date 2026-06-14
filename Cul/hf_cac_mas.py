@@ -79,6 +79,9 @@ class HF_CAC_MAS:
                         across a ladder (B1 diversity boost for culturalbench).
         """
         self.temp_ladder = temp_ladder
+        # [A/B TEST v2] Auto-enable temp_ladder for culturalbench to maximize
+        # auditor diversity (critical when all agents generate independently)
+        self._auto_temp_ladder = False  # will be set after task_type is known
         if config_path is None:
             config_path = os.path.join(
                 os.path.dirname(__file__), "configs", "hf_cac_config.yaml"
@@ -106,6 +109,12 @@ class HF_CAC_MAS:
         # "culturalbench" (4-way MCQ), or "culturellm" (variable-scale WVS survey)
         self.task_type = cfg.get("task_type", "normad")
         self.answer_choices = cfg.get("answer_choices", [1, 2, 3])
+
+        # [A/B TEST v2] Auto-enable temp_ladder for Qwen+CulturalBench
+        # Diversity is critical when agents generate independently
+        if self.task_type == "culturalbench" and "qwen" in model_name.lower() and not self.temp_ladder:
+            self.temp_ladder = True
+            self._auto_temp_ladder = True
 
         # Cultural Affinity Matrix for Judge fallback arbitration
         self.affinity_matrix = cfg.get("cultural_affinity_matrix", None)
@@ -330,17 +339,20 @@ class HF_CAC_MAS:
         elif self.task_type == "culturalbench":
             # CulturalBench: factual cultural knowledge MCQ (4-way)
             if self._is_qwen:
-                # [A/B TEST] Qwen: NorMAD-style authoritative Guardian user prompt
+                # [A/B TEST v2] Qwen: encourage deep step-by-step analysis of each option
+                # [PRESERVED v1]: "As Host-Culture Guardian... AUTHORITATIVE... less than three sentences"
                 user = (
                     f"TARGET CULTURE: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"As the Host-Culture Guardian for {target_country}, provide your "
-                    f"AUTHORITATIVE analysis. Cite specific cultural practices, traditions, "
-                    f"or norms by name. Explain why certain options align or conflict with "
-                    f"the target culture's values.\n\n"
-                    f"Select the correct option number (1, 2, 3, or 4). "
-                    f"Explain your answer in less than three sentences.\n\n"
-                    f"Reasoning: <your authoritative cultural analysis>\n"
+                    f"Analyze this cultural knowledge question about {target_country}.\n"
+                    f"For EACH option, briefly consider whether it could be correct or "
+                    f"incorrect for {target_country} specifically (not the broader region).\n"
+                    f"Then select the most accurate answer.\n\n"
+                    f"Think step by step:\n"
+                    f"- What specific cultural fact does this question test?\n"
+                    f"- Which option matches verified cultural knowledge about {target_country}?\n"
+                    f"- Are there common misconceptions that might lead to a wrong answer?\n\n"
+                    f"Reasoning: <your step-by-step analysis>\n"
                     f"Answer (1, 2, 3, or 4):"
                 )
             else:
@@ -444,20 +456,19 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 if self._is_qwen:
-                    # [A/B TEST] Qwen: NorMAD-style — Auditor sees Guardian and defers
+                    # [A/B TEST v2] Qwen: Auditor sees discussion but evaluates independently
+                    # (v2 debate path: this is Phase 2 feedback, not asymmetric deference)
+                    # [PRESERVED v1]: "DEFER... Guardian has primary authority"
                     user = (
                         f"TARGET CULTURE: {target_country}\n\n"
                         f"{question}\n\n"
-                        f"The HOST-CULTURE GUARDIAN [{guardian_name}] has provided their "
-                        f"authoritative analysis:\n"
+                        f"Another expert has provided their analysis:\n"
                         f"---\n{guardian_response}\n---\n\n"
-                        f"As a Cross-Cultural Auditor from [{agent_name}] background:\n"
-                        f"1. Provide your comparative perspective (similarities/differences "
-                        f"between your culture and {target_country}).\n"
-                        f"2. If you agree with the Guardian, explain WHY from your cultural lens.\n"
-                        f"3. If you disagree, provide specific counter-evidence — but acknowledge "
-                        f"that the Guardian has primary authority on {target_country}.\n\n"
-                        f"Reasoning: <your cross-cultural comparative analysis>\n"
+                        f"As an expert in [{agent_name}], critically evaluate their answer.\n"
+                        f"Do NOT simply agree — check their reasoning against what you know.\n"
+                        f"If they cite a specific cultural fact, verify it matches your knowledge.\n"
+                        f"If you have evidence for a different answer, state it clearly.\n\n"
+                        f"Reasoning: <your critical evaluation>\n"
                         f"Answer (1, 2, 3, or 4):"
                     )
                 else:
@@ -536,18 +547,19 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 if self._is_qwen:
-                    # [A/B TEST] Qwen: NorMAD-style — Auditor independent with contrastive perspective
+                    # [A/B TEST v2] Qwen: independent deep analysis (no deference, no 3-sentence limit)
+                    # [PRESERVED v1]: "Cross-Cultural Auditor... less than three sentences"
                     user = (
                         f"TARGET CULTURE: {target_country}\n\n"
                         f"{question}\n\n"
-                        f"As a Cross-Cultural Auditor from [{agent_name}] background, "
-                        f"provide your comparative perspective on this cultural knowledge "
-                        f"question about {target_country}. Note similarities and differences "
-                        f"with your own cultural framework, and acknowledge uncertainty where "
-                        f"the target culture differs from your expertise.\n\n"
-                        f"Select the correct option number (1, 2, 3, or 4). "
-                        f"Explain your answer in less than three sentences.\n\n"
-                        f"Reasoning: <your cross-cultural comparative analysis>\n"
+                        f"Analyze this cultural knowledge question about {target_country}.\n"
+                        f"For EACH option, briefly consider whether it could be correct or "
+                        f"incorrect for {target_country} specifically.\n"
+                        f"Use your knowledge of [{agent_name}] to identify potential "
+                        f"cross-cultural confusions, but focus on what is factually "
+                        f"correct for {target_country}.\n\n"
+                        f"Think step by step and select the most accurate answer.\n\n"
+                        f"Reasoning: <your analysis>\n"
                         f"Answer (1, 2, 3, or 4):"
                     )
                 else:
@@ -659,20 +671,22 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             if self._is_qwen:
-                # [A/B TEST] Qwen: NorMAD-style Judge with Guardian VETO authority
+                # [A/B TEST v2] Qwen: evidence-quality Judge (no VETO authority)
+                # [PRESERVED v1]: "Guardian has VETO AUTHORITY when providing specific evidence"
                 user = (
                     f"TARGET CULTURE: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural "
-                    f"expertise most closely matches {target_country}.\n\n"
+                    f"The REGIONAL SPECIALIST is [{guardian_name}] (expertise area matches "
+                    f"{target_country}). However, all agents may be correct or incorrect.\n\n"
                     f"Agent responses:\n{responses_text}\n"
-                    f"Determine the correct answer. Remember:\n"
-                    f"- Give HIGHER WEIGHT to the Guardian's specific cultural claims\n"
-                    f"- The Guardian has VETO AUTHORITY when providing specific evidence\n"
-                    f"- Cross-Cultural Auditors provide valuable comparative context\n"
-                    f"- Base your final decision on verifiable cultural facts\n\n"
+                    f"Determine the correct answer by evaluating EVIDENCE QUALITY:\n"
+                    f"- Which agent cites the most specific, verifiable cultural facts?\n"
+                    f"- Is the reasoning logically consistent?\n"
+                    f"- Does the answer apply to {target_country} specifically (not just the region)?\n"
+                    f"- Do multiple agents independently agree? (stronger signal)\n"
+                    f"- If evidence is tied, give slight preference to the Regional Specialist.\n\n"
                     f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
-                    f"Reasoning: <your reasoning, explicitly referencing the Guardian's claims>\n"
+                    f"Reasoning: <evaluate evidence quality from each agent>\n"
                     f"Answer (1, 2, 3, or 4):"
                 )
             else:
@@ -1198,14 +1212,13 @@ class HF_CAC_MAS:
 
         # ---- Phase 2: Auditors generate ----
         auditor_responses = {}  # agent_idx -> response text
-        # [A/B TEST] Qwen + CulturalBench: use NorMAD-style one-directional flow
-        # (Auditors SEE Guardian's response and defer to it)
+        # [A/B TEST v2] Qwen + CulturalBench: use INDEPENDENT generation (no asymmetric)
+        # v1 used asymmetric flow (Auditors see Guardian + defer) but this caused
+        # conformity trap — correct minorities got outvoted. v2 keeps all agents independent.
+        # [PRESERVED v1]: _use_asymmetric included (task_type == "culturalbench" and self._is_qwen)
         _use_asymmetric = (
             self.negotiation_rounds > 0
             and self.task_type not in ("culturalbench", "culturellm", "blend")
-        ) or (
-            self.task_type == "culturalbench" and self._is_qwen
-            and self.negotiation_rounds > 0
         )
         if _use_asymmetric:
             # Asymmetric: Auditors SEE Guardian's response (one-directional)
@@ -1244,8 +1257,9 @@ class HF_CAC_MAS:
         # ---- Phase 2.5: MAD-style debate for CulturalBench/CultureLLM/BLEnD ----
         # When negotiation_rounds > 0 AND culturalbench/culturellm/blend: do feedback + final decision
         # This lets agents reconsider after seeing others' answers (can fix minority-correct cases)
-        # [A/B TEST] Qwen + CulturalBench: skip MAD debate, use NorMAD-style direct flow instead
-        _skip_mad_for_qwen = (self.task_type == "culturalbench" and self._is_qwen)
+        # [A/B TEST v2] Qwen + CulturalBench: ENABLE MAD debate (v1 skipped it, causing conformity)
+        # [PRESERVED v1]: _skip_mad_for_qwen = (self.task_type == "culturalbench" and self._is_qwen)
+        _skip_mad_for_qwen = False  # v2: never skip debate for any model
         if self.negotiation_rounds > 0 and self.task_type in ("culturalbench", "culturellm", "blend") and not _skip_mad_for_qwen:
             # All initial responses (Guardian + Auditors)
             all_initial = {guardian_idx: guardian_response, **auditor_responses}
@@ -1324,8 +1338,8 @@ class HF_CAC_MAS:
         # Determine consensus levels:
         # For culturalbench/culturellm (MCQ-style): use pure majority vote
         # For other tasks (incl. NorMAD): use Guardian-weighted consensus
-        # [A/B TEST] Qwen + CulturalBench: use Guardian-weighted consensus like NorMAD
-        if self.task_type in ("culturalbench", "culturellm", "blend") and not _skip_mad_for_qwen:
+        # [A/B TEST v2] Qwen + CulturalBench: use PURE MAJORITY (v1 used Guardian-weighted)
+        if self.task_type in ("culturalbench", "culturellm", "blend"):
             # Pure majority vote — no Guardian privilege for factual QA
             from collections import Counter as _Counter
             vote_counts = _Counter(a for a in valid_answers if a is not None)
@@ -1494,13 +1508,13 @@ class HF_CAC_MAS:
         auditor_prompts = []
         auditor_meta = []  # (sample_idx, agent_idx)
         auditor_sampling_list = []  # per-prompt SamplingParams (B1 temp ladder)
-        # [A/B TEST] Qwen + CulturalBench: use NorMAD-style one-directional flow
-        _batch_use_asymmetric = (self.task_type == "culturalbench" and self._is_qwen)
+        # [A/B TEST v2] Qwen + CulturalBench: use INDEPENDENT generation (no asymmetric)
+        # [PRESERVED v1]: _batch_use_asymmetric = (self.task_type == "culturalbench" and self._is_qwen)
+        _batch_use_asymmetric = False  # v2: all culturalbench agents generate independently
         for si in range(n):
             g_idx = guardian_indices[si]
             g_name = self.culture_roles[g_idx]["name"]
             # For culturalbench/culturellm/blend: always independent (no guardian context)
-            # EXCEPT: Qwen + CulturalBench uses asymmetric flow (Auditors see Guardian)
             if (self.task_type in ("culturalbench", "culturellm", "blend") and not _batch_use_asymmetric) or self.negotiation_rounds == 0:
                 g_resp = None
             else:
@@ -1553,8 +1567,8 @@ class HF_CAC_MAS:
             valid_ans = [a for a in all_ans.values() if a is not None]
 
             # Determine consensus type
-            # [A/B TEST] Qwen + CulturalBench: use Guardian-weighted consensus like NorMAD
-            if self.task_type in ("culturalbench", "culturellm", "blend") and not _batch_use_asymmetric:
+            # [A/B TEST v2] Qwen + CulturalBench: use PURE MAJORITY vote (v1 used Guardian-weighted)
+            if self.task_type in ("culturalbench", "culturellm", "blend"):
                 # Pure majority vote — no Guardian privilege for MCQ-style QA
                 from collections import Counter as _Counter
                 vote_counts = _Counter(a for a in valid_ans if a is not None)
@@ -1601,16 +1615,10 @@ class HF_CAC_MAS:
                     f"[CONSENSUS] All agents agree. Answer: {valid_ans[0]}"
                 )
             elif consensus_types[si] == "guardian_majority":
-                if self.task_type in ("culturalbench", "culturellm", "blend") and not _batch_use_asymmetric:
-                    judge_responses[si] = (
-                        f"[GUARDIAN-MAJORITY] Majority vote ({majority_counts[si]}/{len(valid_ans)}). "
-                        f"Answer: {majority_answers[si]}"
-                    )
-                else:
-                    judge_responses[si] = (
-                        f"[GUARDIAN-MAJORITY] Guardian supported by auditor(s). "
-                        f"Answer: {g_answer}"
-                    )
+                judge_responses[si] = (
+                    f"[MAJORITY] Majority vote ({majority_counts[si]}/{len(valid_ans)}). "
+                    f"Answer: {majority_answers[si]}"
+                )
             elif self.include_judge:
                 # Real disagreement → need Judge
                 if guardian_failures[si]:
