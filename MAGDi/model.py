@@ -204,3 +204,62 @@ class MAGDiTrainer(Trainer):
         )
 
         return loss
+
+    def _save(self, output_dir=None, state_dict=None):
+        """Custom save: save LoRA decoder + GCN/MLP weights separately."""
+        import os
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save LoRA adapter (decoder)
+        self.model.decoder.save_pretrained(output_dir)
+        
+        # Save GCN + MLP weights
+        aux_state = {
+            'gcn': self.model.gcn.state_dict(),
+            'mlp1': self.model.mlp1.state_dict(),
+            'mlp2': self.model.mlp2.state_dict(),
+        }
+        torch.save(aux_state, os.path.join(output_dir, "aux_modules.pt"))
+
+    def _load_best_model(self):
+        """Load best checkpoint back into model for load_best_model_at_end."""
+        import os
+        from peft import PeftModel
+        
+        best_model_path = self.state.best_model_checkpoint
+        if best_model_path is None:
+            return
+        
+        print(f"\nLoading best model from: {best_model_path}")
+        
+        # Load LoRA adapter weights
+        # PeftModel.from_pretrained would create a new model; instead load state_dict
+        adapter_path = os.path.join(best_model_path, "adapter_model.safetensors")
+        if not os.path.exists(adapter_path):
+            adapter_path = os.path.join(best_model_path, "adapter_model.bin")
+        
+        if os.path.exists(adapter_path):
+            from safetensors.torch import load_file
+            if adapter_path.endswith(".safetensors"):
+                adapter_state = load_file(adapter_path)
+            else:
+                adapter_state = torch.load(adapter_path, map_location="cpu")
+            # Load into decoder (PEFT model)
+            missing, unexpected = self.model.decoder.load_state_dict(adapter_state, strict=False)
+            if missing:
+                print(f"  [Warning] Missing keys when loading adapter: {len(missing)}")
+        
+        # Load GCN + MLP weights
+        aux_path = os.path.join(best_model_path, "aux_modules.pt")
+        if os.path.exists(aux_path):
+            aux_state = torch.load(aux_path, map_location="cpu")
+            self.model.gcn.load_state_dict(aux_state['gcn'])
+            self.model.mlp1.load_state_dict(aux_state['mlp1'])
+            self.model.mlp2.load_state_dict(aux_state['mlp2'])
+            # Move back to correct device
+            self.model.gcn.to(self.model.aux_device)
+            self.model.mlp1.to(self.model.aux_device)
+            self.model.mlp2.to(self.model.aux_device)
+        
+        print(f"  Best model loaded successfully.")

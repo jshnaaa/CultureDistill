@@ -41,6 +41,7 @@ Usage:
 import json
 import torch
 import pickle
+import random
 import numpy as np
 import argparse
 import transformers
@@ -476,6 +477,17 @@ if __name__ == '__main__':
     training_batch, graphs = pad_graphs(training_batch, graphs)
     print(f"  After padding: {len(training_batch)} batches, {len(graphs)} graphs")
     
+    # Split into train/eval (90%/10%)
+    random.seed(42)
+    indices = list(range(len(training_batch)))
+    random.shuffle(indices)
+    split_idx = int(len(indices) * 0.9)
+    train_indices = indices[:split_idx]
+    eval_indices = indices[split_idx:]
+    train_dataset = [training_batch[i] for i in train_indices]
+    eval_dataset = [training_batch[i] for i in eval_indices]
+    print(f"  Train samples: {len(train_dataset)}, Eval samples: {len(eval_dataset)}")
+    
     # Train
     print(f"\nStarting training for {args.num_epochs} epochs...")
     
@@ -488,25 +500,67 @@ if __name__ == '__main__':
         fp16=False,
         bf16=True,  # BF16 mixed precision: faster, no GradScaler needed, wider dynamic range
         logging_steps=10,
-        output_dir='outputs',
+        output_dir=args.output_dir,
         remove_unused_columns=False,
-        save_strategy="no",
+        # Evaluate & save at end of each epoch
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=args.num_epochs,
+        # Best model tracking
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         dataloader_pin_memory=False,
         dataloader_num_workers=0,
         max_grad_norm=1.0,
     )
     
+    # Early stopping: stop if eval_loss doesn't improve for 2 consecutive epochs
+    from transformers import EarlyStoppingCallback
+    early_stop_callback = EarlyStoppingCallback(early_stopping_patience=2)
+    
     trainer = MAGDiTrainer(
         model=model,
-        train_dataset=training_batch,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         args=training_args,
-        data_collator=MAGDiDataCollator(tokenizer)
+        data_collator=MAGDiDataCollator(tokenizer),
+        callbacks=[early_stop_callback]
     )
     
-    trainer.train()
+    import os
     
-    # Save
-    print(f"\nSaving model to: {args.output_dir}")
-    model.decoder.save_pretrained(args.output_dir)
+    try:
+        trainer.train()
+    except KeyboardInterrupt:
+        print("\n\n[INFO] Training interrupted by user.")
+        print("[INFO] Checkpoints already saved in output_dir. Finding best one...")
     
+    # Save best model to final directory
+    # If training completed normally, load_best_model_at_end already loaded the best weights.
+    # If interrupted, we find the best checkpoint from saved ones.
+    final_dir = os.path.join(args.output_dir, "best")
+    os.makedirs(final_dir, exist_ok=True)
+    
+    # Check if trainer has best_model_checkpoint info
+    best_ckpt = getattr(trainer.state, 'best_model_checkpoint', None)
+    if best_ckpt and os.path.exists(best_ckpt):
+        print(f"\nBest checkpoint: {best_ckpt} (eval_loss={trainer.state.best_metric:.6f})")
+        # Copy best checkpoint to final dir
+        import shutil
+        if os.path.exists(final_dir):
+            shutil.rmtree(final_dir)
+        shutil.copytree(best_ckpt, final_dir)
+    else:
+        # Fallback: save current model state (may be last epoch or interrupted state)
+        print(f"\nSaving current model state to: {final_dir}")
+        model.decoder.save_pretrained(final_dir)
+        aux_state = {
+            'gcn': model.gcn.state_dict(),
+            'mlp1': model.mlp1.state_dict(),
+            'mlp2': model.mlp2.state_dict(),
+        }
+        torch.save(aux_state, os.path.join(final_dir, "aux_modules.pt"))
+    
+    print(f"Best model saved to: {final_dir}")
     print("Training complete!")
