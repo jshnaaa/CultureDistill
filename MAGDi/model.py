@@ -242,7 +242,8 @@ class MAGDiTrainer(Trainer):
             graph=inputs["graph"]
         )
 
-        return loss
+        # When return_outputs=True (evaluation), Trainer expects (loss, outputs) tuple
+        return (loss, {"loss": loss}) if return_outputs else loss
 
     def _get_raw_model(self):
         """Get the underlying MAGDi model, unwrapping accelerate if needed."""
