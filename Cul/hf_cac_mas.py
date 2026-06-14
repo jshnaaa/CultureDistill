@@ -339,26 +339,20 @@ class HF_CAC_MAS:
         elif self.task_type == "culturalbench":
             # CulturalBench: factual cultural knowledge MCQ (4-way)
             if self._is_qwen:
-                # [A/B TEST v3] Qwen Guardian: concise factual recall + anti-stereotype alert
-                # v2 had long step-by-step which HURT guardian accuracy (71.07→67.95%)
-                # v3: shorter prompt (like original 3-sentence) + anti-bias calibration
-                # [PRESERVED v2]: "Analyze... For EACH option... Think step by step..."
+                # [A/B TEST v2] Qwen: encourage deep step-by-step analysis of each option
+                # [PRESERVED v1]: "As Host-Culture Guardian... AUTHORITATIVE... less than three sentences"
                 user = (
                     f"TARGET CULTURE: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"You are the regional specialist for {target_country}. "
-                    f"Select the correct option (1, 2, 3, or 4).\n\n"
-                    f"IMPORTANT CALIBRATION:\n"
-                    f"- CulturalBench often tests COUNTER-INTUITIVE facts. The correct answer "
-                    f"may be what outsiders find surprising (e.g., a practice that locals "
-                    f"consider unusual despite stereotypes suggesting otherwise).\n"
-                    f"- Read the question VERY CAREFULLY. If it asks 'which is NOT common' or "
-                    f"'which is unusual', the answer is the practice that IS rare/uncommon, "
-                    f"even if it sounds normal to an outsider.\n"
-                    f"- Option 1 is correct ~24% of the time — do not systematically avoid it.\n\n"
-                    f"Think about specific cultural practices of {target_country}, then give "
-                    f"your answer. Explain in 2-3 sentences.\n\n"
-                    f"Reasoning: <brief factual reasoning>\n"
+                    f"Analyze this cultural knowledge question about {target_country}.\n"
+                    f"For EACH option, briefly consider whether it could be correct or "
+                    f"incorrect for {target_country} specifically (not the broader region).\n"
+                    f"Then select the most accurate answer.\n\n"
+                    f"Think step by step:\n"
+                    f"- What specific cultural fact does this question test?\n"
+                    f"- Which option matches verified cultural knowledge about {target_country}?\n"
+                    f"- Are there common misconceptions that might lead to a wrong answer?\n\n"
+                    f"Reasoning: <your step-by-step analysis>\n"
                     f"Answer (1, 2, 3, or 4):"
                 )
             else:
@@ -462,17 +456,19 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 if self._is_qwen:
-                    # [A/B TEST v3] Qwen Auditor Phase2: concise critical eval + anti-stereotype
-                    # [PRESERVED v2]: "critically evaluate... Do NOT simply agree..."
+                    # [A/B TEST v2] Qwen: Auditor sees discussion but evaluates independently
+                    # (v2 debate path: this is Phase 2 feedback, not asymmetric deference)
+                    # [PRESERVED v1]: "DEFER... Guardian has primary authority"
                     user = (
                         f"TARGET CULTURE: {target_country}\n\n"
                         f"{question}\n\n"
-                        f"Another expert answered:\n---\n{guardian_response}\n---\n\n"
-                        f"Do you agree or disagree? If the question has tricky wording "
-                        f"(negation, 'NOT common', 'unusual'), double-check which option "
-                        f"actually matches what the question is asking.\n"
-                        f"Give your own answer with brief reasoning (2-3 sentences).\n\n"
-                        f"Reasoning: <your evaluation>\n"
+                        f"Another expert has provided their analysis:\n"
+                        f"---\n{guardian_response}\n---\n\n"
+                        f"As an expert in [{agent_name}], critically evaluate their answer.\n"
+                        f"Do NOT simply agree — check their reasoning against what you know.\n"
+                        f"If they cite a specific cultural fact, verify it matches your knowledge.\n"
+                        f"If you have evidence for a different answer, state it clearly.\n\n"
+                        f"Reasoning: <your critical evaluation>\n"
                         f"Answer (1, 2, 3, or 4):"
                     )
                 else:
@@ -551,21 +547,19 @@ class HF_CAC_MAS:
                 )
             elif self.task_type == "culturalbench":
                 if self._is_qwen:
-                    # [A/B TEST v3] Qwen Auditor (independent): concise + anti-stereotype
-                    # v2 was too verbose (hurt diversity). v3: short, calibrated, independent
-                    # [PRESERVED v2]: "Analyze... For EACH option... Think step by step..."
+                    # [A/B TEST v2] Qwen: independent deep analysis (no deference, no 3-sentence limit)
+                    # [PRESERVED v1]: "Cross-Cultural Auditor... less than three sentences"
                     user = (
                         f"TARGET CULTURE: {target_country}\n\n"
                         f"{question}\n\n"
-                        f"As an expert in [{agent_name}], answer this cultural knowledge "
-                        f"question about {target_country}. Select the correct option (1, 2, 3, or 4).\n\n"
-                        f"CALIBRATION NOTES:\n"
-                        f"- The correct answer may be counter-intuitive or go against stereotypes.\n"
-                        f"- If the question uses negation ('NOT common', 'unusual', 'never done'), "
-                        f"read extra carefully — choose the option that IS genuinely rare.\n"
-                        f"- All options (1-4) are roughly equally likely to be correct.\n\n"
-                        f"Explain your answer in 2-3 sentences with specific cultural evidence.\n\n"
-                        f"Reasoning: <your reasoning>\n"
+                        f"Analyze this cultural knowledge question about {target_country}.\n"
+                        f"For EACH option, briefly consider whether it could be correct or "
+                        f"incorrect for {target_country} specifically.\n"
+                        f"Use your knowledge of [{agent_name}] to identify potential "
+                        f"cross-cultural confusions, but focus on what is factually "
+                        f"correct for {target_country}.\n\n"
+                        f"Think step by step and select the most accurate answer.\n\n"
+                        f"Reasoning: <your analysis>\n"
                         f"Answer (1, 2, 3, or 4):"
                     )
                 else:
@@ -677,33 +671,22 @@ class HF_CAC_MAS:
             )
         elif self.task_type == "culturalbench":
             if self._is_qwen:
-                # [A/B TEST v3] Qwen Judge: SMART ARBITRATION — beat simple majority vote
-                # v2 judge was equivalent to pure majority (876 vs 877). v3 must add value
-                # by identifying high-quality minority arguments.
-                # [PRESERVED v2]: "REGIONAL SPECIALIST... evaluate EVIDENCE QUALITY..."
+                # [A/B TEST v2] Qwen: evidence-quality Judge (no VETO authority)
+                # [PRESERVED v1]: "Guardian has VETO AUTHORITY when providing specific evidence"
                 user = (
                     f"TARGET CULTURE: {target_country}\n\n"
                     f"{question}\n\n"
-                    f"The REGIONAL SPECIALIST is [{guardian_name}]. "
-                    f"Multiple experts have answered this question and they DISAGREE.\n\n"
+                    f"The REGIONAL SPECIALIST is [{guardian_name}] (expertise area matches "
+                    f"{target_country}). However, all agents may be correct or incorrect.\n\n"
                     f"Agent responses:\n{responses_text}\n"
-                    f"YOUR TASK: Determine the CORRECT answer. The majority is NOT always right.\n\n"
-                    f"DECISION PROTOCOL:\n"
-                    f"1. QUESTION PARSING: First, re-read the question. If it uses negation "
-                    f"('NOT common', 'unusual', 'rarely', 'never'), identify what SPECIFIC "
-                    f"thing is being asked. Many errors come from misreading the question.\n"
-                    f"2. EVIDENCE AUDIT: For each proposed answer, check — does the agent give "
-                    f"a SPECIFIC, named cultural fact (tradition name, law, custom)? Or just "
-                    f"vague reasoning? Specific facts beat vague reasoning.\n"
-                    f"3. MINORITY PROTECTION: If a minority agent (even just 1) provides "
-                    f"SPECIFIC evidence that directly answers the question, prefer their "
-                    f"answer over a majority that only gives generic reasoning.\n"
-                    f"4. ANTI-STEREOTYPE CHECK: If the majority picks the 'obvious' stereotype "
-                    f"answer but a minority picks a counter-intuitive answer with evidence, "
-                    f"the counter-intuitive answer is more likely correct on CulturalBench.\n"
-                    f"5. REGIONAL SPECIALIST TIEBREAK: Only when evidence quality is truly "
-                    f"equal, prefer the Regional Specialist's answer.\n\n"
-                    f"Reasoning: <re-read question, then evaluate evidence for each answer>\n"
+                    f"Determine the correct answer by evaluating EVIDENCE QUALITY:\n"
+                    f"- Which agent cites the most specific, verifiable cultural facts?\n"
+                    f"- Is the reasoning logically consistent?\n"
+                    f"- Does the answer apply to {target_country} specifically (not just the region)?\n"
+                    f"- Do multiple agents independently agree? (stronger signal)\n"
+                    f"- If evidence is tied, give slight preference to the Regional Specialist.\n\n"
+                    f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
+                    f"Reasoning: <evaluate evidence quality from each agent>\n"
                     f"Answer (1, 2, 3, or 4):"
                 )
             else:
@@ -1171,40 +1154,21 @@ class HF_CAC_MAS:
                 f"Final decision:"
             )
         elif self.task_type in ("culturalbench", "blend"):
-            if self.task_type == "culturalbench" and self._is_qwen:
-                # [A/B TEST v3] Smart arbitration for debate disagreements
-                user = (
-                    f"TARGET CULTURE: {target_country}\n\n"
-                    f"{question}\n\n"
-                    f"Experts debated this question but STILL DISAGREE. You must decide.\n\n"
-                    f"*** Debate history ***\n"
-                    f"{feedback_text}"
-                    f"{debate_text}"
-                    f"*** End debate ***\n\n"
-                    f"DECISION RULES:\n"
-                    f"- Re-read the question carefully (watch for negation/tricky wording).\n"
-                    f"- An agent who CHANGED their answer during debate likely has weaker "
-                    f"conviction. An agent who MAINTAINED despite pressure likely has evidence.\n"
-                    f"- Prefer the answer backed by SPECIFIC cultural facts over vague claims.\n"
-                    f"- The correct answer may be counter-intuitive (CulturalBench design).\n\n"
-                    f"Final decision (1, 2, 3, or 4):"
-                )
-            else:
-                user = (
-                    f"Task: You are a judge responsible for making a final decision "
-                    f"based on the debate history between cultural experts. They have "
-                    f"debated the following cultural knowledge question about {target_country}. "
-                    f"Do NOT make any independent judgments; base your final decision "
-                    f"solely on the debate. Evaluate the factual accuracy of each argument "
-                    f"regarding cultural knowledge of {target_country}. "
-                    f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
-                    f"Question:\n{question}\n\n"
-                    f"*** Debate starts ***\n"
-                    f"{feedback_text}"
-                    f"{debate_text}"
-                    f"*** Debate ends ***\n\n"
-                    f"Final decision (1, 2, 3, or 4):"
-                )
+            user = (
+                f"Task: You are a judge responsible for making a final decision "
+                f"based on the debate history between cultural experts. They have "
+                f"debated the following cultural knowledge question about {target_country}. "
+                f"Do NOT make any independent judgments; base your final decision "
+                f"solely on the debate. Evaluate the factual accuracy of each argument "
+                f"regarding cultural knowledge of {target_country}. "
+                f"Respond with the correct option number (1, 2, 3, or 4).\n\n"
+                f"Question:\n{question}\n\n"
+                f"*** Debate starts ***\n"
+                f"{feedback_text}"
+                f"{debate_text}"
+                f"*** Debate ends ***\n\n"
+                f"Final decision (1, 2, 3, or 4):"
+            )
         else:
             user = (
                 f"TARGET CULTURE: {target_country}\n\n"
@@ -1374,9 +1338,7 @@ class HF_CAC_MAS:
         # Determine consensus levels:
         # For culturalbench/culturellm (MCQ-style): use pure majority vote
         # For other tasks (incl. NorMAD): use Guardian-weighted consensus
-        # [A/B TEST v3] Qwen + CulturalBench: STRONG majority (≥5/6) → accept directly
-        # Weak majority (3-4/6) → send to smart judge for content-based arbitration
-        # This addresses the key v2 finding: simple majority and judge were equivalent
+        # [A/B TEST v2] Qwen + CulturalBench: use PURE MAJORITY (v1 used Guardian-weighted)
         if self.task_type in ("culturalbench", "culturellm", "blend"):
             # Pure majority vote — no Guardian privilege for factual QA
             from collections import Counter as _Counter
@@ -1386,14 +1348,8 @@ class HF_CAC_MAS:
             total_voters = len(valid_answers)
 
             has_full_consensus = (len(set(valid_answers)) <= 1) if valid_answers else False
-            # [v3] For Qwen+CulturalBench: only accept as "majority" if STRONG (≥5/6)
-            # Weak majorities (3/6 or 4/6) go to judge for smart arbitration
-            # This sends more cases to the improved judge, giving it a chance to
-            # rescue minority-correct answers that simple voting would miss.
-            if self._is_qwen and self.task_type == "culturalbench":
-                guardian_has_support = (majority_count >= 5) and not has_full_consensus
-            else:
-                guardian_has_support = (majority_count > total_voters / 2) and not has_full_consensus
+            # Majority = more than half agree (2/3 or 3/3)
+            guardian_has_support = (majority_count > total_voters / 2) and not has_full_consensus
         else:
             guardian_has_support = False
             if guardian_answer and not guardian_failed:
@@ -1611,7 +1567,7 @@ class HF_CAC_MAS:
             valid_ans = [a for a in all_ans.values() if a is not None]
 
             # Determine consensus type
-            # [A/B TEST v3] Qwen + CulturalBench: STRONG majority (≥5/6) → accept directly
+            # [A/B TEST v2] Qwen + CulturalBench: use PURE MAJORITY vote (v1 used Guardian-weighted)
             if self.task_type in ("culturalbench", "culturellm", "blend"):
                 # Pure majority vote — no Guardian privilege for MCQ-style QA
                 from collections import Counter as _Counter
@@ -1623,11 +1579,7 @@ class HF_CAC_MAS:
                 majority_counts[si] = maj_cnt
 
                 has_full_consensus = (len(set(valid_ans)) <= 1) if valid_ans else False
-                # [v3] For Qwen+CulturalBench: only accept ≥5/6 as "majority"
-                if self._is_qwen and self.task_type == "culturalbench":
-                    guardian_has_support = (maj_cnt >= 5) and not has_full_consensus
-                else:
-                    guardian_has_support = (maj_cnt > total_voters / 2) and not has_full_consensus
+                guardian_has_support = (maj_cnt > total_voters / 2) and not has_full_consensus
             else:
                 has_full_consensus = (
                     len(set(valid_ans)) <= 1 if valid_ans else False

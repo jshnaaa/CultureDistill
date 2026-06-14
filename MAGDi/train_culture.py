@@ -513,7 +513,6 @@ if __name__ == '__main__':
         dataloader_pin_memory=True,
         dataloader_num_workers=2,
         max_grad_norm=1.0,
-        gradient_checkpointing=True,
     )
     
     # Early stopping: stop if eval_loss doesn't improve for 2 consecutive epochs
