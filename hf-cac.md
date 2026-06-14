@@ -680,9 +680,30 @@ HF-CAC 框架通过 `--num_agents` 参数支持 2~6 个智能体的消融实验�
 
 ### 2.8 各 Agent 完整 Prompt 记录
 
-#### 2.8.1 Guardian System Prompt
+> 本节按**数据集**分别记录三套完整 prompt：**NorMAD**、**CulturalBench**、**BLEnD**。
 
-所有 6 个文化 Agent 共享同一模板，仅文化区域名称和 cognitive foundation 描述不同：
+#### 2.8.0 数据集 → task_type → 代码分支的路由机制
+
+`hf_cac_mas.py` 中所有 prompt 构造函数都依据 `self.task_type` 选择分支，`task_type` 来自 `generate_hf_cac_data.py` 读取的配置文件 `mas.task_type` 字段：
+
+| 数据集 | 配置文件 | `task_type` 取值 | 代码分支 | 答案空间 |
+|--------|---------|-----------------|---------|---------|
+| NorMAD | `hf_cac_config.yaml` | 配置中**无** `task_type` 字段 → 默认 `"normad"` | **`else` 兜底分支** | 1 / 2 / 3（三分类） |
+| CulturalBench | `hf_cac_config_culturalbench.yaml` | `task_type: "culturalbench"` | `elif task_type == "culturalbench"` | 1 / 2 / 3 / 4（四选一 MCQ） |
+| BLEnD | `hf_cac_config_blend.yaml` | `task_type: "blend"` | `elif task_type == "blend"` | 1 / 2 / 3 / 4（四选一 MCQ） |
+
+> 关键点：**NorMAD 没有专属分支**，它落入所有 `_build_*` 函数的 `else` 兜底分支；CulturalBench 与 BLEnD 各有独立 `elif` 分支。
+
+此外，三个数据集的**协作流程**不同（见 `inference()`）：
+
+- **NorMAD**：Guardian 优先生成 → Auditor **单向**看到 Guardian 回答后生成 → 条件触发 Judge（带 Guardian 一票否决权 / Guardian 失效时的亲和度仲裁）。
+- **CulturalBench / BLEnD**：Auditor **独立**起步（不看 Guardian）→ MAD 式**对称辩论**（feedback 互评 → final_decision 重新决策）→ **纯多数投票**（无 Guardian 特权），仅在分歧时触发 Judge。
+
+---
+
+#### 2.8.1 NorMAD 数据集（task_type=normad，三分类 1/2/3）
+
+##### (1) Guardian System Prompt
 
 ```
 You are the HOST-CULTURE GUARDIAN for this question.
@@ -696,24 +717,7 @@ If the described behavior is culturally neutral, ambiguous, or universally human
 Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
 ```
 
-中文翻译：
-
-```
-你是本题的【主场文化守护者】。
-目标文化属于你的专业领域（{culture_area}文化）。
-你的认知基础：{cognitive_foundation_description}
-你的职责是以权威身份确认或纠正关于目标文化的文化主张。
-你在此话题上拥有【首要权威】。请具体说明，引用具体的文化习俗名称，解释为什么某些选项基于深层文化知识是正确/错误的。
-如果其他智能体提出与你专业知识相冲突的答案，请用具体的文化证据坚定地纠正他们。
-重要提示：并非所有行为在每种文化中都有明确的接受或拒绝。
-如果所描述的行为在文化上是中性的、模糊的，或者是普遍的人类行为（并非特别与目标文化的规范相关），你应该回答"3"以表示不确定性。
-当行为在文化上无关紧要时强行做出确定性接受/拒绝判断，恰恰体现了更少的文化专业能力，而非更多。
-格式：Reasoning: <你的权威文化分析>\nAnswer: <数字>
-```
-
-其中 `{culture_area}` 取值为：Western & Anglo-Saxon / Latin American / Sub-Saharan African / East-Asian / Islamic & Middle-Eastern / South & Southeast Asian。
-
-各文化区域的 cognitive foundation 描述如下：
+其中 `{culture_area}` 取值为：Western & Anglo-Saxon / Latin American / Sub-Saharan African / East-Asian / Islamic & Middle-Eastern / South & Southeast Asian。各文化区域的 cognitive foundation 描述如下：
 
 | 文化区域 | Cognitive Foundation |
 |---------|---------------------|
@@ -724,9 +728,7 @@ Format: Reasoning: <your authoritative cultural analysis>\nAnswer: <number>
 | Islamic & Middle-Eastern | Sharia law, Eid al-Fitr, Eid al-Adha, unique halal dietary prohibitions, the sanctity of the color green and the right hand, and other Islamic cultural norms prevalent in the Middle East, North Africa, and parts of Southeast Asia |
 | South & Southeast Asian | Buddhist and Hindu traditions, as well as the unique folk customs and cultural taboos of tropical regions (such as not touching someone's head), prevalent in India, Thailand, Malaysia, etc. |
 
-#### 2.8.2 Auditor System Prompt
-
-同样 6 个 Agent 共享模板，仅文化背景名和 cognitive foundation 不同：
+##### (2) Auditor System Prompt
 
 ```
 You are a CROSS-CULTURAL AUDITOR from {culture_area} cultural background.
@@ -739,20 +741,7 @@ Your cross-cultural perspective is especially valuable for identifying behaviors
 Format: Reasoning: <your cross-cultural comparative analysis>\nAnswer: <number>
 ```
 
-中文翻译：
-
-```
-你是一名来自{culture_area}文化背景的【跨文化审计员】。
-你的认知基础：{cognitive_foundation_summary}
-目标文化不属于你的主要专业领域。
-你的职责是提供【对比性视角】：指出你的文化与目标文化之间的相似性/差异性，但在关于目标文化的具体事实主张上，应【参考】主场文化守护者的意见。
-在适当的地方明确承认不确定性。
-如果某行为看起来是普遍的人类行为或文化中性的（并非特定于任何文化），请明确指出这一点，并考虑回答"3"（中性/不确定）。
-你的跨文化视角在识别那些不具有文化特异性意义的行为方面尤为有价值。
-格式：Reasoning: <你的跨文化对比分析>\nAnswer: <数字>
-```
-
-#### 2.8.3 Judge System Prompt
+##### (3) Judge System Prompt
 
 ```
 You are a neutral cultural fact-checker and final arbitrator.
@@ -784,77 +773,30 @@ When evaluating:
    - Evaluate each Auditor's reasoning chain for concrete cultural references (practices, traditions, norms) that align with the target culture context.
 ```
 
-中文翻译：
-
-```
-你是一名中立的文化事实核查员和最终仲裁者。
-你将收到【原始问题】以及所有文化专家智能体的【完整回答】，包括他们的初始独立分析和协商/辩论环节的回答。
-其中一位智能体已被指定为【主场文化守护者】——即文化专业能力与问题中目标文化最匹配的智能体。
-
-你的任务是综合所有可用信息——问题本身、每个智能体的初始推理、以及他们在辩论中立场的演变——得出最具文化准确性的答案。
-
-评估时：
-1. 对主场文化守护者关于目标文化的事实性主张给予【更高权重】。
-2. 守护者拥有【一票否决权】：如果守护者的答案与多数不同，且守护者提供了具体的文化证据，则优先采信守护者的答案，除非其他智能体提出了关于目标文化的同等具体的反驳证据。
-3. 跨文化审计员提供有价值的对比视角，但他们关于目标文化的主张应与守护者的专业知识进行验证。
-4. 关注智能体在辩论中立场的变化——通过基于证据的讨论达成的共识比初始分歧更可靠。
-5. 基于可验证的文化事实做出最终决定，以守护者的意见作为首要参考。
-6. 关键——三分类决策：
-   - 仅当有具体证据表明该行为在文化上是可接受的时，才回答"1"
-   - 仅当有具体证据表明该行为在文化上是不可接受的时，才回答"2"
-   - 以下情况回答"3"：(a) 该行为不具有文化特异性（普遍人类行为），或 (b) 目标国家内对此行为的文化规范存在分歧，或 (c) 智能体提出了相互冲突的主张且无决定性证据，或 (d) 该行为在目标文化语境中根本不具有文化效价
-   - 当在强制判断和"中性"之间犹豫时，倾向选择"3"——一个经过校准的"我不确定"比一个自信的错误答案更有价值。
-7. Guardian 失效协议——跨文化谱系相似度仲裁：
-   如果主场文化守护者未能提供有效答案（格式崩溃、推理为空或明确表示不确定），不要回退到简单多数投票。而是激活跨文化亲缘度加权仲裁：
-   - 你将收到【文化亲缘度分数】，表示每个审计员的文化背景与目标文化的接近程度。
-   - 对亲缘度分数更高的审计员给予【更高权重】——他们与目标文化的接近性使其推理更为可靠。
-   - 即使在数量上支持某答案的智能体较少，只要最高亲缘度的审计员提供了具体的文化证据，仍倾向采信其答案。
-   - 审查每个审计员的推理链中是否包含具体的文化引用（习俗、传统、规范），并评估其与目标文化语境的对齐度。
-```
-
-#### 2.8.4 Guardian Per-Round User Prompt（Phase 1）
-
-Guardian 在第一阶段独立生成时接收的用户消息：
+##### (4) Guardian Per-Round User Prompt（Phase 1）
 
 ```
 TARGET CULTURE: {target_country}
 
 {question}
 
-As the Host-Culture Guardian for {target_country}, provide your AUTHORITATIVE analysis.
-Cite specific cultural practices, traditions, or norms by name. Explain why certain options align or conflict with the target culture's values.
+As the Host-Culture Guardian for {target_country}, provide your AUTHORITATIVE analysis. Cite specific cultural practices, traditions, or norms by name. Explain why certain options align or conflict with the target culture's values.
 
 Answer choices:
 1 = The behavior is clearly ACCEPTABLE in {target_country}'s culture
 2 = The behavior is clearly UNACCEPTABLE in {target_country}'s culture
-3 = The behavior is NEUTRAL/INDETERMINATE — it has no specific cultural valence in {target_country}, or cultural norms on this topic vary significantly within the country, or the behavior is universally human rather than culturally specific
+3 = The behavior is NEUTRAL/INDETERMINATE — it has no specific cultural valence
+    in {target_country}, or cultural norms on this topic vary significantly
+    within the country, or the behavior is universally human rather than
+    culturally specific
 
 Reasoning: <your authoritative cultural analysis>
 Answer: <number>
 ```
 
-中文翻译：
+##### (5) Auditor Per-Round User Prompt
 
-```
-目标文化：{target_country}
-
-{question}
-
-作为{target_country}的主场文化守护者，请提供你的【权威分析】。
-引用具体的文化习俗、传统或规范名称。解释为什么某些选项与目标文化的价值观一致或冲突。
-
-答案选项：
-1 = 该行为在{target_country}文化中明确【可接受】
-2 = 该行为在{target_country}文化中明确【不可接受】
-3 = 该行为是【中性/不确定的】——在{target_country}没有特定的文化效价，或该国内对此话题的文化规范差异显著，或该行为是普遍人类行为而非文化特异性行为
-
-Reasoning: <你的权威文化分析>
-Answer: <数字>
-```
-
-#### 2.8.5 Auditor Per-Round User Prompt
-
-**（a）有协商模式（negotiation_rounds=1）：Auditor 看到 Guardian 回答后生成**
+**(a) 协商模式（看到 Guardian 回答）：**
 
 ```
 TARGET CULTURE: {target_country}
@@ -875,58 +817,20 @@ Reasoning: <your cross-cultural comparative analysis>
 Answer: <number>
 ```
 
-中文翻译：
-
-```
-目标文化：{target_country}
-
-{question}
-
-【主场文化守护者】[{guardian_name}] 已提供其权威分析：
----
-{guardian_response}
----
-
-作为来自 [{agent_name}] 背景的跨文化审计员：
-1. 提供你的对比视角（你的文化与{target_country}之间的相似性/差异性）。
-2. 如果你同意守护者，请从你的文化视角解释原因。
-3. 如果你不同意，请提供具体的反驳证据——但要承认守护者在{target_country}问题上拥有首要权威。
-
-Reasoning: <你的跨文化对比分析>
-Answer: <数字>
-```
-
-**（b）独立模式（negotiation_rounds=0）：Auditor 不看 Guardian 回答**
+**(b) 独立模式（不看 Guardian）：**
 
 ```
 TARGET CULTURE: {target_country}
 
 {question}
 
-As a Cross-Cultural Auditor from [{agent_name}] background, provide your comparative perspective on this question about {target_country}. Note
-similarities and differences with your own cultural framework, and acknowledge uncertainty where the target culture differs from your expertise.
+As a Cross-Cultural Auditor from [{agent_name}] background, provide your comparative perspective on this question about {target_country}. Note similarities and differences with your own cultural framework, and acknowledge uncertainty where the target culture differs from your expertise.
 
 Reasoning: <your cross-cultural comparative analysis>
 Answer: <number>
 ```
 
-中文翻译：
-
-```
-目标文化：{target_country}
-
-{question}
-
-作为来自 [{agent_name}] 背景的跨文化审计员，请提供你对关于{target_country}这个问题的对比视角。指出与你自身文化框架的相似性和差异性，
-并在目标文化与你的专业领域不同时承认不确定性。
-
-Reasoning: <你的跨文化对比分析>
-Answer: <数字>
-```
-
-#### 2.8.6 Judge Per-Round User Prompt
-
-**（a）正常模式（Guardian 有效）：**
+##### (6) Judge Per-Round User Prompt
 
 ```
 TARGET CULTURE: {target_country}
@@ -936,21 +840,9 @@ TARGET CULTURE: {target_country}
 The HOST-CULTURE GUARDIAN is [{guardian_name}] — their cultural expertise most closely matches {target_country}.
 
 Agent responses:
-
-[{agent_1_name}] (HOST-CULTURE GUARDIAN):
-{agent_1_response}
-
-[{agent_2_name}] (Cross-Cultural Auditor):
-{agent_2_response}
-
-[{agent_3_name}] (Cross-Cultural Auditor):
-{agent_3_response}
-
-[{agent_4_name}] (Cross-Cultural Auditor):
-{agent_4_response}
-
-[{agent_5_name}] (Cross-Cultural Auditor):
-{agent_5_response}
+[{agent_name}] (HOST-CULTURE GUARDIAN / Cross-Cultural Auditor):
+{response}
+... (所有 active agent)
 
 Determine the correct answer. Remember:
 - Give HIGHER WEIGHT to the Guardian's specific cultural claims
@@ -958,16 +850,19 @@ Determine the correct answer. Remember:
 - Cross-Cultural Auditors provide valuable comparative context
 - Base your final decision on verifiable cultural facts
 
-CALIBRATION REMINDER: Approximately 28% of questions in this dataset have "neutral/indeterminate (3)" as the correct answer. If you find yourself never outputting "3", you are likely over-committing to binary judgments.
-Cultural expertise includes knowing when a behavior has NO specific cultural significance in the target culture.
+CALIBRATION REMINDER: Approximately 28% of questions in this dataset have
+"neutral/indeterminate (3)" as the correct answer. If you find yourself
+never outputting "3", you are likely over-committing to binary judgments.
+Cultural expertise includes knowing when a behavior has NO specific
+cultural significance in the target culture.
 
 Reasoning: <your reasoning, explicitly referencing the Guardian's claims>
 Answer: <number>
 ```
 
-**（b）Guardian 失效模式（Cultural Affinity Arbitration）：**
+##### (7) Judge 失效兜底 User Prompt
 
-当系统检测到 Guardian 失效（格式崩溃/答案不可提取/明确放弃）时，自动切换为以下 prompt：
+当检测到 Guardian 失效（格式崩溃 / 答案不可提取 / 明确放弃）时触发，注入文化亲缘度分数进行加权仲裁：
 
 ```
 TARGET CULTURE: {target_country}
@@ -977,23 +872,14 @@ TARGET CULTURE: {target_country}
 ⚠️ GUARDIAN FAILURE: The HOST-CULTURE GUARDIAN [{guardian_name}] has FAILED to provide a valid answer for this question. Activate Cultural Affinity Arbitration protocol.
 
 CULTURAL AFFINITY SCORES (proximity to {target_country}'s culture):
-  - [{auditor_1_name}]: {affinity_score_1}
-  - [{auditor_2_name}]: {affinity_score_2}
-  - [{auditor_3_name}]: {affinity_score_3}
-  - [{auditor_4_name}]: {affinity_score_4}
-  - [{auditor_5_name}]: {affinity_score_5}
+  - [{auditor_name}]: {affinity_score}
+  ...
 
 Agent responses:
-
 [{guardian_name}] (HOST-CULTURE GUARDIAN — FAILED, no valid answer):
 {guardian_response}
-
-[{auditor_1_name}] (Cross-Cultural Auditor, affinity to target culture: {score_1}):
-{auditor_1_response}
-
-[{auditor_2_name}] (Cross-Cultural Auditor, affinity to target culture: {score_2}):
-{auditor_2_response}
-
+[{auditor_name}] (Cross-Cultural Auditor, affinity to target culture: {score}):
+{auditor_response}
 ...
 
 As the final arbitrator under Guardian Failure Protocol:
@@ -1002,92 +888,392 @@ As the final arbitrator under Guardian Failure Protocol:
 - If the highest-affinity Auditor provides specific cultural evidence, prefer their answer even if outnumbered.
 - Evaluate each Auditor's reasoning for concrete cultural references.
 
-CALIBRATION REMINDER: Approximately 28% of questions in this dataset have "neutral/indeterminate (3)" as the correct answer. If you find yourself never outputting "3", you are likely over-committing to binary judgments.
-Cultural expertise includes knowing when a behavior has NO specific cultural significance in the target culture.
+CALIBRATION REMINDER: Approximately 28% of questions in this dataset have
+"neutral/indeterminate (3)" as the correct answer. If you find yourself
+never outputting "3", you are likely over-committing to binary judgments.
+Cultural expertise includes knowing when a behavior has NO specific
+cultural significance in the target culture.
 
 Reasoning: <your reasoning, referencing affinity-weighted evidence>
 Answer: <number>
 ```
 
-中文翻译（正常模式）：
+> 说明：NorMAD 在 `negotiation_rounds>0` 时不走 MAD 对称辩论流程，因此 `_build_feedback_prompt` / `_build_final_decision_prompt` / `_build_judge_disagreement_prompt` 的 **else 分支**（无 MCQ 约束、结尾仅 `Answer:`）仅在 NorMAD 走辩论时才会用到；标准 NorMAD 流程主要使用上面 (4)~(7)。
+
+---
+
+#### 2.8.2 CulturalBench 数据集（task_type=culturalbench，四选一 MCQ 1/2/3/4）
+
+##### (1) Guardian System Prompt
 
 ```
-目标文化：{target_country}
+You are a cultural expert deeply versed in {地域} cultures ({代表国家}). You understand {该地域的关键文化特征}. Apply this lens when reasoning about cultural practices.
+```
+
+6 个 agent 的具体文本如下：
+
+| Agent | guardian_prompt 文本 |
+|-------|---------------------|
+| Western & Anglo-Saxon | You are a cultural expert deeply versed in Western and Anglo-Saxon cultures (USA, UK, Canada, Australia, Western & Eastern Europe). You understand individualism, direct communication, secular-rational values, low power distance, and informal social etiquette. Apply this lens when reasoning about cultural practices. |
+| Latin American | You are a cultural expert deeply versed in Latin American cultures (Brazil, Mexico, Argentina, Colombia, and beyond). You understand warm interpersonal relationships, family centrality, Catholic-rooted traditions, festive social life, fluid time orientation, and high-context communication. Apply this lens when reasoning about cultural practices. |
+| Sub-Saharan African | You are a cultural expert deeply versed in Sub-Saharan African cultures (Nigeria, Kenya, Ethiopia, Ghana, South Africa, and beyond). You understand communalism (ubuntu), extended kinship networks, respect for elders and ancestors, oral traditions, and the blend of indigenous beliefs with Christianity and Islam. Apply this lens when reasoning about cultural practices. |
+| East-Asian | You are a cultural expert deeply versed in East-Asian cultures (China, Japan, Korea, Taiwan, Mongolia). You understand collectivism, Confucian hierarchy, filial piety, face (mianzi) and social harmony, indirect communication, gift-giving and dining etiquette, and respect for age and seniority. Apply this lens when reasoning about cultural practices. |
+| Islamic & Middle-Eastern | You are a cultural expert deeply versed in Islamic and Middle-Eastern cultures (Arab states, Iran, Turkey, Egypt, North Africa). You understand Islamic religious norms (prayer, halal, Ramadan), honor and hospitality, gender-role conventions, family and tribal structures, and formal codes of respect. Apply this lens when reasoning about cultural practices. |
+| South & Southeast Asian | You are a cultural expert deeply versed in South and Southeast Asian cultures (India, Pakistan, Bangladesh, Thailand, Vietnam, Indonesia, Philippines, and beyond). You understand religious plurality (Hinduism, Buddhism, Islam), caste and social hierarchy, joint-family systems, festivals and rituals, dietary customs, and hospitality. Apply this lens when reasoning about cultural practices. |
+
+##### (2) Auditor System Prompt
+
+来源：`hf_cac_config_culturalbench.yaml` 中每个 agent 的 `auditor_prompt`，与该 agent 的 `guardian_prompt` **文本完全一致**（即 Guardian 与 Auditor 共用同一段"文化专家"人设，不区分主场/跨文化角色）。
+
+##### (3) Judge System Prompt
+
+```
+You are a helpful assistant with expertise in cross-cultural knowledge and practices.
+```
+
+##### (4) Guardian Per-Round User Prompt
+
+```
+Task: You will be given a cultural knowledge question about {target_country}. Select the correct option number. Do not make any extra inferences outside of the given context and country. Only align to the country given. Think step by step about the cultural practices of {target_country}, then respond with the correct option number (1, 2, 3, or 4). Explain your answer in less than three sentences.
+
+Question:
+{question}
+Answer (1, 2, 3, or 4):
+```
+
+##### (5) Auditor Per-Round User Prompt
+
+**(a) 协商模式（看到对方回答，作为 discussant）：**
+
+```
+Task: You are currently discussing the following cultural knowledge question about {target_country} with the other discussant.
+
+Question:
+{question}
+Discussant: {guardian_response}
+
+Based on the above discussion, critically think and make your final decision. Respond with the correct option number (1, 2, 3, or 4).
+Answer (1, 2, 3, or 4):
+```
+
+**(b) 独立模式（注入 Auditor 自身文化视角，提升集成多样性）：**
+
+```
+From your perspective as an expert in [{agent_name}], you will be given a cultural knowledge question about {target_country}. Select the correct option number. Do not make any extra inferences outside of the given context and country. Only align to the country given. Draw on your cultural expertise and reason step by step about the cultural practices of {target_country} (noting any similarities or contrasts with cultures you know best), then respond with the correct option number (1, 2, 3, or 4). Explain your answer in less than three sentences.
+
+Question:
+{question}
+Answer (1, 2, 3, or 4):
+```
+
+##### (6) Feedback User Prompt（MAD Stage 2）
+
+CulturalBench 走 MAD 对称辩论，每个 agent 互评后给出反馈：
+
+```
+TARGET CULTURE: {target_country}
 
 {question}
 
-【主场文化守护者】是 [{guardian_name}] —— 其文化专业能力与{target_country}最为匹配。
+Your initial answer:
+  [{agent_name}]: {own_response}
 
-各智能体回答：
-
-[{agent_1_name}]（主场文化守护者）：
-{agent_1_response}
-
-[{agent_2_name}]（跨文化审计员）：
-{agent_2_response}
-
-[{agent_3_name}]（跨文化审计员）：
-{agent_3_response}
-
-[{agent_4_name}]（跨文化审计员）：
-{agent_4_response}
-
-[{agent_5_name}]（跨文化审计员）：
-{agent_5_response}
-
-确定正确答案。请记住：
-- 对守护者的具体文化主张给予【更高权重】
-- 守护者在提供具体证据时拥有【一票否决权】
-- 跨文化审计员提供有价值的对比背景信息
-- 基于可验证的文化事实做出最终决定
-
-校准提醒：本数据集中约 28% 的问题的正确答案是"中性/不确定(3)"。
-如果你发现自己从未输出"3"，你很可能过度投入于二元判断。
-文化专业能力包括知道某种行为在目标文化中何时不具有特定文化意义。
-
-Reasoning: <你的推理，需明确引用守护者的主张>
-Answer: <数字>
-```
-
-中文翻译（Guardian 失效模式）：
-
-```
-目标文化：{target_country}
-
-{question}
-
-⚠️ 守护者失效：【主场文化守护者】[{guardian_name}] 未能为此问题提供有效答案。
-激活跨文化谱系相似度仲裁协议。
-
-文化亲缘度分数（与{target_country}文化的接近度）：
-  - [{auditor_1_name}]: {affinity_score_1}
-  - [{auditor_2_name}]: {affinity_score_2}
+Other experts' answers:
+  [{other_name}]: {other_response}
   ...
 
-各智能体回答：
-[{guardian_name}]（主场文化守护者 - 已失效，无有效答案）：
-{guardian_response}
-
-[{auditor_1_name}]（跨文化审计员，目标文化亲缘度：{score_1}）：
-{auditor_1_response}
-...
-
-作为 Guardian 失效协议下的最终仲裁者：
-- 不要使用简单多数投票。
-- 对亲缘度分数更高的审计员给予【更高权重】。
-- 如果最高亲缘度审计员提供了具体的文化证据，即使人数少数也倾向采信。
-- 审查每个审计员的推理中是否包含具体的文化引用。
-
-校准提醒：...（同上）
-
-Reasoning: <你的推理，需引用亲缘度加权证据>
-Answer: <数字>
+Respond to the other experts by providing any relevant feedback. If you disagree with anyone, explain why with cultural evidence. Respond in less than three sentences.
+Response:
 ```
 
-#### 2.8.7 采样温度配置
+##### (7) Final Decision User Prompt（MAD Stage 3）
 
-| 角色 | Temperature | 设计意图 |
-|------|-------------|--------|
-| Guardian | 0.5 | 低温确保权威回答精确、一致 |
-| Auditor | 0.9 | 高温提供多样的跨文化对比视角 |
-| Judge | 0.3 | 极低温确保裁决稳定性 |
+```
+TARGET CULTURE: {target_country}
+
+{question}
+
+=== Discussion Summary ===
+Your initial answer:
+  [{agent_name}]: {own_response}
+
+Other experts' answers:
+  [{other_name}]: {other_response}
+  ...
+
+Feedback from all experts:
+  [{agent_name}] (you): {own_feedback}
+  [{other_name}]: {other_feedback}
+  ...
+=== End Discussion ===
+
+Based on the above discussion, critically think and make your final decision. Respond with the correct option number (1, 2, 3, or 4).
+Answer (1, 2, 3, or 4):
+```
+
+##### (8) Judge User Prompt
+
+```
+Task: You are a judge responsible for making a final decision based on the opinions of cultural experts about {target_country}. Do NOT make any independent judgments; base your final decision solely on the expert opinions below. Evaluate the factual accuracy of each argument regarding cultural knowledge of {target_country}. Respond with the correct option number (1, 2, 3, or 4).
+
+Question:
+{question}
+
+*** Expert opinions ***
+  [{name}] (Guardian/Auditor): {response}
+  ...
+*** End opinions ***
+
+Final decision (1, 2, 3, or 4):
+```
+
+##### (9) Judge 分歧仲裁 User Prompt（MAD Stage 4）
+
+仅在 agents 最终决策仍分歧时触发：
+
+```
+Task: You are a judge responsible for making a final decision based on the debate history between cultural experts. They have debated the following cultural knowledge question about {target_country}. Do NOT make any independent judgments; base your final decision solely on the debate. Evaluate the factual accuracy of each argument regarding cultural knowledge of {target_country}. Respond with the correct option number (1, 2, 3, or 4).
+
+Question:
+{question}
+
+*** Debate starts ***
+  [{name}]: {feedback}
+  [{name}] (HOST-CULTURE GUARDIAN / Cross-Cultural Auditor) final answer: {response}
+  ...
+*** Debate ends ***
+
+Final decision (1, 2, 3, or 4):
+```
+
+##### (10) Judge 失效兜底 User Prompt
+
+兜底 prompt 的头部（GUARDIAN FAILURE + 亲缘度分数 + agent responses + "Do NOT use simple majority voting…" 四条仲裁规则）与 NorMAD 共用，仅结尾不同：
+
+```
+... (同 NorMAD 兜底 prompt 头部)
+
+Respond with the correct option number (1, 2, 3, or 4).
+
+Final decision (1, 2, 3, or 4):
+```
+
+---
+
+#### 2.8.3 BLEnD 数据集（task_type=blend，四选一 MCQ 1/2/3/4）
+
+> BLEnD 关注**日常生活的事实性文化知识**（具体名称、数字、地点），干扰项往往是**其他国家**的正确答案，且可能存在 "not-applicable" 选项。
+
+##### (1) Guardian System Prompt
+
+来源：`hf_cac_config_blend.yaml` 中每个 agent 的 `guardian_prompt`。**所有 6 个 agent 的 `guardian_prompt` 文本完全相同**，且不含地域专家人设：
+
+```
+You are a helpful assistant with expertise in cross-cultural knowledge and practices.
+```
+
+##### (2) Auditor System Prompt
+
+每个 agent 的 `auditor_prompt`，与 `guardian_prompt` 文本相同：
+
+```
+You are a helpful assistant with expertise in cross-cultural knowledge and practices.
+```
+
+##### (3) Judge System Prompt
+
+```
+You are a helpful assistant with expertise in cross-cultural knowledge and practices.
+```
+
+> 即 BLEnD 的 Guardian / Auditor / Judge **三者 system prompt 完全统一**为这一句通用助手提示，不做任何角色或地域区分。
+
+##### (4) Guardian Per-Round User Prompt
+
+```
+Task: You will be given a question about everyday life and daily cultural knowledge in {target_country}. Select the correct option number.
+
+IMPORTANT:
+- Focus ONLY on {target_country}. Some options may be correct for other countries but wrong for {target_country}.
+- If 'not-applicable' is an option, it may be correct when the premise does not apply to {target_country}.
+- Base your answer on specific factual knowledge (names, places, times, customs) of {target_country}.
+
+Question:
+{question}
+Answer (1, 2, 3, or 4):
+```
+
+##### (5) Auditor Per-Round User Prompt
+
+**(a) 协商模式（看到对方回答）：**
+
+```
+Task: You are discussing the following everyday cultural knowledge question about {target_country} with another expert.
+
+Question:
+{question}
+Other expert's answer: {guardian_response}
+
+Critically evaluate their answer. Remember:
+- Some options are facts about OTHER countries, not {target_country}.
+- If you have different knowledge about {target_country}, trust your own reasoning.
+- 'not-applicable' can be correct if the premise doesn't apply.
+Provide your own answer with brief reasoning.
+Answer (1, 2, 3, or 4):
+```
+
+**(b) 独立模式（不看对方回答，与 Guardian 同结构）：**
+
+```
+Task: You will be given a question about everyday life and daily cultural knowledge in {target_country}. Select the correct option number.
+
+IMPORTANT:
+- Focus ONLY on {target_country}. Some options may be correct for other countries but wrong for {target_country}.
+- If 'not-applicable' is an option, it may be correct when the premise does not apply to {target_country}.
+- Base your answer on specific factual knowledge (names, places, times, customs) of {target_country}.
+
+Question:
+{question}
+Answer (1, 2, 3, or 4):
+```
+
+##### (6) Feedback User Prompt（MAD Stage 2）
+
+与 CulturalBench 共用同一 MCQ 分支文本：
+
+```
+TARGET CULTURE: {target_country}
+
+{question}
+
+Your initial answer:
+  [{agent_name}]: {own_response}
+
+Other experts' answers:
+  [{other_name}]: {other_response}
+  ...
+
+Respond to the other experts by providing any relevant feedback. If you disagree with anyone, explain why with cultural evidence. Respond in less than three sentences.
+Response:
+```
+
+##### (7) Final Decision User Prompt（MAD Stage 3）
+
+与 CulturalBench 共用同一 MCQ 分支文本：
+
+```
+TARGET CULTURE: {target_country}
+
+{question}
+
+=== Discussion Summary ===
+Your initial answer:
+  [{agent_name}]: {own_response}
+
+Other experts' answers:
+  [{other_name}]: {other_response}
+  ...
+
+Feedback from all experts:
+  [{agent_name}] (you): {own_feedback}
+  [{other_name}]: {other_feedback}
+  ...
+=== End Discussion ===
+
+Based on the above discussion, critically think and make your final decision. Respond with the correct option number (1, 2, 3, or 4).
+Answer (1, 2, 3, or 4):
+```
+
+##### (8) Judge User Prompt
+
+注意：BLEnD 的 Judge prompt 措辞与 CulturalBench **不同**，强调跨国干扰项的甄别：
+
+```
+Task: You are a judge resolving a disagreement between experts about everyday cultural knowledge in {target_country}.
+
+IMPORTANT: Some options may be facts true for other countries but wrong for {target_country}. Evaluate which expert provides the most accurate factual knowledge specifically about {target_country}.
+If experts disagree, prefer the answer with concrete evidence specific to {target_country}.
+
+Question:
+{question}
+
+*** Expert opinions ***
+  [{name}] (Guardian/Auditor): {response}
+  ...
+*** End opinions ***
+
+Final decision (1, 2, 3, or 4):
+```
+
+##### (9) Judge 分歧仲裁 User Prompt（MAD Stage 4）
+
+与 CulturalBench 共用：
+
+```
+Task: You are a judge responsible for making a final decision based on the debate history between cultural experts. They have debated the following cultural knowledge question about {target_country}. Do NOT make any independent judgments; base your final decision solely on the debate. Evaluate the factual accuracy of each argument regarding cultural knowledge of {target_country}. Respond with the correct option number (1, 2, 3, or 4).
+
+Question:
+{question}
+
+*** Debate starts ***
+  [{name}]: {feedback}
+  [{name}] (HOST-CULTURE GUARDIAN / Cross-Cultural Auditor) final answer: {response}
+  ...
+*** Debate ends ***
+
+Final decision (1, 2, 3, or 4):
+```
+
+##### (10) Judge 失效兜底 User Prompt
+
+与 CulturalBench 共用：
+
+```
+... (同 NorMAD 兜底 prompt 头部)
+
+Respond with the correct option number (1, 2, 3, or 4).
+
+Final decision (1, 2, 3, or 4):
+```
+
+---
+
+#### 2.8.4 采样温度配置
+
+三个数据集采用相同的温度设计意图（具体数值以各自配置文件为准）：
+
+| 角色 / 阶段 | Temperature | 设计意图 |
+|------------|-------------|--------|
+| Guardian（初始 / 最终决策） | 低温（约 0.5） | 确保权威/最终回答精确、一致 |
+| Auditor（互评 feedback） | 高温（约 0.9） | 提供多样的跨文化对比视角，避免趋同 |
+| Judge（裁决） | 极低温（约 0.3） | 确保裁决稳定性 |
+
+> CulturalBench/BLEnD 的 MAD 辩论流程中，feedback 阶段使用 Auditor 高温采样以保持观点多样性，final_decision 阶段切回 Guardian 低温采样以收敛答案；BLEnD 配置注释中特别提到使用较高的 Auditor 温度以防止过度从众。
+
+---
+
+#### 2.8.5 三个数据集 Prompt 的区别
+
+##### (1) 答案空间不同
+
+- **NorMAD**：三分类 `1 / 2 / 3`（1=可接受 / 2=不可接受 / 3=中性·不确定），所有 prompt 结尾为 `Answer: <number>`。
+- **CulturalBench / BLEnD**：四选一 MCQ `1 / 2 / 3 / 4`，所有 prompt 结尾为 `Answer (1, 2, 3, or 4):` 或 `Final decision (1, 2, 3, or 4):`。
+
+##### (2) System Prompt（角色人设）差异最大
+
+- **NorMAD**：使用**详细的多行角色人设**——Guardian 是"HOST-CULTURE GUARDIAN（主场文化守护者，拥有首要权威与一票否决权）"，Auditor 是"CROSS-CULTURAL AUDITOR（跨文化审计员，需 defer 给 Guardian）"，Judge 是"neutral cultural fact-checker and final arbitrator（含三分类决策规则 + Guardian VETO + 亲和度仲裁协议）"。每个文化 agent 还带专属 cognitive foundation 描述。
+- **CulturalBench**：使用**简短的"文化专家"人设**——每个 agent 是 `You are a cultural expert deeply versed in {地域} cultures...`，按 6 个地域不同；Guardian 与 Auditor 共用同一段文本；Judge 退化为通用句 `You are a helpful assistant with expertise in cross-cultural knowledge and practices.`
+- **BLEnD**：**完全统一**——Guardian / Auditor / Judge 三者 system prompt 全部是同一句 `You are a helpful assistant with expertise in cross-cultural knowledge and practices.`，不含任何地域专家或角色人设。
+
+##### (3) 协作流程与 User Prompt 结构不同
+
+- **NorMAD**：Guardian → Auditor（单向看 Guardian 回答）→ 条件 Judge。User prompt 以 `TARGET CULTURE:` 开头，要求 `Reasoning: ... / Answer:` 的结构化输出，并强调 Guardian 权威、VETO、亲和度仲裁；Judge prompt 含 "约 28% 题目正确答案是 3（中性）" 的校准提醒（CulturalBench/BLEnD 无此提醒）。
+- **CulturalBench / BLEnD**：Auditor **独立起步**，随后走 **MAD 式对称辩论**（feedback 互评 → final_decision 重决策），最终**纯多数投票**（无 Guardian 特权）。User prompt 以 `Task:` 开头，要求 "explain in less than three sentences" 的简洁输出；Judge 强调 "Do NOT make any independent judgments / base solely on expert opinions"。
+
+##### (4) CulturalBench 与 BLEnD 之间的细微差异
+
+虽然两者都是四选一 MCQ + MAD 辩论流程，并共用 feedback / final_decision / disagreement / fallback 的 MCQ 分支，但 Guardian/Auditor/Judge 的**核心提问措辞不同**：
+
+- **CulturalBench**：偏**解释性文化知识**。Guardian/Auditor 强调 "Do not make any extra inferences outside of the given context and country. Only align to the country given."；独立模式 Auditor 额外注入 "From your perspective as an expert in [{agent}]..." 的自身文化视角以提升集成多样性。
+- **BLEnD**：偏**日常事实性知识**。Guardian/Auditor 强调三条 IMPORTANT 提示——"只关注本国/某些选项是其他国家的事实/'not-applicable' 可能正确/基于具体事实知识（名称、地点、时间、习俗）"；协商模式 Auditor 鼓励 "trust your own reasoning"；Judge 措辞也与 CulturalBench 不同，专门提示 "Some options may be facts true for other countries but wrong for {target_country}"，要求甄别跨国干扰项。
+
