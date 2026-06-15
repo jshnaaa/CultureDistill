@@ -323,9 +323,11 @@ if __name__ == '__main__':
                         help="Weight for margin ranking loss (contrastive)")
     
     # Training
-    parser.add_argument('--num_train_samples', type=int, default=0,
-                        help="Number of training samples (0 = use all)")
-    parser.add_argument('--num_epochs', type=int, default=3,
+    parser.add_argument('--max_samples', '--num_train_samples', type=int, default=0,
+                        dest='num_train_samples',
+                        help="Max number of MAG samples for training (0 = use all). "
+                             "E.g. --max_samples 10 for quick debugging.")
+    parser.add_argument('--num_epochs', type=int, default=5,
                         help="Number of training epochs")
     parser.add_argument('--lr', type=float, default=2e-5,
                         help="Learning rate")
@@ -515,9 +517,9 @@ if __name__ == '__main__':
         max_grad_norm=1.0,
     )
     
-    # Early stopping: stop if eval_loss doesn't improve for 2 consecutive epochs
+    # Early stopping: stop if eval_loss doesn't improve for 3 consecutive epochs
     from transformers import EarlyStoppingCallback
-    early_stop_callback = EarlyStoppingCallback(early_stopping_patience=2)
+    early_stop_callback = EarlyStoppingCallback(early_stopping_patience=3)
     
     trainer = MAGDiTrainer(
         model=model,

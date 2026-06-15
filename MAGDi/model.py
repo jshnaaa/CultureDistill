@@ -203,16 +203,6 @@ class MAGDiTrainer(Trainer):
         self.is_model_parallel = True
         self.place_model_on_device = False
 
-    def _inner_training_loop(self, *args, **kwargs):
-        """Override to prevent Trainer from calling gradient_checkpointing_enable on MAGDi.
-        We already enabled it on the decoder directly in train_culture.py."""
-        # Temporarily disable the flag so Trainer doesn't try to call it on our model
-        original_gc = self.args.gradient_checkpointing
-        self.args.gradient_checkpointing = False
-        result = super()._inner_training_loop(*args, **kwargs)
-        self.args.gradient_checkpointing = original_gc
-        return result
-
     def _move_model_to_device(self, model, device):
         """Override to prevent Trainer from moving our multi-device model."""
         pass  # Model components are already on correct devices
