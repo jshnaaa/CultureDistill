@@ -8,7 +8,9 @@ Single-model (base) evaluation on cultural alignment benchmarks.
 
 两种方法（--method）：
   - base : zero-shot，模型仅根据数据集中的问题作答（不设 system prompt 的角色信息）。
-  - role : 角色扮演，设定 "你是某国文化专家" 的 system prompt，依据该文化背景作答。
+  - role : 角色扮演，设定 "你是某国文化内部专家" 的 system prompt，依据该文化背景作答。
+           CulturalBench / BLEnD / NormAD 三个数据集共用同一套角色框架（persona），
+           仅针对各数据集的任务形态（多选 / 可接受性判断）做最小幅度的措辞调整。
 
 输出：
   - 结果文件   (--output_file)：JSONL，每行保存 query / country / gt / pred / response。
@@ -145,30 +147,39 @@ def build_system_prompt(method: str, task_type: str, country: str) -> str:
             "'Answer: X'."
         )
 
-    # role-play：依据数据集内容设计不同提示词，但整体逻辑一致
+    # role-play：三个数据集共用同一套"文化内部专家"角色框架（与 blend 一致），
+    # 仅针对各数据集的任务形态做最小幅度的措辞调整。
     target = country if country else "the target country"
-    if task_type == "normad":
-        return (
-            f"You are a cultural expert specializing in the culture of {target}. "
-            f"You have deep knowledge of {target}'s social norms, traditions, and "
-            f"daily customs. Based on this cultural background, judge whether the "
-            f"described behavior is socially acceptable in {target}. "
-            f"End your response with 'Answer: X'."
-        )
-    if task_type == "cultureatlas":
-        return (
-            f"You are a cultural expert specializing in the culture of {target}. "
-            f"Drawing on your deep, culture-specific knowledge of {target}, decide "
-            f"which response demonstrates more culturally specific and insightful "
-            f"knowledge. End your response with 'Answer: X'."
-        )
-    # culturalbench / blend
-    return (
-        f"You are a cultural expert specializing in the culture of {target}. "
-        f"You possess authoritative knowledge of {target}'s cultural practices, "
-        f"customs, and everyday life. Based on this cultural background, select the "
-        f"correct option for the question. End your response with 'Answer: X'."
+
+    # 统一的角色设定（persona）——blend / culturalbench / normad / cultureatlas 共用
+    persona = (
+        f"You are a cultural expert and native insider of {target}. "
+        f"You possess authoritative, first-hand knowledge of {target}'s cultural "
+        f"practices, social norms, traditions, and everyday life. "
+        f"Immerse yourself in the cultural background of {target} and reason from "
+        f"the perspective of a local."
     )
+
+    # 各数据集的任务指令（task instruction）——仅此处随数据集小幅调整
+    if task_type == "normad":
+        task = (
+            "Based on this cultural background, judge whether the described "
+            "behavior is socially acceptable in this culture, and select the "
+            "correct option."
+        )
+    elif task_type == "cultureatlas":
+        task = (
+            "Based on this cultural background, decide which response demonstrates "
+            "more culturally specific and insightful knowledge, and select the "
+            "correct option."
+        )
+    else:  # culturalbench / blend
+        task = (
+            "Based on this cultural background, select the correct option for the "
+            "cultural knowledge question."
+        )
+
+    return f"{persona} {task} End your response with 'Answer: X'."
 
 
 def build_user_prompt(query: str, country: str, task_type: str) -> str:

@@ -437,6 +437,105 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 
 # 2. 消融实验
 
+## 2.0 single-teacher 蒸馏
+
+> 定位：蒸馏训练范式对比的"单 teacher 基线"。**用单个大模型在角色扮演（role-play）下生成的输出作为唯一的监督信号，直接蒸馏到基座学生模型**，用于剥离出"单一教师、无多智能体协作、无强化学习"时纯蒸馏所能达到的水平。它是 HF-CAC 多教师协作蒸馏与 CAMAD 联合训练的最朴素对照组。
+
+### 2.0.1 方法概述
+
+single-teacher 蒸馏将"角色扮演大模型"视为唯一 teacher，把它在 `single_data.py --method role` 下产出的完整回答（包含文化推理过程与 `Answer: X`）当作目标序列蒸馏给学生。与传统 SFT 的本质区别在于**监督标签的来源**：
+
+- **监督信号 = teacher 的 role-play 输出（`response` 字段），而非数据集原始 label（`gt`）**。学生不仅学会答案，还学会 teacher 的文化推理风格与表达方式，这正是知识蒸馏（学生拟合教师软/硬输出）而非简单标签拟合的核心。
+- **单一 teacher、单次生成**。不引入 Guardian/Auditor 多智能体协作、不做多教师集成、不叠加任何 RL 信号，确保该基线只反映"单教师蒸馏"本身的能力。
+- **数据集统一**。teacher 的 role-play 在 CulturalBench / BLEnD / NormAD 上共用同一套"文化内部专家"角色提示词（见 `single_data.py` 的 `build_system_prompt`），仅按任务形态做最小幅度措辞调整，因此三个数据集的蒸馏数据可直接合并训练。
+
+监督目标的构造：以 `[{country}]\n{query}` 作为 user 输入，以 teacher 的 `response` 原样作为 assistant 目标，prompt 部分用 `IGNORE_INDEX` 屏蔽，仅在 teacher 输出 token 上计算自回归交叉熵。训练采用 LoRA + Accelerate（与 §2.1 等其它消融保持同一套训练栈）。
+
+样本筛选提供两个可选开关：`--filter_correct`（仅蒸馏 teacher 答对、即 `pred == gt` 的样本，等价于拒绝采样，默认关闭以严格按 role-play 输出全量蒸馏）与 `--drop_no_pred`（丢弃无法抽取出答案的 teacher 输出，默认开启）。
+
+### 2.0.2 与其它范式的对照关系
+
+| 维度 | single-teacher 蒸馏 | SFT-only（§2.1） | CAMAD |
+|------|----------------------|------------------|-------|
+| 起点 | 基座 | 基座 | 基座 |
+| 监督信号来源 | 单 teacher 的 role-play 输出 | HF-CAC 中 Judge 最终答案 | 同 SFT-only |
+| 是否用原始 label | 否（用 teacher 输出） | 否（用 Judge 输出） | 否 |
+| 多智能体协作 | 无（单教师） | 有（HF-CAC 协作蒸馏） | 有 |
+| RL 分支 | 无 | 无 | GRPO 优势 + Guardian 引导 |
+| 加权方式 | 标准交叉熵（无加权） | 样本级 $w_{sft}$ 加权 | $w_{sft}$ + 联合优化 |
+
+### 2.0.3 运行命令
+
+**第一步：用 teacher 生成 role-play 蒸馏数据**（若已生成可跳过；三个数据集分别跑一次）：
+
+```bash
+# 以 llama 作为 teacher，在 BLEnD 上做 role-play 生成
+python Cul/single_data.py \
+    --input_file  /autodl-fs/data/blend_mas_after.json \
+    --output_file /autodl-fs/data/blend_llama_role.json \
+    --model_name  llama \
+    --method      role \
+    --tensor_parallel_size 2 --max_samples 0
+
+# CulturalBench role-play
+python Cul/single_data.py \
+    --input_file  /autodl-fs/data/culturalBench_mas.json \
+    --output_file /autodl-fs/data/culturalbench_llama_role.json \
+    --model_name  llama --method role \
+    --tensor_parallel_size 2 --max_samples 0
+
+# NormAD role-play
+python Cul/single_data.py \
+    --input_file  /autodl-fs/data/normad_mas.json \
+    --output_file /autodl-fs/data/normad_llama_role.json \
+    --model_name  llama --method role \
+    --tensor_parallel_size 2 --max_samples 0
+```
+
+**第二步：用 role-play 输出蒸馏基座**（单卡；多个 teacher 文件用逗号拼接，可跨数据集合并）：
+
+```bash
+python Cul/sft/train_single_teacher_distill.py \
+    --model_name    llama \
+    --teacher_files /autodl-fs/data/blend_llama_role_20260610_112253.json,/autodl-fs/data/culturalbench_llama_role.json,/autodl-fs/data/normad_llama_role.json \
+    --output_dir    /root/autodl-tmp/models/distill_single_llama \
+    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+```
+
+多卡 DDP（Accelerate）：
+
+```bash
+accelerate launch --num_processes 2 Cul/sft/train_single_teacher_distill.py \
+    --model_name    llama \
+    --teacher_files /autodl-fs/data/blend_llama_role_20260610_112253.json \
+    --output_dir    /root/autodl-tmp/models/distill_single_llama \
+    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+```
+
+| 参数 | 含义 |
+|------|------|
+| `--model_name` | 学生基座别名 `llama` / `qwen`，或完整本地路径 |
+| `--teacher_files` | teacher 的 role-play 输出 JSONL（`single_data.py --method role` 产出），逗号分隔可传多个/跨数据集合并 |
+| `--output_dir` | LoRA adapter 保存目录（每个 epoch 存一份，另存 `final/`）|
+| `--filter_correct` | 仅蒸馏 teacher 答对（`pred==gt`）的样本（拒绝采样）；默认关闭，全量蒸馏 role-play 输出 |
+| `--drop_no_pred` / `--keep_no_pred` | 是否丢弃无法抽取答案的 teacher 输出（默认丢弃）|
+| `--epochs` / `--batch_size` / `--lr` | 训练轮数 / 批大小 / 学习率 |
+| `--lora_r` / `--lora_alpha` | LoRA rank 与 alpha |
+| `--max_samples` | 仅取前 N 条蒸馏样本（默认 0 = 全量），用于快速跑通 |
+
+**第三步：评估蒸馏后的学生**（复用统一评估脚本，加载 LoRA adapter）：
+
+```bash
+python Cul/evaluate.py \
+    --mode sft \
+    --model_name llama \
+    --data_pkl /autodl-fs/data/llama/blend_splits.pkl \
+    --sft_adapter /root/autodl-tmp/models/distill_single_llama/final \
+    --output_json /root/autodl-tmp/models/distill_single_llama/eval_distill.json
+```
+
+---
+
 ## 2.1 SFT-only
 
 > 定位：消融实验"蒸馏训练范式对比"（§3.2）中的第一组。**从基座模型起点出发，只做监督蒸馏，不引入任何强化学习信号**，用于剥离出"纯监督蒸馏"能达到的上限。
