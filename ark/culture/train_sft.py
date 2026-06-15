@@ -339,14 +339,31 @@ def train(args):
     model_path = MODEL_ALIASES[args.model_name]
     accelerator.print(f"Base model: {model_path}")
 
-    # Load data from pkl
-    accelerator.print(f"Loading data splits from: {args.data_pkl}")
-    with open(args.data_pkl, "rb") as f:
-        splits = pickle.load(f)
-    train_raw = splits["train"]
-    val_raw = splits["val"]
-    accelerator.print(f"  Raw data: train={len(train_raw)}, val={len(val_raw)}, "
-                      f"test={len(splits['test'])}")
+    # Load data
+    if args.train_file:
+        # New mode: train from debate JSONL, validate from CAMAD pkl
+        accelerator.print(f"Loading training data from JSONL: {args.train_file}")
+        train_raw = []
+        with open(args.train_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    train_raw.append(json.loads(line))
+        accelerator.print(f"  Train samples (debate JSONL): {len(train_raw)}")
+
+        accelerator.print(f"Loading val/test splits from: {args.data_pkl}")
+        with open(args.data_pkl, "rb") as f:
+            splits = pickle.load(f)
+        val_raw = splits["val"]
+        accelerator.print(f"  Val samples: {len(val_raw)}, Test samples: {len(splits['test'])}")
+    else:
+        # Legacy mode: all data from a single pkl (AgentArk debate pkl)
+        accelerator.print(f"Loading data splits from: {args.data_pkl}")
+        with open(args.data_pkl, "rb") as f:
+            splits = pickle.load(f)
+        train_raw = splits["train"]
+        val_raw = splits["val"]
+        accelerator.print(f"  Raw data: train={len(train_raw)}, val={len(val_raw)}, "
+                          f"test={len(splits['test'])}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -493,10 +510,14 @@ def main():
     parser.add_argument("--model_name", type=str, required=True,
                         choices=["llama", "qwen"],
                         help="Base model: 'llama' (LLaMA-3.1-8B-Instruct) or 'qwen' (Qwen2.5-7B-Instruct)")
+    parser.add_argument("--train_file", type=str, default=None,
+                        help="Path to debate output JSONL (from generate_debate_data.py). "
+                             "If provided, uses this for training and --data_pkl for val/test.")
     parser.add_argument("--data_pkl", type=str, required=True,
-                        help="Path to splits pkl file (from split_data.py)")
+                        help="Path to CAMAD splits pkl file (train/val/test). "
+                             "Val split used for epoch evaluation, test split for final eval.")
     parser.add_argument("--output_dir", type=str, required=True,
-                        help="Directory to save LoRA adapter checkpoints")
+                        help="Directory to save best LoRA adapter (no intermediate checkpoints)")
     parser.add_argument("--epochs", type=int, default=3,
                         help="Number of training epochs (default: 3)")
     parser.add_argument("--batch_size", type=int, default=4,

@@ -28,7 +28,7 @@
 | Step 4 | 评估（推理，batch=16） | ~2-3 min | ~5-8 min |
 | **合计** | | **~40-60 min** | **~90-120 min** |
 
-**Pipeline 与运行命令**：代码位于 `MAGDi/` 目录，完整 pipeline 包含 4 步（RECONCILE 模式额外有 Step 0 自动生成推理数据）：
+**Pipeline 与运行命令**：代码位于 `MAGDi/` 目录，完整 pipeline 包含 4 步（RECONCILE 模式额外有 Step 0 自动生成推理数据）。Step 1 通过 `--splits_pkl --split train` 确保只使用 pkl 的 train split 样本生成 MAG 数据，与 CAMAD 使用完全相同的数据划分：
 
 ```bash
 cd autodl-tmp/distill
@@ -48,18 +48,20 @@ python generate_reconcile_data.py \
     --config_file ../Cul/configs/reconcile_config.yaml \
     --model_name qwen --use_vllm --tensor_parallel_size 2
 
-# Step 1：将推理数据转换为 MAG 图格式
+# Step 1：将推理数据转换为 MAG 图格式（仅 train split）
 python generate_mag_data.py \
     --data_source reconcile \
     --input_file /autodl-fs/data/qwen/normad_reconcile_inference.jsonl \
     --dataset normad \
-    --output_file /autodl-fs/data/MAGDi/MAG/qwen/normad_reconcile.json
+    --output_file /autodl-fs/data/MAGDi/MAG/qwen/normad_reconcile.json \
+    --splits_pkl /autodl-fs/data/qwen/normad_splits.pkl --split train
 
 python generate_mag_data.py \
     --data_source reconcile \
     --input_file /autodl-fs/data/qwen/culturalbench_reconcile_inference.jsonl \
     --dataset culturalbench \
-    --output_file /autodl-fs/data/MAGDi/MAG/qwen/culturalbench_reconcile.json
+    --output_file /autodl-fs/data/MAGDi/MAG/qwen/culturalbench_reconcile.json \
+    --splits_pkl /autodl-fs/data/qwen/culturalbench_splits.pkl --split train
     
 # Step 2：提取节点嵌入（加权平均池化 last hidden states）
 python get_node_emb_culture.py \
@@ -81,7 +83,7 @@ python train_culture.py \
     --node_emb_file /autodl-fs/data/MAGDi/MAG/qwen/normad_reconcile_node_emb.pkl \
     --model_name qwen \
     --output_dir /autodl-fs/data/MAGDi/model/MAGDi_normad_reconcile_qwen \
-    --num_epochs 5 --lr 5e-6 --alpha 1.0 --beta 1.0 --gamma 0.1 --max_samples 10
+    --num_epochs 10 --lr 5e-6 --alpha 1.0 --beta 1.0 --gamma 0.1
     
 python train_culture.py \
     --dataset culturalbench --data_source reconcile \
@@ -140,84 +142,82 @@ python test_culture.py \
 
 **实验设置**： 两个数据集（NormAd、CultureBench）和两种数据来源（通过 `--data_source reconcile|hf_cac` 参数切换）。
 基座模型限定为两种：Qwen2.5-7B-Instruct（`--model_name qwen`）和 LLaMA-3.1-8B-Instruct（`--model_name llama`）。
-数据以 pkl 格式存储，结构为 `{"train": [...], "val": [...], "test": [...]}`。
-SFT 和 GRPO 各训练 3 epoch，学习率 2e-5，LoRA rank=64。PRM 训练 5 epoch，学习率 1e-5。GRPO 每条样本生成 4 条候选（group_size=4）。
+与 CAMAD 使用完全相同的 train/val/test 数据划分（`normad_splits.pkl` / `culturalbench_splits.pkl`），在训练集上训练，每轮训练后在验证集上评估准确率，只保存验证集效果最优的模型（无中间 checkpoint），最终在测试集上测试。
+SFT 训练 3 epoch，学习率 2e-4，LoRA rank=32。PRM 训练 5 epoch，学习率 1e-4。GRPO 训练最多 30 rounds，每 round 评估一次，patience=3 early stopping。
 
-**Pipeline 与运行命令**：位于 `ark/culture/` 目录，完整 pipeline 包含 5 步（以 CulturalBench + RECONCILE + Qwen 为例）：
+**Pipeline 与运行命令**：位于 `ark/culture/` 目录，完整 pipeline 包含 5 步。与 CAMAD 使用相同的 `normad_splits.pkl` / `culturalbench_splits.pkl` 数据划分，在训练集上训练，每轮在验证集上评估并保存最优模型，最终在测试集上测试（以 NormAD + RECONCILE + Qwen 为例）：
 
 ```bash
 cd autodl-tmp/distill
 source /etc/network_turbo
 sh git.sh
-# Step 0：同质多智能体辩论数据生成
+# Step 0：同质多智能体辩论数据生成（仅对 CAMAD pkl 的 train split 生成）
 python ark/culture/generate_debate_data.py \
-    --input_file /autodl-fs/data/culturalBench_mas.json \
-    --output_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
-    --model_name qwen \
-    --num_agents 5 --num_rounds 2 \
-    --use_vllm --tensor_parallel_size 2
-
-# NormAD 版本：
-python ark/culture/generate_debate_data.py \
-    --input_file /autodl-fs/data/normad_mas.json \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --split train \
     --output_file /autodl-fs/data/qwen/normad_agentark_debate.jsonl \
     --model_name qwen \
     --num_agents 5 --num_rounds 2 \
     --use_vllm --tensor_parallel_size 2
 
-# Step 0.5：数据划分（8:1:1 train/val/test）
-python Cul/split_data.py \
-    --input /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
-    --output /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --seed 42
+# CulturalBench 版本：
+python ark/culture/generate_debate_data.py \
+    --data_pkl /autodl-fs/data/qwen/culturalbench_splits.pkl \
+    --split train \
+    --output_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
+    --model_name qwen \
+    --num_agents 5 --num_rounds 2 \
+    --use_vllm --tensor_parallel_size 2
 
 # Step 1：标准 SFT（均匀 CE Loss，无 token 加权）
+# 训练数据来自辩论 JSONL，验证集来自 CAMAD pkl 的 val split
 python ark/culture/train_sft.py \
     --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --output_dir /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen \
+    --train_file /autodl-fs/data/qwen/normad_agentark_debate.jsonl \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --output_dir /autodl-fs/data/model/agentark/sft_normad_reconcile_qwen \
     --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
 
 # Step 2a：推理步骤切分
 python Cul/step_label/split_steps.py \
-    --input_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
-    --output_file /autodl-fs/data/qwen/culturalbench_agentark_steps.jsonl \
+    --input_file /autodl-fs/data/qwen/normad_agentark_debate.jsonl \
+    --output_file /autodl-fs/data/qwen/normad_agentark_steps.jsonl \
     --max_sentences_per_step 3 --sources guardian judge
 
 # Step 2b：步骤标注（LLM open-book labeling）
 python Cul/step_label/label_steps.py \
-    --input_file /autodl-fs/data/qwen/culturalbench_agentark_steps.jsonl \
-    --output_file /autodl-fs/data/qwen/culturalbench_agentark_step_labels.jsonl \
+    --input_file /autodl-fs/data/qwen/normad_agentark_steps.jsonl \
+    --output_file /autodl-fs/data/qwen/normad_agentark_step_labels.jsonl \
     --model_name qwen --batch_size 64 --tensor_parallel_size 2
 
 # Step 2c：PRM 训练（标准 MSE，无类别加权）
 python ark/culture/train_prm.py \
     --base_model_path /root/autodl-tmp/base/Qwen2.5-7B-Instruct \
-    --sft_adapter_path /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
-    --train_file /autodl-fs/data/qwen/culturalbench_agentark_step_labels.jsonl \
-    --val_file /autodl-fs/data/qwen/culturalbench_agentark_step_labels_val.jsonl \
-    --output_dir /autodl-fs/data/model/agentark/prm_culturalbench_reconcile_qwen \
+    --sft_adapter_path /autodl-fs/data/model/agentark/sft_normad_reconcile_qwen/best \
+    --train_file /autodl-fs/data/qwen/normad_agentark_step_labels.jsonl \
+    --val_file /autodl-fs/data/qwen/normad_agentark_step_labels_val.jsonl \
+    --output_dir /autodl-fs/data/model/agentark/prm_normad_reconcile_qwen \
     --epochs 5 --batch_size 8
 
-# Step 3：GRPO 强化学习
+# Step 3：GRPO 强化学习（使用 CAMAD pkl 的 train 做 prompt，val 做评估）
 python ark/culture/train_grpo.py \
     --model_name qwen \
     --data_source reconcile \
-    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
-    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --prm_path /autodl-fs/data/model/agentark/prm_culturalbench_reconcile_qwen/best \
-    --output_dir /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen \
-    --alpha 0.6 --n_samples 5 --max_rounds 30
+    --sft_adapter /autodl-fs/data/model/agentark/sft_normad_reconcile_qwen/best \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --prm_path /autodl-fs/data/model/agentark/prm_normad_reconcile_qwen/best \
+    --output_dir /autodl-fs/data/model/agentark/grpo_normad_reconcile_qwen \
+    --alpha 0.6 --n_samples 5 --max_rounds 30 --eval_every 1
 
-# Step 4：评估（使用与 CAMAD 相同的 test split）
+# Step 4：评估（使用 CAMAD pkl 的 test split）
 python ark/culture/evaluate.py \
     --mode sft_rl \
     --model_name qwen \
     --data_source reconcile \
-    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
-    --grpo_adapter /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen/best \
-    --output_json results/agentark_culturalbench_reconcile_qwen.json
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --sft_adapter /autodl-fs/data/model/agentark/sft_normad_reconcile_qwen/best \
+    --grpo_adapter /autodl-fs/data/model/agentark/grpo_normad_reconcile_qwen/best \
+    --output_json results/agentark_normad_reconcile_qwen.json
 ```
 
 **`--no_prm` 模式运行命令**（跳过 Step 2，GRPO 仅使用 outcome reward）：
@@ -225,23 +225,19 @@ python ark/culture/evaluate.py \
 ```bash
 # Step 0：同质多智能体辩论数据生成（同正常模式）
 python ark/culture/generate_debate_data.py \
-    --input_file /autodl-fs/data/culturalBench_mas.json \
-    --output_file /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --split train \
+    --output_file /autodl-fs/data/qwen/normad_agentark_debate.jsonl \
     --model_name qwen \
     --num_agents 5 --num_rounds 2 \
     --use_vllm --tensor_parallel_size 2
 
-# Step 0.5：数据划分（同正常模式）
-python Cul/split_data.py \
-    --input /autodl-fs/data/qwen/culturalbench_agentark_debate.jsonl \
-    --output /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --seed 42
-
 # Step 1：标准 SFT（同正常模式）
 python ark/culture/train_sft.py \
     --model_name qwen \
-    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --output_dir /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen \
+    --train_file /autodl-fs/data/qwen/normad_agentark_debate.jsonl \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --output_dir /autodl-fs/data/model/agentark/sft_normad_reconcile_qwen \
     --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
 
 # Step 2：跳过（--no_prm 模式无需 PRM 训练）
@@ -250,10 +246,10 @@ python ark/culture/train_sft.py \
 python ark/culture/train_grpo.py \
     --model_name qwen \
     --data_source reconcile \
-    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
-    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --output_dir /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen_noprm \
-    --alpha 0.6 --n_samples 5 --max_rounds 30 \
+    --sft_adapter /autodl-fs/data/model/agentark/sft_normad_reconcile_qwen/best \
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --output_dir /autodl-fs/data/model/agentark/grpo_normad_reconcile_qwen_noprm \
+    --alpha 0.6 --n_samples 5 --max_rounds 30 --eval_every 1 \
     --no_prm
 
 # Step 4：评估
@@ -261,10 +257,10 @@ python ark/culture/evaluate.py \
     --mode sft_rl \
     --model_name qwen \
     --data_source reconcile \
-    --data_pkl /autodl-fs/data/qwen/culturalbench_agentark_reconcile_splits.pkl \
-    --sft_adapter /autodl-fs/data/model/agentark/sft_culturalbench_reconcile_qwen/best \
-    --grpo_adapter /autodl-fs/data/model/agentark/grpo_culturalbench_reconcile_qwen_noprm/best \
-    --output_json results/agentark_culturalbench_reconcile_qwen_noprm.json
+    --data_pkl /autodl-fs/data/qwen/normad_splits.pkl \
+    --sft_adapter /autodl-fs/data/model/agentark/sft_normad_reconcile_qwen/best \
+    --grpo_adapter /autodl-fs/data/model/agentark/grpo_normad_reconcile_qwen_noprm/best \
+    --output_json results/agentark_normad_reconcile_qwen_noprm.json
 ```
 
 **预估运行时长**（2×48GB vGPU，以 ~3000 样本数据集为基准）：
@@ -274,7 +270,6 @@ python ark/culture/evaluate.py \
 | 阶段 | 显存分配 | 预估时长 | 说明 |
 |------|----------|----------|------|
 | Step 0: 辩论推理 | 双卡 TP=2 | ~2-3h | 5 agents × 2 rounds, vLLM tensor parallel 加速 |
-| Step 0.5: 数据划分 | CPU | <1min | 纯 CPU 操作 |
 | Step 1: SFT | 双卡 DDP | ~0.5-1h | 3 epochs, LoRA r=32, Accelerate DDP |
 | Step 2a: 步骤切分 | CPU | ~5min | 正则匹配，纯 CPU |
 | Step 2b: 步骤标注 | 双卡 TP=2 | ~1-1.5h | vLLM 推理标注 |
@@ -288,7 +283,6 @@ python ark/culture/evaluate.py \
 | 阶段 | 显存分配 | 预估时长 | 说明 |
 |------|----------|----------|------|
 | Step 0: 辩论推理 | 双卡 TP=2 | ~2-3h | 同上 |
-| Step 0.5: 数据划分 | CPU | <1min | 同上 |
 | Step 1: SFT | 双卡 DDP | ~0.5-1h | 同上 |
 | Step 2a/2b/2c: PRM 相关 | — | **跳过** | `--no_prm` 模式无需 PRM |
 | Step 3: GRPO (no_prm) | 单卡即可（~30-36GB） | ~8-15h | 无 PRM 评分开销，每 batch 快约 30% |

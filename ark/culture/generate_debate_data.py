@@ -416,8 +416,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="AgentArk Baseline: Generate LLM Debate data for cultural tasks"
     )
-    parser.add_argument("--input_file", type=str, required=True,
-                        help="Path to dataset JSON (normad_mas.json / culturalBench_mas.json)")
+    parser.add_argument("--input_file", type=str, default=None,
+                        help="Path to dataset JSON (normad_mas.json / culturalBench_mas.json). "
+                             "Not required if --data_pkl is provided.")
     parser.add_argument("--output_file", type=str, default=None,
                         help="Output JSONL path (auto-generated if not specified)")
     parser.add_argument("--model_name", type=str, required=True,
@@ -434,8 +435,18 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--max_samples", type=int, default=0,
                         help="0 = all samples")
+    parser.add_argument("--data_pkl", type=str, default=None,
+                        help="Path to CAMAD splits pkl file. If provided, only samples "
+                             "in the specified --split are used for debate generation.")
+    parser.add_argument("--split", type=str, default="train",
+                        choices=["train", "val", "test"],
+                        help="Which split to use from --data_pkl (default: train)")
     parser.add_argument("--eval_accuracy", action="store_true", default=True)
     args = parser.parse_args()
+
+    # Validate: must provide at least one data source
+    if not args.input_file and not args.data_pkl:
+        parser.error("Must provide either --input_file or --data_pkl")
 
     # Model alias resolution (only llama and qwen are supported)
     MODEL_ALIASES = {
@@ -459,12 +470,27 @@ def main():
     print(f"Output: {args.output_file}")
 
     # Load data
-    raw_data = load_dataset(args.input_file)
-    dataset = [convert_sample(item) for item in raw_data]
-    print(f"Loaded {len(dataset)} samples")
+    if args.data_pkl:
+        # Load from CAMAD splits pkl — only use the specified split
+        import pickle
+        print(f"Loading data from pkl: {args.data_pkl} (split={args.split})")
+        with open(args.data_pkl, "rb") as f:
+            splits = pickle.load(f)
+        dataset = splits[args.split]
+        print(f"  Loaded {len(dataset)} samples from '{args.split}' split")
+        # Detect dataset type from pkl samples
+        sample_gts = set(str(s.get("gt", "")).strip() for s in dataset[:100])
+        if "4" in sample_gts:
+            dataset_type = "culturalbench"
+        else:
+            dataset_type = "normad"
+    else:
+        raw_data = load_dataset(args.input_file)
+        dataset = [convert_sample(item) for item in raw_data]
+        print(f"Loaded {len(dataset)} samples")
+        # Detect dataset type
+        dataset_type = detect_dataset_type(raw_data)
 
-    # Detect dataset type
-    dataset_type = detect_dataset_type(raw_data)
     print(f"Dataset type: {dataset_type}")
     max_choice = 4 if dataset_type == "culturalbench" else 3
 

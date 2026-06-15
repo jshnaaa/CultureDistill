@@ -737,7 +737,8 @@ def main():
                         help="Responses per prompt (default: 5)")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_rounds", type=int, default=30)
-    parser.add_argument("--eval_every", type=int, default=5)
+    parser.add_argument("--eval_every", type=int, default=1,
+                        help="Evaluate on val set every N rounds (default: 1)")
     parser.add_argument("--prompt_batch", type=int, default=8)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--lora_r", type=int, default=16)

@@ -53,7 +53,7 @@ from peft import (
     LoraConfig,
     get_peft_model,
 )
-from model import MAGDi, MAGDiTrainer
+from model import MAGDi, MAGDiTrainer, SaveBestModelCallback
 from data_utils import MAGDiDataCollator
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -337,6 +337,8 @@ if __name__ == '__main__':
                         help="Gradient accumulation steps")
     parser.add_argument('--warmup_steps', type=int, default=50,
                         help="Warmup steps")
+    parser.add_argument('--early_stopping_patience', type=int, default=3,
+                        help="Stop training if eval_loss doesn't improve for N consecutive evals")
     parser.add_argument('--max_length', type=int, default=192,
                         help="Max sequence length for tokenization")
     
@@ -504,24 +506,18 @@ if __name__ == '__main__':
         bf16=True,  # BF16 mixed precision: faster, no GradScaler needed, wider dynamic range
         logging_steps=10,
         output_dir=args.output_dir,
-        overwrite_output_dir=True,  # Prevent auto-resume from stale checkpoints
+        overwrite_output_dir=True,
         remove_unused_columns=False,
-        # Evaluate & save at end of each epoch
+        # Evaluate each epoch, but do NOT save checkpoints (our callback handles saving)
         eval_strategy="epoch",
-        save_strategy="epoch",
-        save_total_limit=args.num_epochs,
-        # Best model tracking
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
+        save_strategy="no",
         dataloader_pin_memory=False,
         dataloader_num_workers=0,
         max_grad_norm=1.0,
     )
     
-    # Early stopping: stop if eval_loss doesn't improve for 3 consecutive epochs
-    from transformers import EarlyStoppingCallback
-    early_stop_callback = EarlyStoppingCallback(early_stopping_patience=3)
+    # Custom callback: save best model to output_dir + early stopping (patience=3)
+    best_model_callback = SaveBestModelCallback(patience=args.early_stopping_patience)
     
     trainer = MAGDiTrainer(
         model=model,
@@ -529,29 +525,12 @@ if __name__ == '__main__':
         eval_dataset=eval_dataset,
         args=training_args,
         data_collator=MAGDiDataCollator(tokenizer),
-        callbacks=[early_stop_callback]
+        callbacks=[best_model_callback]
     )
     
     import os
     
-    # Debug: print Trainer's computed training plan
-    train_dataloader = trainer.get_train_dataloader()
-    num_update_steps_per_epoch = len(train_dataloader) // args.gradient_accumulation_steps
-    num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
-    total_steps = num_update_steps_per_epoch * args.num_epochs
-    print(f"\n  [DEBUG] Training plan:")
-    print(f"    train_dataset size: {len(train_dataset)}")
-    print(f"    eval_dataset size: {len(eval_dataset)}")
-    print(f"    dataloader batches per epoch: {len(train_dataloader)}")
-    print(f"    gradient_accumulation_steps: {args.gradient_accumulation_steps}")
-    print(f"    update steps per epoch: {num_update_steps_per_epoch}")
-    print(f"    num_epochs: {args.num_epochs}")
-    print(f"    total optimization steps: {total_steps}")
-    print(f"    trainer.args.num_train_epochs: {trainer.args.num_train_epochs}")
-    print(f"    trainer.args.max_steps: {trainer.args.max_steps}")
-    print()
-    
-    # Clear output_dir entirely to prevent auto-resume from stale state
+    # Clear output_dir to prevent auto-resume from stale state
     if os.path.exists(args.output_dir):
         import shutil as _shutil
         print(f"  [INFO] Clearing output_dir to prevent auto-resume: {args.output_dir}")
@@ -562,33 +541,6 @@ if __name__ == '__main__':
         trainer.train()
     except KeyboardInterrupt:
         print("\n\n[INFO] Training interrupted by user.")
-        print("[INFO] Checkpoints already saved in output_dir. Finding best one...")
     
-    # Save best model to final directory
-    # If training completed normally, load_best_model_at_end already loaded the best weights.
-    # If interrupted, we find the best checkpoint from saved ones.
-    final_dir = os.path.join(args.output_dir, "best")
-    os.makedirs(final_dir, exist_ok=True)
-    
-    # Check if trainer has best_model_checkpoint info
-    best_ckpt = getattr(trainer.state, 'best_model_checkpoint', None)
-    if best_ckpt and os.path.exists(best_ckpt):
-        print(f"\nBest checkpoint: {best_ckpt} (eval_loss={trainer.state.best_metric:.6f})")
-        # Copy best checkpoint to final dir
-        import shutil
-        if os.path.exists(final_dir):
-            shutil.rmtree(final_dir)
-        shutil.copytree(best_ckpt, final_dir)
-    else:
-        # Fallback: save current model state (may be last epoch or interrupted state)
-        print(f"\nSaving current model state to: {final_dir}")
-        model.decoder.save_pretrained(final_dir)
-        aux_state = {
-            'gcn': model.gcn.state_dict(),
-            'mlp1': model.mlp1.state_dict(),
-            'mlp2': model.mlp2.state_dict(),
-        }
-        torch.save(aux_state, os.path.join(final_dir, "aux_modules.pt"))
-    
-    print(f"Best model saved to: {final_dir}")
-    print("Training complete!")
+    print(f"\nTraining complete! Best model (eval_loss={best_model_callback.best_eval_loss:.6f}) "
+          f"saved to: {args.output_dir}")

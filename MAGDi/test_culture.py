@@ -358,23 +358,13 @@ def main():
             torch_dtype=torch.float16,
             cache_dir=cache_dir
         )
-        # Resolve LoRA path: check for adapter_config.json, try 'best/' subdirectory
+        # Resolve LoRA path: adapter_config.json should be directly in lora_model dir
         lora_path = args.lora_model
         if not os.path.exists(os.path.join(lora_path, "adapter_config.json")):
-            # Try 'best/' subdirectory (created by train_culture.py)
-            best_path = os.path.join(lora_path, "best")
-            if os.path.exists(os.path.join(best_path, "adapter_config.json")):
-                lora_path = best_path
-                print(f"  [INFO] adapter_config.json not found at root, using: {lora_path}")
-            else:
-                # Try finding any checkpoint-* subdirectory
-                import glob
-                ckpts = sorted(glob.glob(os.path.join(lora_path, "checkpoint-*")))
-                for ckpt in reversed(ckpts):
-                    if os.path.exists(os.path.join(ckpt, "adapter_config.json")):
-                        lora_path = ckpt
-                        print(f"  [INFO] Using checkpoint: {lora_path}")
-                        break
+            raise FileNotFoundError(
+                f"adapter_config.json not found in {lora_path}. "
+                f"Make sure --lora_model points to the trained model directory."
+            )
         
         print(f"  Loading LoRA from: {lora_path}")
         model = PeftModel.from_pretrained(model, lora_path)

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch
 from torch_geometric.nn import GCNConv, Linear
 from torch.nn import CrossEntropyLoss, MarginRankingLoss
+import transformers
 from transformers import Trainer, AutoModelForCausalLM, AutoTokenizer
 
 class GCN(torch.nn.Module):
@@ -261,43 +262,46 @@ class MAGDiTrainer(Trainer):
         }
         torch.save(aux_state, os.path.join(output_dir, "aux_modules.pt"))
 
-    def _load_best_model(self):
-        """Load best checkpoint back into model for load_best_model_at_end."""
+
+class SaveBestModelCallback(transformers.TrainerCallback):
+    """
+    Custom callback that saves the best model directly to output_dir
+    whenever eval_loss improves. No checkpoint directories are created.
+    """
+
+    def __init__(self, patience: int = 3):
+        self.best_eval_loss = float('inf')
+        self.patience = patience
+        self.no_improve_count = 0
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         import os
-        
-        best_model_path = self.state.best_model_checkpoint
-        if best_model_path is None:
+        eval_loss = metrics.get('eval_loss', None)
+        if eval_loss is None:
             return
-        
-        raw_model = self._get_raw_model()
-        print(f"\nLoading best model from: {best_model_path}")
-        
-        # Load LoRA adapter weights
-        adapter_path = os.path.join(best_model_path, "adapter_model.safetensors")
-        if not os.path.exists(adapter_path):
-            adapter_path = os.path.join(best_model_path, "adapter_model.bin")
-        
-        if os.path.exists(adapter_path):
-            from safetensors.torch import load_file
-            if adapter_path.endswith(".safetensors"):
-                adapter_state = load_file(adapter_path)
-            else:
-                adapter_state = torch.load(adapter_path, map_location="cpu")
-            # Load into decoder (PEFT model)
-            missing, unexpected = raw_model.decoder.load_state_dict(adapter_state, strict=False)
-            if missing:
-                print(f"  [Warning] Missing keys when loading adapter: {len(missing)}")
-        
-        # Load GCN + MLP weights
-        aux_path = os.path.join(best_model_path, "aux_modules.pt")
-        if os.path.exists(aux_path):
-            aux_state = torch.load(aux_path, map_location="cpu")
-            raw_model.gcn.load_state_dict(aux_state['gcn'])
-            raw_model.mlp1.load_state_dict(aux_state['mlp1'])
-            raw_model.mlp2.load_state_dict(aux_state['mlp2'])
-            # Move back to correct device
-            raw_model.gcn.to(raw_model.aux_device)
-            raw_model.mlp1.to(raw_model.aux_device)
-            raw_model.mlp2.to(raw_model.aux_device)
-        
-        print(f"  Best model loaded successfully.")
+
+        if eval_loss < self.best_eval_loss:
+            self.best_eval_loss = eval_loss
+            self.no_improve_count = 0
+            # Save current model as best
+            model = kwargs.get('model', None)
+            if model is None:
+                return
+            raw_model = model.module if hasattr(model, 'module') else model
+            save_dir = args.output_dir
+            os.makedirs(save_dir, exist_ok=True)
+            raw_model.decoder.save_pretrained(save_dir)
+            aux_state = {
+                'gcn': raw_model.gcn.state_dict(),
+                'mlp1': raw_model.mlp1.state_dict(),
+                'mlp2': raw_model.mlp2.state_dict(),
+            }
+            torch.save(aux_state, os.path.join(save_dir, "aux_modules.pt"))
+            print(f"\n  [Best] epoch={state.epoch:.1f} eval_loss={eval_loss:.6f} -> saved to {save_dir}")
+        else:
+            self.no_improve_count += 1
+            print(f"\n  [No improve] epoch={state.epoch:.1f} eval_loss={eval_loss:.6f} "
+                  f"(best={self.best_eval_loss:.6f}, patience={self.no_improve_count}/{self.patience})")
+            if self.no_improve_count >= self.patience:
+                print(f"  [Early stop] No improvement for {self.patience} evals. Stopping.")
+                control.should_training_stop = True
