@@ -7,46 +7,54 @@ Single-Teacher Distillation SFT (单 teacher 蒸馏 SFT) — LoRA 版本
     （包含推理过程 + 'Answer: X'）作为目标序列，蒸馏到基座学生模型上。
   - 这样学生模型不仅学会答案，还学会 teacher 的文化推理风格。
 
-输入数据：
-  single_data.py 在 --method role 下产出的 JSONL（每行一条），字段示例：
-    {
-      "query":   "...",            # 题目
-      "country": "Japan",          # 国家/文化
-      "gt":      "1",              # 数据集原始 label（蒸馏时默认 *不用* 作为目标）
-      "pred":    "1",              # 从 teacher response 抽取出的答案
-      "response":"... Answer: 1",  # ★ teacher 的 role-play 完整输出，作为蒸馏目标
-      "model_name": "llama",
-      "method":  "role",
-      "task_type": "culturalbench"
-    }
-  参考文件：Cul/data/blend_llama_role_20260610_112253.json
+数据划分（train / val / test）：
+  统一复用 Cul/split_data.py 产出的 pkl（按 8:1:1 划分，保留所有原始字段）：
+    python Cul/split_data.py \\
+        --input  /autodl-fs/data/blend_llama_role_20260610_112253.json \\
+        --output /autodl-fs/data/blend_llama_splits.pkl \\
+        --seed 42
+  - train : 用于蒸馏训练（以 teacher 的 response 作为目标）
+  - val   : 每个 epoch 结束后做生成式评估，按数据集原始 gt 计算准确率，
+            据此保存最优 LoRA adapter 并触发早停。
+  - test  : 本脚本不使用；最终测试由 Cul/evaluate.py 在 pkl 的 test 上完成。
 
 监督目标的构造：
   input  (user)      : [{country}]\n{query}
-  output (assistant) : teacher 的 response（原样作为 label）
+  output (assistant) : teacher 的 response（原样作为蒸馏目标）
 
-样本过滤（可选）：
+验证 / 早停：
+  - 每个 epoch 结束在 val 上生成回答，抽取答案并与原始 gt 比对得到 accuracy。
+  - 验证准确率创新高 → 保存到 {output_dir}/best（仅 LoRA adapter）。
+  - 连续 --patience（默认 2）个 epoch 验证准确率不再提升 → 早停。
+
+样本过滤（可选，仅作用于训练集）：
   --filter_correct   仅保留 teacher 答对（pred == gt）的样本做蒸馏（rejection sampling）。
                      默认 False —— 严格按"用 role-play 输出作为 label"全量蒸馏。
   --drop_no_pred     丢弃无法抽取答案（pred 为 null/空）的样本。默认 True。
 
+LoRA 说明：
+  - 本脚本为 LoRA 微调，只训练并保存 LoRA adapter 参数（adapter_model.safetensors +
+    adapter_config.json，约几十~几百 MB），不保存 14GB 基座权重。
+  - 评估 / 推理时由 evaluate.py 用 "基座 + PeftModel.from_pretrained(adapter)" 还原。
+
 Usage (single GPU):
     python Cul/sft/train_single_teacher_distill.py \\
-        --model_name   llama \\
-        --teacher_files Cul/data/blend_llama_role_20260610_112253.json \\
-        --output_dir   /root/autodl-tmp/models/distill_single_llama \\
-        --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+        --model_name llama \\
+        --data_pkl   /autodl-fs/data/blend_llama_splits.pkl \\
+        --output_dir /root/autodl-tmp/models/distill_single_llama \\
+        --epochs 5 --batch_size 4 --lr 2e-4 --lora_r 32 --patience 2
 
 Usage (multi-GPU DDP via accelerate):
     accelerate launch --num_processes 2 Cul/sft/train_single_teacher_distill.py \\
-        --model_name   llama \\
-        --teacher_files Cul/data/blend_llama_role_xxx.json,Cul/data/normad_llama_role_xxx.json \\
-        --output_dir   /root/autodl-tmp/models/distill_single_llama \\
-        --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+        --model_name llama \\
+        --data_pkl   /autodl-fs/data/blend_llama_splits.pkl \\
+        --output_dir /root/autodl-tmp/models/distill_single_llama \\
+        --epochs 5 --batch_size 4 --lr 2e-4 --lora_r 32 --patience 2
 """
 
 import re
 import json
+import pickle
 import argparse
 from pathlib import Path
 from functools import partial
@@ -82,7 +90,7 @@ SYSTEM_PROMPT = (
 
 
 # ---------------------------------------------------------------------------
-# 数据加载：读取 role-play 输出 JSONL，并构造蒸馏样本
+# 答案抽取（与 single_data.py / evaluate.py 保持一致）
 # ---------------------------------------------------------------------------
 
 def _max_choice_of(task_type: str) -> int:
@@ -93,8 +101,8 @@ def _max_choice_of(task_type: str) -> int:
     return 3
 
 
-def _extract_answer(text: str, max_choice: int):
-    """从 teacher response 中抽取答案数字（与 single_data.py 抽取逻辑保持一致）。"""
+def extract_answer(text: str, max_choice: int = 4):
+    """从模型/teacher 回答中抽取答案数字。"""
     pattern = f"[1-{max_choice}]"
     m = re.search(rf"(?:Final\s+decision|Answer)\s*(?:is|[:\-])\s*({pattern})\b",
                   text, re.IGNORECASE)
@@ -110,35 +118,20 @@ def _extract_answer(text: str, max_choice: int):
     return digits[-1] if digits else None
 
 
-def load_teacher_records(files: list[str]) -> list[dict]:
-    """加载一个或多个 role-play 输出 JSONL 文件，合并为记录列表。"""
-    records = []
-    for fp in files:
-        path = Path(fp.strip())
-        if not path.exists():
-            raise FileNotFoundError(f"Teacher file not found: {path}")
-        n = 0
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                records.append(json.loads(line))
-                n += 1
-        print(f"  Loaded {n} records from {path}")
-    return records
-
+# ---------------------------------------------------------------------------
+# 从 pkl 的 train split 构造蒸馏样本（teacher response 作为 label）
+# ---------------------------------------------------------------------------
 
 def build_distill_samples(records: list[dict],
                           filter_correct: bool = False,
                           drop_no_pred: bool = True) -> list[dict]:
-    """从 teacher role-play 记录构造蒸馏 SFT 样本。
+    """从 teacher role-play 记录（pkl 的 train split）构造蒸馏 SFT 样本。
 
     监督目标（target）= teacher 的 response 字段（role-play 输出），
     *不是* 数据集原始 label（gt）。
 
     Args:
-        records:        role-play 输出记录
+        records:        role-play 输出记录（含 query/country/gt/pred/response）
         filter_correct: 仅保留 teacher 答对（pred == gt）的样本
         drop_no_pred:   丢弃无法抽取答案（pred 为空）的样本
     Returns:
@@ -164,7 +157,7 @@ def build_distill_samples(records: list[dict],
         # 抽取 teacher 答案（优先用文件里的 pred，缺失则现场抽取）
         pred = obj.get("pred")
         if pred is None:
-            pred = _extract_answer(response, _max_choice_of(task_type))
+            pred = extract_answer(response, _max_choice_of(task_type))
 
         if drop_no_pred and (pred is None or str(pred).strip() == ""):
             skip_no_pred += 1
@@ -184,7 +177,7 @@ def build_distill_samples(records: list[dict],
             "task_type": task_type,
         })
 
-    print(f"Distillation samples: {len(samples)} kept | "
+    print(f"Distillation (train) samples: {len(samples)} kept | "
           f"skipped: empty_response={skip_empty_resp}, "
           f"no_pred={skip_no_pred}, wrong(filtered)={skip_wrong}")
     return samples
@@ -290,6 +283,88 @@ def compute_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# 验证：在 val split 上生成式评估，按数据集原始 gt 计算准确率
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def validate(model, tokenizer, val_samples: list[dict], accelerator: Accelerator,
+             max_samples: int = 300) -> float:
+    """在验证集上计算学生模型的准确率（vs. 原始 gt）。仅在主进程执行。
+
+    注意：验证口径与 evaluate.py 在 test 上完全一致 —— 生成回答后抽取答案，
+    与数据集原始 gt 比对。蒸馏目标虽然是 teacher 输出，但我们关心的是学生
+    在真实任务上的正确率，因此验证 / 测试都用 gt。
+    """
+    unwrapped_model = accelerator.unwrap_model(model)
+    unwrapped_model.eval()
+
+    # 关闭 gradient checkpointing 并恢复 use_cache，否则 generate() 会因
+    # use_cache=False 而极慢甚至卡住。
+    if hasattr(unwrapped_model, "base_model"):
+        underlying = (unwrapped_model.base_model.model
+                      if hasattr(unwrapped_model.base_model, "model")
+                      else unwrapped_model.base_model)
+    else:
+        underlying = unwrapped_model
+    underlying.gradient_checkpointing_disable()
+    underlying.config.use_cache = True
+
+    device = accelerator.device
+    correct, total = 0, 0
+
+    for obj in val_samples:
+        if total >= max_samples:
+            break
+        query = obj["query"]
+        country = obj.get("country", "")
+        gold = str(obj.get("gt", "")).strip()
+        if not gold:
+            continue
+        task_type = obj.get("task_type", "culturalbench")
+        max_choice = _max_choice_of(task_type)
+
+        input_text = f"[{country}]\n{query}" if country else query
+        prompt = tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": input_text},
+            ],
+            tokenize=False, add_generation_prompt=True,
+        )
+        enc = tokenizer(prompt, return_tensors="pt",
+                        max_length=MAX_SEQ_LEN, truncation=True).to(device)
+
+        outs = unwrapped_model.generate(
+            **enc,
+            max_new_tokens=512,
+            do_sample=False,
+            top_k=None, top_p=None, temperature=None,
+            pad_token_id=tokenizer.pad_token_id,
+            use_cache=True,
+        )
+        prompt_len = enc["input_ids"].shape[1]
+        response = tokenizer.decode(outs[0][prompt_len:], skip_special_tokens=True)
+
+        pred = extract_answer(response, max_choice)
+        if pred == gold:
+            correct += 1
+        total += 1
+
+        if total % 50 == 0:
+            accelerator.print(f"    Eval progress: {total} "
+                              f"(acc so far: {correct/total:.4f})")
+
+    # 恢复训练态：先关 use_cache，再重新开启 gradient checkpointing
+    underlying.config.use_cache = False
+    underlying.gradient_checkpointing_enable()
+    unwrapped_model.train()
+
+    acc = correct / total if total > 0 else 0.0
+    accelerator.print(f"    [Eval] val_accuracy={acc:.4f} ({correct}/{total})")
+    return acc
+
+
+# ---------------------------------------------------------------------------
 # Training (LoRA + Accelerate DDP)
 # ---------------------------------------------------------------------------
 
@@ -307,27 +382,34 @@ def train(args):
     accelerator.print(f"LoRA rank: {args.lora_r}, LoRA alpha: {args.lora_alpha}")
     accelerator.print(f"filter_correct={args.filter_correct}, "
                       f"drop_no_pred={args.drop_no_pred}")
+    accelerator.print(f"Early stopping patience: {args.patience}")
 
     model_path = MODEL_ALIASES.get(args.model_name.lower(), args.model_name)
     accelerator.print(f"Base (student) model: {model_path}")
 
-    # 加载 teacher role-play 输出并构造蒸馏样本
-    teacher_files = [f for f in args.teacher_files.split(",") if f.strip()]
-    accelerator.print(f"Teacher role-play files ({len(teacher_files)}):")
-    records = load_teacher_records(teacher_files)
+    # 加载 pkl 划分（train 训练 / val 验证 / test 不在此处使用）
+    accelerator.print(f"Loading data splits from: {args.data_pkl}")
+    with open(args.data_pkl, "rb") as f:
+        splits = pickle.load(f)
+    train_raw = splits["train"]
+    val_raw = splits["val"]
+    accelerator.print(f"  Splits: train={len(train_raw)}, val={len(val_raw)}, "
+                      f"test={len(splits['test'])} (test 由 evaluate.py 使用)")
+
+    # 构造蒸馏训练样本（teacher response 作为 label）
     samples = build_distill_samples(
-        records,
+        train_raw,
         filter_correct=args.filter_correct,
         drop_no_pred=args.drop_no_pred,
     )
     if len(samples) == 0:
-        raise ValueError("No valid distillation samples found. Check teacher files.")
+        raise ValueError("No valid distillation samples found in train split.")
 
     if args.max_samples > 0:
         samples = samples[: args.max_samples]
-        accelerator.print(f"Using first {args.max_samples} distillation samples")
+        accelerator.print(f"Using first {args.max_samples} train samples")
     else:
-        accelerator.print(f"Using all {len(samples)} distillation samples")
+        accelerator.print(f"Using all {len(samples)} train samples")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -338,6 +420,7 @@ def train(args):
         model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
     )
 
+    # LoRA：只训练 adapter 参数，基座冻结
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         r=args.lora_r,
@@ -377,6 +460,9 @@ def train(args):
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
+    best_val_acc = 0.0
+    no_improve = 0  # 连续多少个 epoch 验证集准确率未提升
+
     for epoch in range(1, args.epochs + 1):
         model.train()
         total_loss, num_steps = 0.0, 0
@@ -405,59 +491,22 @@ def train(args):
         avg_loss = total_loss / max(num_steps, 1)
         accelerator.print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
 
-        # 每个 epoch 结束保存一次 LoRA adapter（覆盖到 epoch{e} 子目录）
+        # ---- 每个 epoch 在验证集上评估（仅主进程 generate，其余进程等待）----
         accelerator.wait_for_everyone()
+
+        val_acc = 0.0
+        stop_signal = torch.zeros(1, device=accelerator.device)
         if accelerator.is_main_process:
-            ckpt = Path(args.output_dir) / f"epoch{epoch}"
-            unwrapped = accelerator.unwrap_model(model)
-            unwrapped.save_pretrained(str(ckpt))
-            tokenizer.save_pretrained(str(ckpt))
-            accelerator.print(f"  ✓ Saved LoRA adapter → {ckpt}")
-        accelerator.wait_for_everyone()
+            accelerator.print(f"  [Eval] Validating epoch {epoch} on val split "
+                              f"(max {args.eval_max_samples} samples)...")
+            val_acc = validate(model, tokenizer, val_raw, accelerator,
+                               max_samples=args.eval_max_samples)
+            accelerator.print(f"  [Eval] Epoch {epoch} | val_accuracy={val_acc:.4f} "
+                              f"| best={best_val_acc:.4f}")
 
-    # 额外保存最终 adapter 到 final 目录，方便统一引用
-    if accelerator.is_main_process:
-        ckpt = Path(args.output_dir) / "final"
-        unwrapped = accelerator.unwrap_model(model)
-        unwrapped.save_pretrained(str(ckpt))
-        tokenizer.save_pretrained(str(ckpt))
-        accelerator.print(f"\nDistillation complete. Final LoRA adapter → {ckpt}")
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Single-Teacher Distillation SFT (LoRA) — Accelerate DDP. "
-                    "用 role-play 输出（response）作为监督信号蒸馏基座模型。"
-    )
-    parser.add_argument("--model_name", type=str, required=True,
-                        help="学生基座别名 'llama' / 'qwen'，或完整本地路径")
-    parser.add_argument("--teacher_files", type=str, required=True,
-                        help="teacher role-play 输出 JSONL 路径，逗号分隔可传多个 "
-                             "（如 single_data.py --method role 的产出）")
-    parser.add_argument("--output_dir", type=str, required=True,
-                        help="保存 LoRA adapter 的目录")
-    parser.add_argument("--filter_correct", action="store_true",
-                        help="仅蒸馏 teacher 答对（pred==gt）的样本（拒绝采样）。"
-                             "默认 False，按 role-play 输出全量蒸馏。")
-    parser.add_argument("--drop_no_pred", action="store_true", default=True,
-                        help="丢弃无法抽取答案的样本（默认 True）")
-    parser.add_argument("--keep_no_pred", dest="drop_no_pred", action="store_false",
-                        help="保留无法抽取答案的样本")
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--lora_r", type=int, default=32)
-    parser.add_argument("--lora_alpha", type=int, default=64)
-    parser.add_argument("--max_samples", type=int, default=0,
-                        help="最大蒸馏样本数，0=全部")
-    parser.add_argument("--grad_accum_steps", type=int, default=1)
-    args = parser.parse_args()
-    train(args)
-
-
-if __name__ == "__main__":
-    main()
+            improved = val_acc > best_val_acc + args.min_delta
+            if improved:
+                best_val_acc = val_acc
+                no_improve = 0
+                ckpt = Path(args.output_dir) / "best"
+                unwrapped = accelerator.unwrap_model(model

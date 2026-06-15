@@ -424,12 +424,14 @@ if __name__ == '__main__':
         torch_dtype=torch.float16,
     ).to(decoder_device)
     
-    # Reshape node embeddings (reshape full array first, then slice to num_train_samples)
-    total_samples = node_embeddings.shape[0] // (max_node_num * gcn_in_channels) \
-        if node_embeddings.ndim == 1 else node_embeddings.shape[0] // max_node_num
-    node_embeddings = node_embeddings.reshape(-1, max_node_num, gcn_in_channels)
+    # Reshape node embeddings: first reshape full array, then slice to num_train_samples
+    # node_embeddings from pkl may be flat (N*nodes*dim,) or 2D (N*nodes, dim)
+    total_elements = node_embeddings.size if hasattr(node_embeddings, 'size') and not callable(node_embeddings.size) else np.prod(node_embeddings.shape)
+    total_mag_samples = total_elements // (max_node_num * gcn_in_channels)
+    print(f"  Node embeddings raw shape: {node_embeddings.shape}, total MAG samples: {total_mag_samples}")
+    node_embeddings = node_embeddings.reshape(total_mag_samples, max_node_num, gcn_in_channels)
     node_embeddings = torch.tensor(node_embeddings[:num_train_samples])
-    print(f"  Node embeddings reshaped: {node_embeddings.size()}")
+    print(f"  Node embeddings sliced: {node_embeddings.size()}")
     
     # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
