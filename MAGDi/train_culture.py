@@ -504,6 +504,7 @@ if __name__ == '__main__':
         bf16=True,  # BF16 mixed precision: faster, no GradScaler needed, wider dynamic range
         logging_steps=10,
         output_dir=args.output_dir,
+        overwrite_output_dir=True,  # Prevent auto-resume from stale checkpoints
         remove_unused_columns=False,
         # Evaluate & save at end of each epoch
         eval_strategy="epoch",
@@ -532,6 +533,30 @@ if __name__ == '__main__':
     )
     
     import os
+    
+    # Debug: print Trainer's computed training plan
+    train_dataloader = trainer.get_train_dataloader()
+    num_update_steps_per_epoch = len(train_dataloader) // args.gradient_accumulation_steps
+    num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
+    total_steps = num_update_steps_per_epoch * args.num_epochs
+    print(f"\n  [DEBUG] Training plan:")
+    print(f"    train_dataset size: {len(train_dataset)}")
+    print(f"    eval_dataset size: {len(eval_dataset)}")
+    print(f"    dataloader batches per epoch: {len(train_dataloader)}")
+    print(f"    gradient_accumulation_steps: {args.gradient_accumulation_steps}")
+    print(f"    update steps per epoch: {num_update_steps_per_epoch}")
+    print(f"    num_epochs: {args.num_epochs}")
+    print(f"    total optimization steps: {total_steps}")
+    print(f"    trainer.args.num_train_epochs: {trainer.args.num_train_epochs}")
+    print(f"    trainer.args.max_steps: {trainer.args.max_steps}")
+    print()
+    
+    # Clear output_dir entirely to prevent auto-resume from stale state
+    if os.path.exists(args.output_dir):
+        import shutil as _shutil
+        print(f"  [INFO] Clearing output_dir to prevent auto-resume: {args.output_dir}")
+        _shutil.rmtree(args.output_dir, ignore_errors=True)
+    os.makedirs(args.output_dir, exist_ok=True)
     
     try:
         trainer.train()

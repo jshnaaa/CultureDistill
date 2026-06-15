@@ -297,6 +297,12 @@ def main():
                         help="Path to output JSON file (MAG format)")
     parser.add_argument('--max_samples', type=int, default=0,
                         help="Max samples to process (0 = all)")
+    parser.add_argument('--splits_pkl', type=str, default='',
+                        help="Path to splits pkl file (from split_data.py). "
+                             "If provided, only processes samples in the specified split.")
+    parser.add_argument('--split', type=str, default='train',
+                        choices=['train', 'val', 'test'],
+                        help="Which split to use (only effective with --splits_pkl)")
     
     args = parser.parse_args()
     
@@ -304,6 +310,27 @@ def main():
     print(f"Loading inference data from: {args.input_file}")
     raw_data = load_inference_data(args.input_file)
     print(f"  Loaded {len(raw_data)} samples")
+    
+    # Filter by splits_pkl if provided
+    if args.splits_pkl:
+        import pickle
+        print(f"  Filtering by splits_pkl ({args.split} split): {args.splits_pkl}")
+        with open(args.splits_pkl, 'rb') as f:
+            splits = pickle.load(f)
+        split_samples = splits[args.split]
+        # Build index set using (query_prefix, country) for matching
+        split_keys = set()
+        for s in split_samples:
+            key = (s.get('query', '')[:200].strip().lower(), s.get('country', '').strip().lower())
+            split_keys.add(key)
+        # Filter raw_data to only include samples in the target split
+        filtered = []
+        for sample in raw_data:
+            key = (sample.get('query', '')[:200].strip().lower(), sample.get('country', '').strip().lower())
+            if key in split_keys:
+                filtered.append(sample)
+        print(f"  Filtered: {len(raw_data)} -> {len(filtered)} samples (matched {args.split} split)")
+        raw_data = filtered
     
     if args.max_samples > 0:
         raw_data = raw_data[:args.max_samples]

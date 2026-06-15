@@ -53,7 +53,6 @@ Usage (multi-GPU DDP via accelerate):
 """
 
 import re
-import json
 import pickle
 import argparse
 from pathlib import Path
@@ -70,7 +69,7 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, TaskType
 from accelerate import Accelerator, InitProcessGroupKwargs
-from accelerate.utils import set_seed
+from accelerate.utils import set_seed, broadcast
 
 
 MODEL_ALIASES = {
@@ -491,22 +490,102 @@ def train(args):
         avg_loss = total_loss / max(num_steps, 1)
         accelerator.print(f"Epoch {epoch}/{args.epochs} | avg_loss={avg_loss:.4f}")
 
-        # ---- 每个 epoch 在验证集上评估（仅主进程 generate，其余进程等待）----
+        # ---- 每个 epoch 在验证集上评估（仅主进程 generate）----
+        # 用一个张量作为跨进程的"早停信号"，确保所有 rank 同步退出训练循环。
         accelerator.wait_for_everyone()
-
-        val_acc = 0.0
         stop_signal = torch.zeros(1, device=accelerator.device)
+
         if accelerator.is_main_process:
             accelerator.print(f"  [Eval] Validating epoch {epoch} on val split "
                               f"(max {args.eval_max_samples} samples)...")
             val_acc = validate(model, tokenizer, val_raw, accelerator,
                                max_samples=args.eval_max_samples)
             accelerator.print(f"  [Eval] Epoch {epoch} | val_accuracy={val_acc:.4f} "
-                              f"| best={best_val_acc:.4f}")
+                              f"| previous best={best_val_acc:.4f}")
 
             improved = val_acc > best_val_acc + args.min_delta
             if improved:
                 best_val_acc = val_acc
                 no_improve = 0
                 ckpt = Path(args.output_dir) / "best"
-                unwrapped = accelerator.unwrap_model(model
+                unwrapped = accelerator.unwrap_model(model)
+                # 仅保存 LoRA adapter（adapter_model.safetensors + adapter_config.json）
+                unwrapped.save_pretrained(str(ckpt))
+                tokenizer.save_pretrained(str(ckpt))
+                accelerator.print(f"  ✓ New best (val_acc={best_val_acc:.4f}) "
+                                  f"→ saved LoRA adapter to {ckpt}")
+            else:
+                no_improve += 1
+                accelerator.print(f"  No improvement ({no_improve}/{args.patience}) "
+                                  f"| best={best_val_acc:.4f}")
+                if no_improve >= args.patience:
+                    accelerator.print(f"  ✋ Early stopping triggered at epoch {epoch} "
+                                      f"(no improvement for {args.patience} epochs).")
+                    stop_signal += 1.0
+
+        # 广播早停信号到所有进程，保证 DDP 下同步退出
+        accelerator.wait_for_everyone()
+        stop_signal = broadcast(stop_signal, from_process=0)
+        if stop_signal.item() > 0:
+            break
+
+    # 若整个训练过程从未保存（极端情况：val 始终为 0），兜底保存最终 adapter
+    accelerator.wait_for_everyone()
+    if accelerator.is_main_process:
+        best_dir = Path(args.output_dir) / "best"
+        if not best_dir.exists():
+            unwrapped = accelerator.unwrap_model(model)
+            unwrapped.save_pretrained(str(best_dir))
+            tokenizer.save_pretrained(str(best_dir))
+            accelerator.print(f"  Saved final LoRA adapter (no val improvement "
+                              f"observed) → {best_dir}")
+        accelerator.print(f"\nDistillation complete. "
+                          f"Best val_accuracy: {best_val_acc:.4f}")
+        accelerator.print(f"Best LoRA adapter: {args.output_dir}/best")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Single-Teacher Distillation SFT (LoRA) — Accelerate DDP. "
+                    "在 pkl 的 train 上用 role-play 输出（response）作为监督信号蒸馏基座；"
+                    "每个 epoch 在 val 上评估准确率，保存最优 adapter 并支持早停。"
+    )
+    parser.add_argument("--model_name", type=str, required=True,
+                        help="学生基座别名 'llama' / 'qwen'，或完整本地路径")
+    parser.add_argument("--data_pkl", type=str, required=True,
+                        help="split_data.py 产出的 pkl（含 train/val/test）；"
+                             "输入应为 single_data.py --method role 的 role-play 输出")
+    parser.add_argument("--output_dir", type=str, required=True,
+                        help="保存 LoRA adapter 的目录（最优模型存到 {output_dir}/best）")
+    parser.add_argument("--filter_correct", action="store_true",
+                        help="仅蒸馏 teacher 答对（pred==gt）的样本（拒绝采样）。"
+                             "默认 False，按 role-play 输出全量蒸馏。")
+    parser.add_argument("--drop_no_pred", action="store_true", default=True,
+                        help="丢弃无法抽取答案的样本（默认 True）")
+    parser.add_argument("--keep_no_pred", dest="drop_no_pred", action="store_false",
+                        help="保留无法抽取答案的样本")
+    parser.add_argument("--epochs", type=int, default=5,
+                        help="最大训练轮数（早停可能提前结束）")
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lora_r", type=int, default=32)
+    parser.add_argument("--lora_alpha", type=int, default=64)
+    parser.add_argument("--patience", type=int, default=2,
+                        help="连续 N 个 epoch 验证集准确率不提升则早停（默认 2）")
+    parser.add_argument("--min_delta", type=float, default=0.0,
+                        help="判定'提升'所需的最小准确率增量（默认 0.0）")
+    parser.add_argument("--eval_max_samples", type=int, default=300,
+                        help="每轮验证最多评估的样本数（默认 300，加速验证）")
+    parser.add_argument("--max_samples", type=int, default=0,
+                        help="最大训练样本数，0=全部")
+    parser.add_argument("--grad_accum_steps", type=int, default=1)
+    args = parser.parse_args()
+    train(args)
+
+
+if __name__ == "__main__":
+    main()

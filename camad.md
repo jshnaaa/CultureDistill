@@ -450,9 +450,11 @@ single-teacher 蒸馏将"角色扮演大模型"视为唯一 teacher，把它在 
 - **单一 teacher、单次生成**。不引入 Guardian/Auditor 多智能体协作、不做多教师集成、不叠加任何 RL 信号，确保该基线只反映"单教师蒸馏"本身的能力。
 - **数据集统一**。teacher 的 role-play 在 CulturalBench / BLEnD / NormAD 上共用同一套"文化内部专家"角色提示词（见 `single_data.py` 的 `build_system_prompt`），仅按任务形态做最小幅度措辞调整，因此三个数据集的蒸馏数据可直接合并训练。
 
-监督目标的构造：以 `[{country}]\n{query}` 作为 user 输入，以 teacher 的 `response` 原样作为 assistant 目标，prompt 部分用 `IGNORE_INDEX` 屏蔽，仅在 teacher 输出 token 上计算自回归交叉熵。训练采用 LoRA + Accelerate（与 §2.1 等其它消融保持同一套训练栈）。
+监督目标的构造：以 `[{country}]\n{query}` 作为 user 输入，以 teacher 的 `response` 原样作为 assistant 目标，prompt 部分用 `IGNORE_INDEX` 屏蔽，仅在 teacher 输出 token 上计算自回归交叉熵。训练采用 **LoRA** 微调（基座冻结，只训练并保存 adapter 参数 `adapter_model.safetensors` + `adapter_config.json`，约几十~几百 MB，不保存 14GB 基座权重），配合 Accelerate（与 §2.1 等其它消融保持同一套训练栈）。评估 / 推理时由 `evaluate.py` 以 "基座 + `PeftModel.from_pretrained(adapter)`" 的方式还原模型。
 
-样本筛选提供两个可选开关：`--filter_correct`（仅蒸馏 teacher 答对、即 `pred == gt` 的样本，等价于拒绝采样，默认关闭以严格按 role-play 输出全量蒸馏）与 `--drop_no_pred`（丢弃无法抽取出答案的 teacher 输出，默认开启）。
+数据划分与验证 / 早停：统一复用 `Cul/split_data.py` 产出的 pkl（对 role-play 输出文件按 8:1:1 划分为 train/val/test，保留全部原始字段）。蒸馏脚本在 **train** 上训练（以 teacher 的 `response` 作为蒸馏目标），每个 epoch 结束在 **val** 上做生成式评估——注意验证准确率按数据集**原始 `gt`** 计算（与 `evaluate.py` 在 test 上的口径完全一致，衡量学生在真实任务上的正确率，而非"像不像 teacher"）；验证准确率创新高时把 LoRA adapter 保存到 `{output_dir}/best`，连续 `--patience`（默认 2）个 epoch 不再提升则触发早停。**test** 不参与训练，最终测试由 `evaluate.py` 在 pkl 的 test split 上完成。
+
+样本筛选提供两个可选开关（仅作用于 train）：`--filter_correct`（仅蒸馏 teacher 答对、即 `pred == gt` 的样本，等价于拒绝采样，默认关闭以严格按 role-play 输出全量蒸馏）与 `--drop_no_pred`（丢弃无法抽取出答案的 teacher 输出，默认开启）。
 
 ### 2.0.2 与其它范式的对照关系
 
@@ -490,53 +492,63 @@ python Cul/single_data.py \
     --tensor_parallel_size 2 --max_samples 0
 ```
 
-**第二步：用 role-play 输出蒸馏基座**（单卡；多个 teacher 文件用逗号拼接，可跨数据集合并）：
+**第二步：将 role-play 输出按 8:1:1 划分为 train/val/test**（保留全部原始字段）：
 
 ```bash
 python Cul/split_data.py \
-    --input /autodl-fs/data/blend_llama_role_20260610_112253.json \
+    --input  /autodl-fs/data/blend_llama_role_20260610_112253.json \
     --output /autodl-fs/data/blend_llama_splits.pkl \
     --seed 42
+```
+
+**第三步：在 pkl 的 train 上蒸馏，每轮在 val 上评估并早停**（单卡）：
+
+```bash
+python Cul/sft/train_single_teacher_distill.py \
+    --model_name llama \
+    --data_pkl   /autodl-fs/data/blend_llama_splits.pkl \
+    --output_dir /root/autodl-tmp/models/distill_single_llama \
+    --epochs 5 --batch_size 4 --lr 2e-4 --lora_r 32 \
+    --patience 2 --eval_max_samples 300
 ```
 
 多卡 DDP（Accelerate）：
 
 ```bash
 accelerate launch --num_processes 2 Cul/sft/train_single_teacher_distill.py \
-    --model_name    llama \
-    --teacher_files /autodl-fs/data/blend_llama_role_20260610_112253.json \
-    --output_dir    /root/autodl-tmp/models/distill_single_llama \
-    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
-```
-
-```bash
-python Cul/sft/train_single_teacher_distill.py \
-    --model_name    llama \
-    --teacher_files /autodl-fs/data/blend_llama_role_20260610_112253.json,/autodl-fs/data/culturalbench_llama_role.json,/autodl-fs/data/normad_llama_role.json \
-    --output_dir    /root/autodl-tmp/models/distill_single_llama \
-    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+    --model_name llama \
+    --data_pkl   /autodl-fs/data/blend_llama_splits.pkl \
+    --output_dir /root/autodl-tmp/models/distill_single_llama \
+    --epochs 5 --batch_size 4 --lr 2e-4 --lora_r 32 \
+    --patience 2 --eval_max_samples 300
 ```
 
 | 参数 | 含义 |
 |------|------|
 | `--model_name` | 学生基座别名 `llama` / `qwen`，或完整本地路径 |
-| `--teacher_files` | teacher 的 role-play 输出 JSONL（`single_data.py --method role` 产出），逗号分隔可传多个/跨数据集合并 |
-| `--output_dir` | LoRA adapter 保存目录（每个 epoch 存一份，另存 `final/`）|
+| `--data_pkl` | `split_data.py` 产出的 pkl（含 train/val/test）；train 训练、val 验证，test 留给评估 |
+| `--output_dir` | LoRA adapter 保存目录；验证集准确率最优的模型保存到 `{output_dir}/best` |
 | `--filter_correct` | 仅蒸馏 teacher 答对（`pred==gt`）的样本（拒绝采样）；默认关闭，全量蒸馏 role-play 输出 |
 | `--drop_no_pred` / `--keep_no_pred` | 是否丢弃无法抽取答案的 teacher 输出（默认丢弃）|
-| `--epochs` / `--batch_size` / `--lr` | 训练轮数 / 批大小 / 学习率 |
+| `--epochs` | 最大训练轮数（早停可能提前结束）|
+| `--patience` | 连续 N 个 epoch 验证准确率不提升则早停（默认 2）|
+| `--min_delta` | 判定"提升"所需的最小准确率增量（默认 0.0）|
+| `--eval_max_samples` | 每轮验证最多评估的样本数（默认 300，加速验证）|
+| `--batch_size` / `--lr` | 批大小 / 学习率 |
 | `--lora_r` / `--lora_alpha` | LoRA rank 与 alpha |
-| `--max_samples` | 仅取前 N 条蒸馏样本（默认 0 = 全量），用于快速跑通 |
+| `--max_samples` | 仅取前 N 条训练样本（默认 0 = 全量），用于快速跑通 |
 
-**第三步：评估蒸馏后的学生**（复用统一评估脚本，加载 LoRA adapter）：
+> 训练日志每个 epoch 打印 `val_accuracy` 与当前 `best`；验证集创新高时把 LoRA adapter 写入 `{output_dir}/best`，触发早停时打印 `Early stopping triggered`。
+
+**第四步：在 pkl 的 test 上评估最优学生**（复用统一评估脚本，按"基座 + LoRA adapter"还原）：
 
 ```bash
 python Cul/evaluate.py \
     --mode sft \
     --model_name llama \
-    --data_pkl /autodl-fs/data/llama/blend_llama_splits.pkl \
-    --sft_adapter /root/autodl-tmp/model/distill_single_llama/final \
-    --output_json /root/autodl-tmp/model/distill_single_llama/eval_distill.json
+    --data_pkl /autodl-fs/data/blend_llama_splits.pkl \
+    --sft_adapter /root/autodl-tmp/models/distill_single_llama/best \
+    --output_json /root/autodl-tmp/models/distill_single_llama/eval_distill.json
 ```
 
 ---
