@@ -76,6 +76,7 @@ Usage:
 import re
 import os
 import json
+import math
 import pickle
 import argparse
 import sys
@@ -820,6 +821,12 @@ def train_sft_only(args):
     print(f"[SFT-only] Hyper-params: beta={args.beta} w_min={args.w_min} "
           f"ema={args.use_ema}(m={args.ema_momentum})")
 
+    # Total batches actually run per round (for progress display).
+    total_batches = min(
+        args.batches_per_round,
+        math.ceil(len(train_samples) / args.prompt_batch_size),
+    )
+
     for rnd in range(args.max_rounds):
         print(f"\n========== Round {rnd + 1}/{args.max_rounds} ==========")
         round_batches = 0
@@ -837,6 +844,13 @@ def train_sft_only(args):
             countries = [s["country"] for s in batch]
             queries = [s["query"] for s in batch]
             n_prompts = len(batch)
+
+            # Lightweight progress: the greedy decode + SFT backward below are
+            # silent and can take a while, so surface where we are each batch.
+            print(f"  [SFT-only] round {rnd + 1}/{args.max_rounds} "
+                  f"batch {round_batches}/{total_batches} "
+                  f"(step {global_step}) | greedy decode {n_prompts} prompts "
+                  f"...", flush=True)
 
             # ---- Estimate hitrate via a lightweight greedy decode (n=1) ----
             # This keeps w_sft on the exact same formula/path as CAMAD without
@@ -896,6 +910,10 @@ def train_sft_only(args):
 
         # ---- Validation per round ----
         if val_samples:
+            n_eval = min(args.max_eval, len(val_samples)) if args.max_eval > 0 \
+                else len(val_samples)
+            print(f"  [SFT-only] round {rnd + 1} validating on {n_eval} "
+                  f"samples ...", flush=True)
             acc = validate(
                 policy, tokenizer, val_samples, policy_device,
                 max_eval=args.max_eval,
@@ -1033,6 +1051,12 @@ def train(args):
           f"alpha={args.alpha} n_samples={args.n_samples}"
           + (" | plain GRPO (no Guardian, no SFT)" if rl_only else ""))
 
+    # Total batches actually run per round (for progress display).
+    total_batches = min(
+        args.batches_per_round,
+        math.ceil(len(train_samples) / args.prompt_batch_size),
+    )
+
     for rnd in range(args.max_rounds):
         print(f"\n========== Round {rnd + 1}/{args.max_rounds} ==========")
         round_batches = 0
@@ -1051,6 +1075,13 @@ def train(args):
             countries = [s["country"] for s in batch]
             queries = [s["query"] for s in batch]
             n_prompts = len(batch)
+
+            # Lightweight progress: the generate/PRM/backward below are silent
+            # and can take a while, so surface where we are each batch.
+            print(f"  [{tag}] round {rnd + 1}/{args.max_rounds} "
+                  f"batch {round_batches}/{total_batches} "
+                  f"(step {global_step}) | generating {n_prompts}x"
+                  f"{args.n_samples} rollouts ...", flush=True)
 
             # ---- Step 2: batch generate n_samples rollouts each ----
             policy.eval()
@@ -1201,6 +1232,10 @@ def train(args):
 
         # ---- Validation per round ----
         if val_samples:
+            n_eval = min(args.max_eval, len(val_samples)) if args.max_eval > 0 \
+                else len(val_samples)
+            print(f"  [{tag}] round {rnd + 1} validating on {n_eval} "
+                  f"samples ...", flush=True)
             acc = validate(
                 policy, tokenizer, val_samples, policy_device,
                 max_eval=args.max_eval,

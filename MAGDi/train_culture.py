@@ -424,12 +424,11 @@ if __name__ == '__main__':
         torch_dtype=torch.float16,
     ).to(decoder_device)
     
-    # Reshape node embeddings
-    node_embeddings = node_embeddings.reshape(
-        num_train_samples, max_node_num, gcn_in_channels
-    )
-    node_embeddings = torch.tensor(node_embeddings)
-    node_embeddings = node_embeddings[:num_train_samples, :, :]
+    # Reshape node embeddings (reshape full array first, then slice to num_train_samples)
+    total_samples = node_embeddings.shape[0] // (max_node_num * gcn_in_channels) \
+        if node_embeddings.ndim == 1 else node_embeddings.shape[0] // max_node_num
+    node_embeddings = node_embeddings.reshape(-1, max_node_num, gcn_in_channels)
+    node_embeddings = torch.tensor(node_embeddings[:num_train_samples])
     print(f"  Node embeddings reshaped: {node_embeddings.size()}")
     
     # Tokenizer

@@ -492,6 +492,13 @@ python Cul/single_data.py \
 
 **第二步：用 role-play 输出蒸馏基座**（单卡；多个 teacher 文件用逗号拼接，可跨数据集合并）：
 
+```bash
+python Cul/split_data.py \
+    --input /autodl-fs/data/blend_llama_role_20260610_112253.json \
+    --output /autodl-fs/data/blend_llama_splits.pkl \
+    --seed 42
+```
+
 多卡 DDP（Accelerate）：
 
 ```bash
@@ -527,9 +534,9 @@ python Cul/sft/train_single_teacher_distill.py \
 python Cul/evaluate.py \
     --mode sft \
     --model_name llama \
-    --data_pkl /autodl-fs/data/llama/blend_splits.pkl \
-    --sft_adapter /root/autodl-tmp/models/distill_single_llama/final \
-    --output_json /root/autodl-tmp/models/distill_single_llama/eval_distill.json
+    --data_pkl /autodl-fs/data/llama/blend_llama_splits.pkl \
+    --sft_adapter /root/autodl-tmp/model/distill_single_llama/final \
+    --output_json /root/autodl-tmp/model/distill_single_llama/eval_distill.json
 ```
 
 ---
