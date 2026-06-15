@@ -439,7 +439,8 @@ python Cul/grpo/train_grpo_mixed_policy.py \
 
 ## 2.0 single-teacher 蒸馏
 
-> 定位：蒸馏训练范式对比的"单 teacher 基线"。**用单个大模型在角色扮演（role-play）下生成的输出作为唯一的监督信号，直接蒸馏到基座学生模型**，用于剥离出"单一教师、无多智能体协作、无强化学习"时纯蒸馏所能达到的水平。它是 HF-CAC 多教师协作蒸馏与 CAMAD 联合训练的最朴素对照组。
+> 定位：蒸馏训练范式对比的"单 teacher 基线"。
+> **用单个大模型在角色扮演（role-play）下生成的输出作为唯一的监督信号，直接蒸馏到基座学生模型**，用于剥离出"单一教师、无多智能体协作、无强化学习"时纯蒸馏所能达到的水平。
 
 ### 2.0.1 方法概述
 
@@ -469,7 +470,6 @@ single-teacher 蒸馏将"角色扮演大模型"视为唯一 teacher，把它在 
 **第一步：用 teacher 生成 role-play 蒸馏数据**（若已生成可跳过；三个数据集分别跑一次）：
 
 ```bash
-# 以 llama 作为 teacher，在 BLEnD 上做 role-play 生成
 python Cul/single_data.py \
     --input_file  /autodl-fs/data/blend_mas_after.json \
     --output_file /autodl-fs/data/blend_llama_role.json \
@@ -477,14 +477,12 @@ python Cul/single_data.py \
     --method      role \
     --tensor_parallel_size 2 --max_samples 0
 
-# CulturalBench role-play
 python Cul/single_data.py \
     --input_file  /autodl-fs/data/culturalBench_mas.json \
     --output_file /autodl-fs/data/culturalbench_llama_role.json \
     --model_name  llama --method role \
     --tensor_parallel_size 2 --max_samples 0
 
-# NormAD role-play
 python Cul/single_data.py \
     --input_file  /autodl-fs/data/normad_mas.json \
     --output_file /autodl-fs/data/normad_llama_role.json \
@@ -494,20 +492,20 @@ python Cul/single_data.py \
 
 **第二步：用 role-play 输出蒸馏基座**（单卡；多个 teacher 文件用逗号拼接，可跨数据集合并）：
 
-```bash
-python Cul/sft/train_single_teacher_distill.py \
-    --model_name    llama \
-    --teacher_files /autodl-fs/data/blend_llama_role_20260610_112253.json,/autodl-fs/data/culturalbench_llama_role.json,/autodl-fs/data/normad_llama_role.json \
-    --output_dir    /root/autodl-tmp/models/distill_single_llama \
-    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
-```
-
 多卡 DDP（Accelerate）：
 
 ```bash
 accelerate launch --num_processes 2 Cul/sft/train_single_teacher_distill.py \
     --model_name    llama \
     --teacher_files /autodl-fs/data/blend_llama_role_20260610_112253.json \
+    --output_dir    /root/autodl-tmp/models/distill_single_llama \
+    --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
+```
+
+```bash
+python Cul/sft/train_single_teacher_distill.py \
+    --model_name    llama \
+    --teacher_files /autodl-fs/data/blend_llama_role_20260610_112253.json,/autodl-fs/data/culturalbench_llama_role.json,/autodl-fs/data/normad_llama_role.json \
     --output_dir    /root/autodl-tmp/models/distill_single_llama \
     --epochs 3 --batch_size 4 --lr 2e-4 --lora_r 32
 ```
