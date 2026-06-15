@@ -81,7 +81,7 @@ python train_culture.py \
     --node_emb_file /autodl-fs/data/MAGDi/MAG/qwen/normad_reconcile_node_emb.pkl \
     --model_name qwen \
     --output_dir /autodl-fs/data/MAGDi/model/MAGDi_normad_reconcile_qwen \
-    --num_epochs 5 --lr 5e-6 --alpha 1.0 --beta 1.0 --gamma 0.1
+    --num_epochs 5 --lr 5e-6 --alpha 1.0 --beta 1.0 --gamma 0.1 --max_samples 10
     
 python train_culture.py \
     --dataset culturalbench --data_source reconcile \
