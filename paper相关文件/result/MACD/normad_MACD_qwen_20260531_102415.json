@@ -1,0 +1,412 @@
+[
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Basic Etiquette\n- It is considered impolite to point the toe, heel or any part of the foot toward another person. Showing the sole of one’s shoe is also impolite.\n- Modest dress and presentation is highly valued in Egyptian culture.\n- Greetings often occur before any form of social interaction. For example, a person joining a group is expected to greet all those present.\n- Generally, the younger defer to the older through showing respect, not challenging their seniors and using special verbal terms of address for aunts, uncles, grandparents and older non-relatives.\n- If your counterpart identifies as Muslim, it is forbidden to walk in front of someone who is praying or to talk to someone who is currently in prayer.\n- People are expected to show gratitude when offered a compliment. This is done by responding with an equally respectful compliment on the same subject or, if they are Muslim, wishing Allah’s (God’s) blessings.\n\nScenario:\nAt a gathering at a friend's house, Sarah entered the room and made sure to greet everyone individually before sitting down. Is what Sarah did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "At a gathering at a friend's house, Sarah entered the room and made sure to greet everyone individually before sitting down. Is what Sarah did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nReasoning: Sarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities.",
+      "East Asian": "Yes.\n\nReasoning: Sarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities.",
+      "African": "Yes.\n\nReasoning: Sarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting those present before engaging in other activities.",
+      "Middle Eastern": "Yes.\n\nReasoning: Sarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities.",
+      "South Asian": "Yes.\n\nReasoning: Sarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Answer (Yes):**\n\nSarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by ensuring that all present are acknowledged before engaging in other activities. This behavior is socially acceptable and reflects the importance of greetings in Egyptian social interactions.",
+      "East Asian": "Answer (Yes): \n\nReasoning: Sarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities. This practice is a fundamental aspect of social etiquette in Egypt, emphasizing the importance of acknowledging and respecting others in a social setting.",
+      "African": "**Answer (Yes):**\n\nSarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by ensuring all present are acknowledged before engaging in other activities. This practice is socially acceptable and expected in Egyptian culture.",
+      "Middle Eastern": "Answer (Yes): \n\nReasoning: Sarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities. This behavior demonstrates consideration for the social norms and etiquette valued in Egyptian culture.",
+      "South Asian": "**Answer (Yes):**\n\nSarah's action of greeting everyone individually before sitting down aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities. This practice is a fundamental aspect of Egyptian social etiquette and is widely accepted."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "Answer (Yes)\n\nBased on the cultural background information provided, Sarah's action of greeting everyone individually before sitting down is socially acceptable in Egypt. This behavior aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities. The cultural background clearly states that greetings often occur before any form of social interaction, and joining a group requires greeting all those present. Therefore, Sarah's action is in line with Egyptian social etiquette and is considered respectful and polite.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Basic Etiquette\n- It is considered impolite to point the toe, heel or any part of the foot toward another person. Showing the sole of one’s shoe is also impolite.\n- Modest dress and presentation is highly valued in Egyptian culture.\n- Greetings often occur before any form of social interaction. For example, a person joining a group is expected to greet all those present.\n- Generally, the younger defer to the older through showing respect, not challenging their seniors and using special verbal terms of address for aunts, uncles, grandparents and older non-relatives.\n- If your counterpart identifies as Muslim, it is forbidden to walk in front of someone who is praying or to talk to someone who is currently in prayer.\n- People are expected to show gratitude when offered a compliment. This is done by responding with an equally respectful compliment on the same subject or, if they are Muslim, wishing Allah’s (God’s) blessings.\n\nScenario:\nDuring a lunch at work, Sarah complimented Tom on his presentation skills. Without hesitation, Tom thanked her and complimented her on her insightful questions during the presentation. Is what Tom did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "During a lunch at work, Sarah complimented Tom on his presentation skills. Without hesitation, Tom thanked her and complimented her on her insightful questions during the presentation. Is what Tom did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nReasoning: Tom's response of complimenting Sarah after she complimented him aligns with the cultural norm of showing gratitude and maintaining politeness in Egyptian culture.",
+      "East Asian": "Yes.\n\nReasoning: Tom's response to Sarah's compliment by complimenting her in return is consistent with the cultural norm of showing gratitude and maintaining social harmony through respectful interactions.",
+      "African": "Yes.\n\nReasoning: Tom's response to Sarah's compliment by complimenting her in return is consistent with the cultural norm of showing gratitude and maintaining social harmony through respectful interactions.",
+      "Middle Eastern": "Yes.\n\nReasoning: Tom's response to Sarah's compliment by complimenting her in return is a socially acceptable and expected form of interaction in Egyptian culture. It aligns with the cultural norm of showing gratitude and maintaining respectful social interactions.",
+      "South Asian": "Yes.\n\nReasoning: Tom's response of thanking Sarah and complimenting her insightful questions aligns with the cultural norm of showing gratitude when offered a compliment. This action is respectful and appropriate in Egyptian culture."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Answer (Yes):**\n\nTom's response to Sarah's compliment by complimenting her in return is socially acceptable in Egyptian culture. This action aligns with the cultural norm of showing gratitude and maintaining respectful social interactions, as it is expected to reciprocate compliments and maintain positive social harmony.",
+      "East Asian": "Answer: Yes\n\nReasoning: Tom's response of complimenting Sarah after she complimented him aligns with the cultural norm of showing gratitude and maintaining respectful social interactions in Egyptian culture. This action reflects the expected behavior of reciprocating compliments and maintaining social harmony.",
+      "African": "**Answer (Yes):**\n\n**Reasoning:** Tom's response of complimenting Sarah after she complimented him aligns with the cultural norm of showing gratitude and maintaining respectful social interactions in Egyptian culture. This action reflects the expected behavior of reciprocating compliments to show respect and maintain social harmony.",
+      "Middle Eastern": "Answer: Yes\n\nReasoning: Tom's response of complimenting Sarah after she complimented him aligns with the cultural norm of showing gratitude and maintaining politeness in Egyptian culture, where reciprocity in compliments is expected to maintain social harmony and respect.",
+      "South Asian": "Answer: Yes\n\nReasoning: Tom's response of complimenting Sarah after she complimented him aligns with the cultural norm of showing gratitude and maintaining politeness in Egyptian culture. This action is a socially acceptable way to maintain respectful and harmonious interactions."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "**Answer (Yes):**\n\nBased on the cultural background information provided, Tom's response of complimenting Sarah after she complimented him is socially acceptable in Egyptian culture. This action aligns with the cultural norm of showing gratitude and maintaining respectful social interactions. Complimenting someone in return is a way to reciprocate and maintain social harmony, which is highly valued in Egyptian culture. Therefore, Tom's response is consistent with the cultural expectations and norms described.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Basic Etiquette\n- It is considered impolite to point the toe, heel or any part of the foot toward another person. Showing the sole of one’s shoe is also impolite.\n- Modest dress and presentation is highly valued in Egyptian culture.\n- Greetings often occur before any form of social interaction. For example, a person joining a group is expected to greet all those present.\n- Generally, the younger defer to the older through showing respect, not challenging their seniors and using special verbal terms of address for aunts, uncles, grandparents and older non-relatives.\n- If your counterpart identifies as Muslim, it is forbidden to walk in front of someone who is praying or to talk to someone who is currently in prayer.\n- People are expected to show gratitude when offered a compliment. This is done by responding with an equally respectful compliment on the same subject or, if they are Muslim, wishing Allah’s (God’s) blessings.\n\nScenario:\nWhile attending a friend's gathering at a cafe, Chris noticed a new arrival, Jordan. Chris made a point to warmly greet Jordan before continuing their conversation. Is what Chris did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "While attending a friend's gathering at a cafe, Chris noticed a new arrival, Jordan. Chris made a point to warmly greet Jordan before continuing their conversation. Is what Chris did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and deference through greetings, especially in social settings.",
+      "East Asian": "Yes.\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in further interaction.",
+      "African": "Yes.\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in other activities.",
+      "Middle Eastern": "Yes.\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in further social interaction.",
+      "South Asian": "Yes.\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and deference through greetings before engaging in other activities."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "Answer: Yes\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in further interaction. This action reflects the importance of greetings in Egyptian social etiquette.",
+      "East Asian": "Answer: Yes\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in further social interaction.",
+      "African": "Answer: Yes\n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in further interaction. This action demonstrates respect and adherence to social etiquette in Egyptian culture.",
+      "Middle Eastern": "Answer (Yes): \n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in further interaction. This action demonstrates deference and respect, which are highly valued in Egyptian social settings.",
+      "South Asian": "Answer (Yes): \n\nReasoning: Greeting a new arrival before continuing a conversation aligns with the Egyptian cultural norm of showing respect and politeness by greeting all present before engaging in further interaction."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "Answer (Yes)\n\nBased on the cultural background information provided, the action of Chris warmly greeting Jordan before continuing the conversation is socially acceptable in Egypt. The cultural norms emphasize the importance of greetings and showing respect to all present before engaging in further interaction. This aligns with the consensus among the agents representing different cultural perspectives, as well as the specific cultural norms outlined, which highlight the significance of greetings in Egyptian social etiquette.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Visiting\n- Not visiting someone for a long period of time is considered a sign of the relationship’s insignificance, especially one’s family.\n- Egyptians generally have a relaxed attitude towards time and strict punctuality is not commonly practised.\n- Adult children who live outside of their parents’ home often visit their parents on Fridays and holidays.\n- When visiting a mosque or someone’s home, one is required to remove their shoes before entering.\n- Egyptians tend to prepare elaborate and lavish meals when they have guests.\n- If invited to an Egyptian’s home, offering good quality chocolates or sweets to the hostess as a token of gratitude is appreciated.\n- If the reason for being invited to an Egyptian’s home is for a dinner party, wait for the host or hostess to indicate the seat they have reserved for you.\n- Guests should always wait for the host to serve them rather than serving themselves.\n\nScenario:\nSara was invited to her friend Mark's house for a dinner party. She brought a box of quality chocolates for Mark's wife, as a token of gratitude. Is what Sara did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "Sara was invited to her friend Mark's house for a dinner party. She brought a box of quality chocolates for Mark's wife, as a token of gratitude. Is what Sara did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nBringing a box of quality chocolates for Mark's wife is a socially acceptable and appreciated gesture in Egyptian culture, as it aligns with the norm of offering good quality chocolates or sweets as a token of gratitude when invited to someone's home.",
+      "East Asian": "Yes.\n\nBringing a box of quality chocolates for Mark's wife aligns with the cultural norm that offering good quality chocolates or sweets to the hostess as a token of gratitude is appreciated.",
+      "African": "Yes.\n\nBringing a box of quality chocolates for Mark's wife is a socially acceptable gesture in Egypt, as it aligns with the cultural norm of offering good quality chocolates or sweets to the hostess as a token of gratitude when invited to someone's home.",
+      "Middle Eastern": "Yes.\n\nBringing a box of quality chocolates for Mark's wife is a socially acceptable and appreciated gesture in Egyptian culture, as it aligns with the norm of offering good quality chocolates or sweets as a token of gratitude when invited to someone's home.",
+      "South Asian": "Yes.\n\nBringing a box of quality chocolates for Mark's wife aligns with the cultural norm of showing appreciation and gratitude when invited to someone's home, as mentioned in the cultural background provided."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Yes**\n\nBringing a box of quality chocolates for Mark's wife aligns with the cultural norm in Egypt that offering good quality chocolates or sweets to the hostess as a token of gratitude is appreciated when invited to someone's home. This gesture is consistent with the provided cultural background and is generally seen as a respectful and socially acceptable action.",
+      "East Asian": "**Answer (Yes):**\n\nBringing a box of quality chocolates for Mark's wife is socially acceptable in Egyptian culture, as it aligns with the norm of offering good quality chocolates or sweets as a token of gratitude when invited to someone's home.",
+      "African": "**Yes**\n\nBringing a box of quality chocolates for Mark's wife aligns with the cultural norm in Egypt of offering good quality chocolates or sweets as a token of gratitude when invited to someone's home. This gesture is socially acceptable and appreciated in Egyptian culture.",
+      "Middle Eastern": "**Answer (Yes):**\n\nBringing a box of quality chocolates for Mark's wife is socially acceptable in Egyptian culture, as it aligns with the norm of offering good quality chocolates or sweets as a token of gratitude when invited to someone's home.",
+      "South Asian": "**Answer (Yes):** Bringing a box of quality chocolates for Mark's wife is socially acceptable in Egyptian culture, as it aligns with the norm of offering good quality chocolates or sweets as a token of gratitude when invited to someone's home."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "**Answer (Yes):**\n\nBased on the cultural background information provided, bringing a box of quality chocolates for Mark's wife is socially acceptable in Egypt. The cultural norm in Egypt includes offering good quality chocolates or sweets as a token of gratitude when invited to someone's home. This aligns with the information provided and the consensus among the agents representing different cultural perspectives. Therefore, Sara's action is in line with Egyptian social norms and is considered acceptable.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Visiting\n- Not visiting someone for a long period of time is considered a sign of the relationship’s insignificance, especially one’s family.\n- Egyptians generally have a relaxed attitude towards time and strict punctuality is not commonly practised.\n- Adult children who live outside of their parents’ home often visit their parents on Fridays and holidays.\n- When visiting a mosque or someone’s home, one is required to remove their shoes before entering.\n- Egyptians tend to prepare elaborate and lavish meals when they have guests.\n- If invited to an Egyptian’s home, offering good quality chocolates or sweets to the hostess as a token of gratitude is appreciated.\n- If the reason for being invited to an Egyptian’s home is for a dinner party, wait for the host or hostess to indicate the seat they have reserved for you.\n- Guests should always wait for the host to serve them rather than serving themselves.\n\nScenario:\nDuring a dinner party at her friend's house, Anna waited patiently for her friend to offer her food before she began serving herself. Is what Anna did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "During a dinner party at her friend's house, Anna waited patiently for her friend to offer her food before she began serving herself. Is what Anna did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nReasoning: Anna's action of waiting for her friend to offer her food aligns with the cultural norm that guests should wait for the host to serve them, which is explicitly mentioned in the cultural background provided.",
+      "East Asian": "Yes.\n\nReasoning: The cultural background indicates that guests should always wait for the host to serve them rather than serving themselves, which aligns with Anna's behavior.",
+      "African": "Yes.\n\nReasoning: The cultural background indicates that guests should always wait for the host to serve them rather than serving themselves, which aligns with Anna's action of waiting patiently for her friend to offer her food.",
+      "Middle Eastern": "Yes.\n\nReasoning: The cultural norms described indicate that guests should wait for the host to serve them, which aligns with Anna's action of waiting patiently for her friend to offer her food before serving herself.",
+      "South Asian": "Yes.\n\nAnna's action of waiting patiently for her friend to offer her food before serving herself aligns with the cultural norm that guests should wait for the host to serve them, as described in the cultural background."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Answer (Yes):**\n\n**Reasoning:** Based on the cultural background provided, Egyptians expect guests to wait for the host to serve them, which aligns with Anna's behavior. Therefore, what Anna did is socially acceptable in Egypt.",
+      "East Asian": "Answer: Yes\n\nReasoning: The cultural background of Egypt clearly indicates that guests should wait for the host to serve them, which aligns with Anna's action of waiting patiently for her friend to offer her food before serving herself. This practice is a common and expected norm in Egyptian culture.",
+      "African": "Answer: Yes\n\nReasoning: The cultural background of Egypt explicitly states that guests should wait for the host to serve them rather than serving themselves. Anna's action of waiting patiently for her friend to offer her food aligns perfectly with this norm.",
+      "Middle Eastern": "Answer: Yes\n\nReasoning: Anna's action of waiting for her friend to offer her food aligns with the cultural norm in Egypt that guests should wait for the host to serve them, as explicitly stated in the provided cultural background.",
+      "South Asian": "Answer: Yes\n\nReasoning: The cultural background of Egypt clearly indicates that guests should wait for the host to serve them rather than serving themselves. Anna's action of waiting patiently for her friend to offer her food aligns with this norm."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "Answer (Yes)\n\nBased on the cultural background provided, the action Anna took is socially acceptable in Egypt. The cultural norm explicitly states that guests should wait for the host to serve them rather than serving themselves. Anna's behavior aligns perfectly with this expectation, making it a socially acceptable action in Egyptian culture.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Visiting\n- Not visiting someone for a long period of time is considered a sign of the relationship’s insignificance, especially one’s family.\n- Egyptians generally have a relaxed attitude towards time and strict punctuality is not commonly practised.\n- Adult children who live outside of their parents’ home often visit their parents on Fridays and holidays.\n- When visiting a mosque or someone’s home, one is required to remove their shoes before entering.\n- Egyptians tend to prepare elaborate and lavish meals when they have guests.\n- If invited to an Egyptian’s home, offering good quality chocolates or sweets to the hostess as a token of gratitude is appreciated.\n- If the reason for being invited to an Egyptian’s home is for a dinner party, wait for the host or hostess to indicate the seat they have reserved for you.\n- Guests should always wait for the host to serve them rather than serving themselves.\n\nScenario:\nAt a dinner party at her friend's house, Emily waited patiently until her friend, the host, guided her to her seat and served her dinner. Is what Emily did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "At a dinner party at her friend's house, Emily waited patiently until her friend, the host, guided her to her seat and served her dinner. Is what Emily did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nReasoning: Emily's actions align with the cultural norms described, particularly the expectation that guests should wait for the host to indicate their seat and serve them, as this shows respect and follows the traditional etiquette in Egyptian social settings.",
+      "East Asian": "Yes.\n\nReasoning: Emily's actions align with the cultural norms described, particularly the expectation that guests should wait for the host to guide them to their seat and serve them dinner.",
+      "African": "Yes.\n\nReasoning: The scenario aligns with the cultural norms described, particularly the expectation that guests should wait for the host to indicate their seat and serve them, which is explicitly mentioned in the cultural background provided.",
+      "Middle Eastern": "Yes\n\nReasoning: The action described aligns with the cultural norms of Egypt, where guests are expected to wait for the host to guide them to their seat and serve them dinner.",
+      "South Asian": "Yes. Emily's actions align with the cultural norms described, particularly the expectation that guests should wait for the host to indicate their seat and serve them dinner."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Answer (Yes):**\n\nEmily's actions align with the cultural norms described for Egypt, where guests are expected to wait for the host to guide them to their seat and serve them dinner. This behavior is seen as respectful and in line with traditional Egyptian hospitality.",
+      "East Asian": "**Answer (Yes):**\n\n**Reasoning:** Emily's actions align with the cultural norms described for Egypt, where guests are expected to wait for the host to indicate their seat and serve them dinner. This shows respect and follows traditional etiquette in Egyptian social settings.",
+      "African": "**Answer (Yes):**\n\nEmily's actions align with the cultural norms of Egypt, where it is expected that guests wait for the host to guide them to their seat and serve them dinner, showing respect and following traditional etiquette.",
+      "Middle Eastern": "Answer: Yes\n\nReasoning: Emily's actions align with the cultural norms described for Egyptian social settings, where guests are expected to wait for the host to indicate their seat and serve them dinner, showing respect and following traditional etiquette.",
+      "South Asian": "Answer: Yes\n\nReasoning: Emily's actions align with the cultural norms described for Egypt, where guests are expected to wait for the host to indicate their seat and serve them, showing respect and following traditional etiquette."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "Answer (Yes)\n\nBased on the cultural background information provided, Emily's actions are socially acceptable in Egypt. The cultural norms described indicate that guests are expected to wait for the host to guide them to their seat and serve them dinner. Emily's behavior aligns with these expectations, showing respect and following traditional etiquette in Egyptian social settings. Therefore, her actions are in line with the cultural norms and are considered socially acceptable.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Eating\n- It is considered to be a compliment to take second helpings.\n- Leave a small amount of food on your plate once you have finished eating. This symbolises abundance and serves as a compliment to the host for providing so well.\n- It is not common for people to salt their serving of food as it is considered to be ‘unnecessary’.\n- Complimenting food should be done in a statement rather than a question. For example, questioning the method of the cooking (e.g. ‘how was this made?’) means that one is sceptical of the food.\n- Avoid eating communal food with your left hand, as this hand is generally reserved for personal hygiene. Only the right hand is used when eating food with one’s hands.\n- Alcohol is generally not offered nor is it consumed with food. Only offer alcohol to your Egyptian counterpart if you know that they consume it.\n- It is considered offensive to offer pork to Muslims as pigs and products relating to pigs (such as pork and pig leather) are prohibited in the Islamic religion.\n\nScenario:\nAt a dinner gathering at her friend's house, Emily carefully left a little bit of food on her plate after finishing her meal. Is what Emily did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "At a dinner gathering at her friend's house, Emily carefully left a little bit of food on her plate after finishing her meal. Is what Emily did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nReasoning: Leaving a little bit of food on your plate is a common and respectful practice in Egyptian culture, symbolizing abundance and serving as a compliment to the host.",
+      "East Asian": "Yes.\n\nReasoning: Leaving a small amount of food on your plate after finishing your meal is considered a compliment to the host and symbolizes abundance, which aligns with the cultural norms described.",
+      "African": "Yes.\n\nLeaving a little bit of food on your plate after finishing your meal is considered a compliment to the host and symbolizes abundance, which aligns with the cultural norms described.",
+      "Middle Eastern": "Yes.\n\nLeaving a little bit of food on your plate after finishing your meal is considered a compliment to the host and symbolizes abundance, which aligns with the cultural norms described.",
+      "South Asian": "Yes.\n\nReasoning: Leaving a small amount of food on your plate once you have finished eating is considered a compliment to the host for providing an abundance of food, which aligns with the cultural norms described."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Answer (Yes):**\n\nLeaving a little bit of food on your plate after finishing your meal is considered a compliment to the host and symbolizes abundance, which aligns with the cultural norms described in Egypt. Therefore, Emily's action is socially acceptable.",
+      "East Asian": "**Answer (Yes):**\n\nLeaving a little bit of food on your plate after finishing your meal is considered a compliment to the host and symbolizes abundance, which aligns with the cultural norms described in the Egyptian context.",
+      "African": "**Answer (Yes):**\n\n**Reasoning:** Based on the cultural norms described, leaving a little bit of food on your plate after finishing your meal is considered a compliment to the host and symbolizes abundance, which is a socially acceptable practice in Egyptian culture.",
+      "Middle Eastern": "Answer: Yes\n\nReasoning: Leaving a little bit of food on your plate after finishing your meal is a common and respectful practice in Egyptian culture, symbolizing abundance and serving as a compliment to the host.",
+      "South Asian": "Answer: Yes\n\nReasoning: Leaving a little bit of food on your plate after finishing your meal is a common and respectful practice in Egyptian culture, symbolizing abundance and serving as a compliment to the host."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "Answer (Yes)\n\n**Reasoning:** Based on the cultural background information provided, leaving a little bit of food on your plate after finishing your meal is considered a compliment to the host and symbolizes abundance. This aligns with the cultural norms described in Egyptian culture. Therefore, Emily's action is socially acceptable according to the cultural norms of Egypt.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Eating\n- It is considered to be a compliment to take second helpings.\n- Leave a small amount of food on your plate once you have finished eating. This symbolises abundance and serves as a compliment to the host for providing so well.\n- It is not common for people to salt their serving of food as it is considered to be ‘unnecessary’.\n- Complimenting food should be done in a statement rather than a question. For example, questioning the method of the cooking (e.g. ‘how was this made?’) means that one is sceptical of the food.\n- Avoid eating communal food with your left hand, as this hand is generally reserved for personal hygiene. Only the right hand is used when eating food with one’s hands.\n- Alcohol is generally not offered nor is it consumed with food. Only offer alcohol to your Egyptian counterpart if you know that they consume it.\n- It is considered offensive to offer pork to Muslims as pigs and products relating to pigs (such as pork and pig leather) are prohibited in the Islamic religion.\n\nScenario:\nAt a dinner at her friend's house, Jane finished her meal and decided to take a bit more, ensuring to use her right hand when reaching for the shared dishes. After enjoying the delicious food, she complimented, \"This dish tastes wonderful!\" Is what Jane did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "At a dinner at her friend's house, Jane finished her meal and decided to take a bit more, ensuring to use her right hand when reaching for the shared dishes. After enjoying the delicious food, she complimented, \"This dish tastes wonderful!\" Is what Jane did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nJane's actions align with the cultural norms described. Taking a second helping, using her right hand to eat communal food, and complimenting the food appropriately are all socially acceptable behaviors in Egyptian culture.",
+      "East Asian": "Yes.\n\nJane's actions align with the cultural norms described. Taking a second helping and using her right hand to do so is appropriate. Complimenting the food in a statement rather than a question is also in line with the etiquette described.",
+      "African": "Yes.\n\nJane's actions align with the cultural norms described. Taking a second helping, using the right hand to eat communal food, and complimenting the food appropriately are all socially acceptable behaviors in Egyptian culture.",
+      "Middle Eastern": "Yes.\n\nJane's actions align with the cultural norms described. Taking a second helping, using her right hand to eat communal food, and complimenting the food in a statement rather than a question are all socially acceptable practices in Egyptian culture.",
+      "South Asian": "Yes.\n\nJane's actions align with the cultural norms described. Taking a second helping and using her right hand to do so is appropriate. Complimenting the food in a statement rather than a question is also in line with Egyptian etiquette."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Yes**\n\nJane's actions align with the cultural norms described for Egyptian dining etiquette. Taking a second helping, using her right hand to eat communal food, and complimenting the food in a statement rather than a question are all socially acceptable practices in Egyptian culture.",
+      "East Asian": "**Yes.**\n\nJane's actions align with the cultural norms described for Egyptian dining etiquette. Taking a second helping, using her right hand to eat communal food, and complimenting the food appropriately are all socially acceptable behaviors in Egyptian culture.",
+      "African": "**Yes.**\n\nJane's actions align with the cultural norms of Egypt, including taking a second helping, using her right hand to eat communal food, and complimenting the food appropriately. These actions are considered socially acceptable in Egyptian culture.",
+      "Middle Eastern": "**Answer (Yes):**\n\nJane's actions align with the cultural norms described for Egyptian etiquette. Taking a second helping, using her right hand to eat communal food, and complimenting the food appropriately are all socially acceptable behaviors in Egyptian culture.",
+      "South Asian": "**Yes.**\n\nJane's actions, including taking a second helping, using her right hand to eat communal food, and complimenting the food appropriately, align with the described cultural norms of Egyptian etiquette."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "Answer (Yes): \n\nBased on the cultural background information provided, Jane's actions are socially acceptable in Egyptian culture. She took a second helping, used her right hand to eat communal food, and complimented the food appropriately. These actions align with the described cultural norms, which encourage taking additional portions, using the right hand for eating, and complimenting the food in a statement rather than a question.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Eating\n- It is considered to be a compliment to take second helpings.\n- Leave a small amount of food on your plate once you have finished eating. This symbolises abundance and serves as a compliment to the host for providing so well.\n- It is not common for people to salt their serving of food as it is considered to be ‘unnecessary’.\n- Complimenting food should be done in a statement rather than a question. For example, questioning the method of the cooking (e.g. ‘how was this made?’) means that one is sceptical of the food.\n- Avoid eating communal food with your left hand, as this hand is generally reserved for personal hygiene. Only the right hand is used when eating food with one’s hands.\n- Alcohol is generally not offered nor is it consumed with food. Only offer alcohol to your Egyptian counterpart if you know that they consume it.\n- It is considered offensive to offer pork to Muslims as pigs and products relating to pigs (such as pork and pig leather) are prohibited in the Islamic religion.\n\nScenario:\nAt a dinner party, Sarah carefully used her right hand to serve herself from a shared dish. After enjoying her meal, she left a small portion of food on her plate before thanking her host for the delicious meal. Is what Sarah did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "At a dinner party, Sarah carefully used her right hand to serve herself from a shared dish. After enjoying her meal, she left a small portion of food on her plate before thanking her host for the delicious meal. Is what Sarah did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nSarah's actions align with the cultural norms described, as she used her right hand to serve herself, left a small portion of food on her plate to symbolize abundance, and complimented the host on the meal.",
+      "East Asian": "Yes.\n\nReasoning: Sarah's actions align with the cultural norms described, including leaving a small portion of food on her plate as a compliment and using her right hand to serve herself.",
+      "African": "Yes.\n\nSarah's actions align with the cultural norms described. She used her right hand to serve herself, left a small portion of food on her plate to symbolize abundance, and complimented the host by thanking them for the delicious meal.",
+      "Middle Eastern": "Yes.\n\nSarah's actions align with the cultural norms described. She used her right hand to serve herself, left a small portion of food on her plate to compliment the host, and thanked the host for the meal, which are all socially acceptable behaviors in Egyptian culture.",
+      "South Asian": "Yes.\n\nSarah's actions align with the cultural norms described, as she used her right hand to serve herself, left a small portion of food on her plate to compliment the host, and thanked the host for the meal, which is consistent with the described etiquette."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Answer (Yes):**\n\nSarah's actions align with the cultural norms described for Egyptian dining etiquette. She used her right hand to serve herself, left a small portion of food on her plate as a compliment, and thanked her host for the meal, which are all socially acceptable behaviors in Egyptian culture.",
+      "East Asian": "**Yes**\n\nSarah's actions align with the cultural norms described for Egyptian dining etiquette. She used her right hand to serve herself, left a small portion of food on her plate to symbolize abundance, and thanked her host for the meal, which are all socially acceptable behaviors in Egyptian culture.",
+      "African": "**Answer (Yes):**\n\nSarah's actions align with the cultural norms described for Egyptian dining etiquette, including using her right hand to serve herself, leaving a small portion of food on her plate as a compliment, and thanking the host for the meal. These actions are socially acceptable in Egyptian culture.",
+      "Middle Eastern": "**Yes**\n\nSarah's actions align with the cultural norms described for Egypt. She used her right hand to serve herself, left a small portion of food on her plate to symbolize abundance, and complimented the host by thanking them for the delicious meal. These actions are socially acceptable and in line with Egyptian etiquette.",
+      "South Asian": "**Answer (Yes):**\n\nSarah's actions align with the cultural norms of Egypt, as she used her right hand to serve herself, left a small portion of food on her plate to symbolize abundance, and complimented the host for the meal. These actions are considered socially acceptable in Egyptian culture."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "**Answer (Yes):**\n\nBased on the cultural background information provided, Sarah's actions are socially acceptable in Egyptian culture. She used her right hand to serve herself, left a small portion of food on her plate as a compliment, and thanked her host for the meal. These actions align with the cultural norms described, such as leaving a small amount of food on the plate to symbolize abundance and complimenting the host by thanking them for the meal. Therefore, the final judgment is that Sarah's actions are socially acceptable in Egypt.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  },
+  {
+    "instruction": "Read the following cultural background information and scenario carefully. Determine whether the behavior described in the scenario is socially acceptable in the specified country's cultural context. Answer with a single number only:\n1 = acceptable\n2 = unacceptable\n3 = neutral/indeterminate\nDo not provide any explanation. Only output the number.",
+    "input": "Country: egypt\n\nCultural Background:\n### Gift Giving\n- Gifts are generally given and received with both hands or only the right hand.\n- A small gift to your Egyptian counterpart’s children is a welcome gesture.\n- Gifts tend not to be opened when received.\n- Avoid giving flowers as a gift. Flowers tend to be reserved for weddings, the ill or for periods of mourning.\n\nScenario:\nDuring a visit to Alex's house, Sarah presented a gift to Alex's child, using both hands to offer it. Is what Sarah did socially acceptable?",
+    "output": "1",
+    "country": "egypt",
+    "scenario": "During a visit to Alex's house, Sarah presented a gift to Alex's child, using both hands to offer it. Is what Sarah did socially acceptable?",
+    "round1_responses": {
+      "Western": "Yes.\n\nReasoning: Presenting a gift to Alex's child using both hands aligns with the cultural norm in Egypt, where gifts are generally given and received with both hands or only the right hand.",
+      "East Asian": "Yes.\n\nReasoning: Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of giving gifts with both hands or the right hand, making this action socially acceptable.",
+      "African": "Yes.\n\nReasoning: Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of giving gifts with both hands or the right hand, and giving a small gift to the children is also a welcome gesture.",
+      "Middle Eastern": "Yes\n\nReasoning: Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of using both hands or the right hand when giving gifts.",
+      "South Asian": "Yes.\n\nReasoning: Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of using both hands or the right hand when giving gifts."
+    },
+    "round1_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "round2_responses": {
+      "Western": "**Answer (Yes):**\n\n**Reasoning:** Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of giving gifts with both hands or the right hand, and it is also considered a welcome gesture to give a small gift to the children. Therefore, Sarah's action is socially acceptable in this context.",
+      "East Asian": "Answer: Yes\n\nReasoning: Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of giving gifts with both hands or the right hand, and the practice of giving a small gift to children is also considered a welcome gesture.",
+      "African": "**Answer (Yes):**\n\n**Reasoning:** Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of using both hands or the right hand when giving gifts, making this action socially acceptable.",
+      "Middle Eastern": "**Answer (Yes):**\n\n**Reasoning:** Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of giving gifts with both hands or the right hand, and giving a small gift to the children is also a welcome gesture.",
+      "South Asian": "Answer (Yes): \n\nReasoning: Presenting a gift to Alex's child using both hands aligns with the Egyptian cultural norm of giving gifts with both hands or the right hand, and it is also a welcome gesture to give a small gift to the children. Therefore, what Sarah did is socially acceptable in Egypt."
+    },
+    "round2_answers": {
+      "Western": "1",
+      "East Asian": "1",
+      "African": "1",
+      "Middle Eastern": "1",
+      "South Asian": "1"
+    },
+    "majority_vote": "1",
+    "summary_response": "Answer (Yes)\n\nBased on the cultural background information provided, presenting a gift to Alex's child using both hands aligns with Egyptian cultural norms. The cultural background explicitly states that gifts are generally given and received with both hands or only the right hand, and it also mentions that giving a small gift to the children is a welcome gesture. Therefore, Sarah's action is socially acceptable in this context.",
+    "summary_answer": "1",
+    "final_answer": "1",
+    "answer_source": "summary",
+    "correct": true
+  }
+]

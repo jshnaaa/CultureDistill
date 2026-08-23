@@ -1,0 +1,1220 @@
+{
+  "mode": "sft",
+  "model_name": "llama",
+  "sft_adapter": "/autodl-fs/data/model/llama/culturalbench_sft_only/best",
+  "grpo_adapter": null,
+  "overall_accuracy": 0.7016129032258065,
+  "correct": 87,
+  "total": 124,
+  "per_country": {
+    "Argentina": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "total": 3
+    },
+    "Australia": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "Bangladesh": {
+      "accuracy": 1.0,
+      "correct": 6,
+      "total": 6
+    },
+    "Brazil": {
+      "accuracy": 0.3333333333333333,
+      "correct": 1,
+      "total": 3
+    },
+    "Canada": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "Chile": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    },
+    "China": {
+      "accuracy": 0.5,
+      "correct": 2,
+      "total": 4
+    },
+    "Czech Republic": {
+      "accuracy": 0.5,
+      "correct": 2,
+      "total": 4
+    },
+    "Egypt": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "France": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    },
+    "Germany": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "total": 1
+    },
+    "Hong Kong": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "India": {
+      "accuracy": 1.0,
+      "correct": 3,
+      "total": 3
+    },
+    "Indonesia": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "Iran": {
+      "accuracy": 0.75,
+      "correct": 3,
+      "total": 4
+    },
+    "Italy": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "Japan": {
+      "accuracy": 0.6,
+      "correct": 3,
+      "total": 5
+    },
+    "Lebanon": {
+      "accuracy": 0.75,
+      "correct": 3,
+      "total": 4
+    },
+    "Mexico": {
+      "accuracy": 0.75,
+      "correct": 3,
+      "total": 4
+    },
+    "Morocco": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "Nepal": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "Netherlands": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "New Zealand": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    },
+    "Nigeria": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "Pakistan": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "Peru": {
+      "accuracy": 0.3333333333333333,
+      "correct": 1,
+      "total": 3
+    },
+    "Philippines": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    },
+    "Poland": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "Romania": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "Russia": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    },
+    "Saudi Arabia": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    },
+    "Singapore": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "total": 1
+    },
+    "South Africa": {
+      "accuracy": 0.625,
+      "correct": 5,
+      "total": 8
+    },
+    "South Korea": {
+      "accuracy": 0.5,
+      "correct": 4,
+      "total": 8
+    },
+    "Spain": {
+      "accuracy": 0.75,
+      "correct": 3,
+      "total": 4
+    },
+    "Taiwan": {
+      "accuracy": 0.25,
+      "correct": 1,
+      "total": 4
+    },
+    "Thailand": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "total": 1
+    },
+    "Turkey": {
+      "accuracy": 1.0,
+      "correct": 4,
+      "total": 4
+    },
+    "Ukraine": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "United Kingdom": {
+      "accuracy": 0.5,
+      "correct": 1,
+      "total": 2
+    },
+    "United States": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    },
+    "Vietnam": {
+      "accuracy": 1.0,
+      "correct": 3,
+      "total": 3
+    },
+    "Zimbabwe": {
+      "accuracy": 1.0,
+      "correct": 3,
+      "total": 3
+    }
+  },
+  "results": [
+    {
+      "query": "In Bangladeshi culture, how do people traditionally eat their meals?\n1. With their hands\n2. With a fork and knife\n3. With a spoon and fork.\n4. With chopsticks",
+      "country": "Bangladesh",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "What would a South African like as a snack?\n1. Fried chicken and waffles\n2. Sushi\n3. Biltong\n4. Pizza.",
+      "country": "South Africa",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "If somebody makes a derogatory comment about themselves during the course of a conversation, how would that be interpreted in New Zealand culture?\n1. As a serious self-criticism.\n2. As a means to show confidence through self-deprecation.\n3. As a way to apologise for wrongdoing.\n4. As a light-hearted way to connect and share humor.",
+      "country": "New Zealand",
+      "gold": "4",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Taiwan culture, what is considered inappropriate to pick up if you see it lying around on the street?\n1. Fast food wrappers\n2. A red envelope\n3. Plastic bottles.\n4. Prayer money",
+      "country": "Taiwan",
+      "gold": "2",
+      "pred": "3",
+      "correct": false,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Indian culture, what is the traditional greeting used instead of a handshake?\n1. Shalom\n2. Judo\n3. Salaam\n4. Namaste",
+      "country": "India",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Taiwan, what term is used to describe someone who is unbearable?\n1. avocado\n2. potato\n3. motorcycle\n4. Bicycle",
+      "country": "Taiwan",
+      "gold": "3",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2."
+    },
+    {
+      "query": "What do Bangali people typically do when they have guests?\n1. Expect guests to help with meal preparation\n2. Ask guests to remove shoes but not offer slippers in return.\n3. Serve the best food and treats they have\n4. Offer a handshake instead of food or drink",
+      "country": "Bangladesh",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Dutch culture, how do people traditionally handle the bill when going out for dinner together?\n1. The eldest person at the table pays for everyone.\n2. The cost is shared evenly among all adults, regardless of what each person ordered.\n3. Each person pays for their own meal.\n4. The person who issued the dinner invite pays for all.",
+      "country": "Netherlands",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Bangladesh, which festival celebration style is most likely appropriate for expressing the collective cultural identity?\n1. Selecting one culture each year to highlight and exclusively celebrate its festivals.\n2. Ignoring all cultural festivals to maintain neutrality.\n3. Hosting a potluck where each individual brings a dish from their own ethnic background.\n4. Celebrating only the most widely recognized national holiday.",
+      "country": "Bangladesh",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "In Turkish culture, how are unannounced guests typically welcomed when they visit someone's home?\n1. Visitors are not suggested to leave when inconvenient.\n2. Visitors are asked about how they are doing and feeling at the moment to understand if they need anything.\n3. Unannounced guests are expected to leave in 5 minutes.\n4. Visitors are offered Turkish tea.",
+      "country": "Turkey",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "When eating something, which hand do Bengalis use to eat?\n1. They do not use hands. They use spoons and forks instead\n2. They use chopsticks only\n3. Left Hand\n4. Right Hand",
+      "country": "Bangladesh",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "In the Italian tradition, what is not a common way to celebrate Ferragosto on August 15th every year?\n1. Gettig drunk with friends\n2. Decorating the house with flags and watching a parade\n3. Take day off from work\n4. Relax at home",
+      "country": "Italy",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2."
+    },
+    {
+      "query": "What is the most traditional dish in south Brazil?\n1. Feijoada\n2. Pão de Queijo\n3. Churrasco\n4. Caipirinha",
+      "country": "Brazil",
+      "gold": "3",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1."
+    },
+    {
+      "query": "What is a common practice when paying for a meal during an outing in Lebanese culture?\n1. A game is played to decide who will pay the bill.\n2. Each person pays only for what they ordered.\n3. One person pays for the entire group.\n4. The bill is paid for by all participants.",
+      "country": "Lebanon",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Turkish cuisine, which of these options can not be found easily?\n1. Meatballs\n2. Sandwich with lamb's intestines\n3. Boiled sheep head\n4. Ham sandwich",
+      "country": "Turkey",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "In Javanese culture, how is the Islamic New Year not celebrated?\n1. By lighting fireworks\n2. With a mass prayer\n3. Attending a parade.\n4. Having a big family dinner",
+      "country": "Indonesia",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What is the most likely way to celebrate September 18 in Chile?\n1. None of the above.\n2. Hosting a barbecue with large quantities of meat and alcohol, playing local music, and dancing for three days.\n3. Serving a variety of vegan dishes and smoothies while providing a quiet space for reflection.\n4. Organizing competitive sports and activities, serving sports drinks and protein bars.",
+      "country": "Chile",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In German culture, what is the common practice regarding meals?\n1. A cold meal for dinner and a hot meal for lunch\n2. A hot meal for dinner and a cold meal for lunch\n3. People skip lunch and only eat dinner\n4. A cold meal for both lunch and dinner",
+      "country": "Germany",
+      "gold": "1",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Russian culture, why do people generally smile and emote very little in public?\n1. Because it is impolite.\n2. Because reserved behavior is a sign of respect, especially towards strangers or those of higher social status.\n3. Because smiling too much in public is considered a sign of dishonesty.\n4. Because expressing emotions publicly is discouraged by traditional russian upbringing.",
+      "country": "Russia",
+      "gold": "4",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Saudi Arabia, is there a customary practice for men regarding financial obligations to their significant other's parents in order to get married?\n1. Yes, the man must pay money to the woman's father in order for them to get married, while the woman has no monetary obligations whatsoever.\n2. No, there is no such thing in arab culture and traditions.\n3. Yes, but only for the wedding arrangement and party expenses.\n4. No, the man and woman split the wedding arrangement money in half.",
+      "country": "Saudi Arabia",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "What is a typical meal pattern in Lebanese culture for daily meals?\n1. A salad for lunch and soup for dinner\n2. A big breakfast, skipping lunch, and a light snack for dinner.\n3. A hot savory sandwich for lunch and a hot meal for dinner\n4. A stew for lunch and bread with some cold cuts for breakfast and dinner",
+      "country": "Lebanon",
+      "gold": "4",
+      "pred": "3",
+      "correct": false,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "During Chinese New Year, what would adults typically gift children?\n1. Baked cookies.\n2. Chocolate coins\n3. Red envelopes with money\n4. Gift cards",
+      "country": "China",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Vietnam, who should you not say hi to last?\n1. Your parent\n2. The kids\n3. The eldest person\n4. The oldest uncle",
+      "country": "Vietnam",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Zimbabwean culture, what must be done for individuals who share the same totem to marry?\n1. Pay a larger bride price to the elders\n2. Undergo marriage counseling sessions.\n3. Seek permission from a tribal chief\n4. Perform a specific ritual to the ancestors",
+      "country": "Zimbabwe",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "What rituals do Zulu people commonly practice?\n1. Halloween trick-or-treat activities.\n2. Thanksgiving Day family dinner\n3. Umhlanga, the Reed Dance ceremony\n4. Tea ceremony",
+      "country": "South Africa",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "Someone in New Zealand invites you to a boil-up. What is this?\n1. A disscussion between groups\n2. A traditional game.\n3. A kind of meal.\n4. A meeting of cultures.",
+      "country": "New Zealand",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3."
+    },
+    {
+      "query": "In Štramberk, what do girls do in Easter Monday?\n1. Girls dress in bunny costumes.\n2. Girls are whipped with a decorated willow branch.\n3. Girls plant new flowers.\n4. Girls are gifted chocolate eggs.",
+      "country": "Czech Republic",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Maori culture, which of the following is considered inappropriate?\n1. Sitting on pillows on the floor\n2. Shaking hands when greeting someone.\n3. Eating while walking\n4. Sitting on tables",
+      "country": "New Zealand",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "Where do families from Poland typically like to spend their Sunday mornings?\n1. At a brunch restaurant\n2. Attending Mass at church.\n3. Attending a sports match\n4. Browsing at a local farmers' market",
+      "country": "Poland",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2."
+    },
+    {
+      "query": "In Turkey, which of the following is NOT a common custom when entering someone's home?\n1. Offering to clean your shoes before stepping inside.\n2. Wearing your shoes inside as a sign of respect\n3. Leaving your shoes outside the door before entering.\n4. Removing your shoes and possibly being offered house slippers.",
+      "country": "Turkey",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "What is a common type of joke straight Brazilian men prefer when dealing with male friends, but not with strangers?\n1. Challenging them to an eating contest during gatherings.\n2. Complimenting their appearance in a serious manner.\n3. Giving them handmade gifts as a sign of affection.\n4. Teasing them by implying all his friends except him are gay.",
+      "country": "Brazil",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "In Iranian culture, how should guests respond when offered tea during a home visit?\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) Accept the tea immediately to show appreciation.\n(ii) Refuse the tea once or twice before eventually accepting to show humility and respect.\n(iii) Insist on preparing the tea themselves as a gesture of goodwill.\n(iv) Politely decline each time to show independence and decisiveness.\n1. i, ii, iv\n2. i, iv\n3. i, ii\n4. i, iii",
+      "country": "Iran",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3\nReasoning: Based on the cultural context, option 3 is the correct answer. In Iranian culture, when offered tea during a home visit, it is considered polite to accept the tea immediately to s"
+    },
+    {
+      "query": "In Mexican culture, what is a traditional practice for Día de los Muertos?\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) Making an altar with the deceased's favorite dishes\n(ii) Celebrate life with pyrotechnics\n(iii) Participating in religious church rituals\n(iv) Sending out greeting cards to family members to remember the deceased.\n1. i, ii, iii\n2. i, iii\n3. i, iv\n4. iii, iv",
+      "country": "Mexico",
+      "gold": "2",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1\nReasoning: Based on the cultural context, I will analyze each option step by step:\n1. i: Making an altar with the deceased's favorite dishes - This is a common practice in Mexican culture fo"
+    },
+    {
+      "query": "In Zimbabwe culture, how should women and young girls show respect when giving water or food to elders and parents?\n1. Bowing down when offering food or water\n2. Standing up straight and making eye contact\n3. Asking the elders to help themselves.\n4. Shaking hands before and after giving water or food",
+      "country": "Zimbabwe",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Pakistan Islamic culture, what is considered the average age of marriage?\n1. In their early 20s\n2. Teenage years.\n3. In their late 30s\n4. In their mid-40s",
+      "country": "Pakistan",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Spanish culture, there is a very controversial traditional dish called \"tortilla de patata.\" What do many Spanish families debate regarding its preparation?\n1. Both adding and seasoning the onion or not\n2. Adding onion or not\n3. Removing the middle of onion or not\n4. Seasoning onion or not",
+      "country": "Spain",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "What zodiac sign is associated with good fortune and power in Vietnamese culture?\n1. Strong Bison\n2. Gold Pig Statue\n3. Dragon with no wings\n4. Buddha statue",
+      "country": "Vietnam",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What is one of the traditional ways to name children in Korea, especially in families of aristocracy?\n1. Choosing names based on the time of day the child was born.\n2. Naming children after cities or states to honor the place of birth.\n3. By including a letter that represents the generation in the family name.\n4. Using the names of famous historical or cultural figures.",
+      "country": "South Korea",
+      "gold": "3",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "What type of food is customary to eat in Mexican culture?\n1. Bagels.\n2. Spicy food\n3. Sushi\n4. Cheeseburgers",
+      "country": "Mexico",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "How do families in Italy typically enjoy their meals together?\n1. Eating in front of the television individually\n2. Sitting together all around the table\n3. Each member serving themselves buffet-style and eating separately\n4. Grabbing quick meals at different times due to busy schedules.",
+      "country": "Italy",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Saudi Arabia's culture, when are adults expected not to leave their parents house?\n1. When they get married\n2. When they start their first job\n3. When they go to college\n4. When they turn 18 years old.",
+      "country": "Saudi Arabia",
+      "gold": "4",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1."
+    },
+    {
+      "query": "What do commuters usually use to pay for a ride on the vibrantly decorated public utility jeepneys in Manila?\n1. By bills only\n2. By coins and small bills\n3. By public transport payment method\n4. By QR code",
+      "country": "Philippines",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Quebec culture, what is a traditional meal they are known for?\n1. Poutine\n2. Sushi\n3. Pizza.\n4. Hamburger",
+      "country": "Canada",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "Where can I read the following sentence? Arrête. C'est ici l'empire de la mort!\n1. Mount Rushmore.\n2. National Mall\n3. Arlington National Cemetery\n4. Catacombs of Paris",
+      "country": "France",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "In the Philippines, what should be expected when a spoon falls to the floor?\n1. Bad luck\n2. Visitors\n3. A baby\n4. Prosperity",
+      "country": "Philippines",
+      "gold": "2",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Argentina, which hot beverage with caffeine is most popular with the locals?\n1. herbal caffeine-based drink\n2. hot caffeine-based drink\n3. hot herbal infusion beverage\n4. warm sweet cocoa beverage",
+      "country": "Argentina",
+      "gold": "3",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "Would a family in Lima feel safe walking home at night?\n1. Safe as long as you have personal security\n2. Safe because of strict gun control laws.\n3. Completely safe at all times\n4. Mostly unsafe",
+      "country": "Peru",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In South Korea, what utensil do we primarily use when we eat?\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) Fork\n(ii) Spoon\n(iii) Chopsticks\n(iv) Knife.\n1. ii, iii\n2. ii, iv\n3. iii, iv\n4. i, ii, iii, iv",
+      "country": "South Korea",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "What is not a common way to enjoy street food in Vietnamese culture?\n1. Sitting on small plastic stools at a roadside stall.\n2. Quickly wipe down your chopsticks or spoon before eating.\n3. Pay the chef directly.\n4. Clean your table after eating.",
+      "country": "Vietnam",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "How do people in South African culture honor the memory of the youth involved in the events of June 16th under the apartheid regime?\n1. By engaging in a day of silence, with no commercial activities allowed.\n2. By hosting large parades with fireworks in every major city.\n3. By observing Youth Day with ceremonies and events recognizing their bravery.\n4. By having a large family picnic day to celebrate the onset of summer.",
+      "country": "South Africa",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Thai culture, which of the following actions is considered disrespectful?\n1. Making direct eye contact when speaking.\n2. Touching someone's head.\n3. Using hands to point at objects.\n4. Namaste when greeting someone.",
+      "country": "Thailand",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Korea, what is the right etiquette when drinking alcohol?\n1. To thank you to older people, raise your glass higher than usual and say something like slogan to cheer up.\n2. Turn your body away so your drinking action is not directly visible to the older person.\n3. Youger person need to pour alcohol in their glass themselve to respect older person.\n4. Vow to the older person first and drinking as your head down to show respect while drinking.",
+      "country": "South Korea",
+      "gold": "2",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In British culture, how do people typically not handle emotional situations?\n1. By hosting large, communal gatherings to share feelings\n2. By maintaining a stiff upper lip and being quite reserved\n3. By expressing emotions openly and seeking group comfort\n4. By engaging in loud and public displays of emotion.",
+      "country": "United Kingdom",
+      "gold": "4",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Bangladesh culture, how should the young ones address their elders?\n1. By their first names only, no matter what your relationship with them\n2. For known people, you can use their first names or a term of endearment. For people you do not know, you use their surname and a general title like sir/miss as a prefix\n3. By their last name only.\n4. Using a term of endearment based on the family relationship",
+      "country": "Bangladesh",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Lebanon, conversations generally include:\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) Hand gestures\n(ii) Fixed eye contact\n(iii) Speaking in a low voice to show respect\n(iv) No eye contact\n1. i, iv\n2. i, ii, iii, iv\n3. ii, iii\n4. i, ii",
+      "country": "Lebanon",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Mexican cuisine, quesadillas are made with cheese as it comes from queso (cheese) but there are certain places in Mexico where people can order quesadillas without cheese\n1. Always filled with cheese\n2. Can contain cheese or not\n3. Only filled with meat and vegetables, never cheese.\n4. Never containing cheese",
+      "country": "Mexico",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In India, is 25 considered an appropriate age to marry?\n1. No, because people often date for several years before getting married.\n2. No, it's better to focus on career first and marry later.\n3. Yes, because it's seen as the ideal age to start a family.\n4. No, it's too early; people should marry in their 30s to ensure financial stability.",
+      "country": "India",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3."
+    },
+    {
+      "query": "In Argentinian culture, how might a male interviewer typically respond when asked about their economic situation?\n1. They would openly discuss their salary and investments in detail.\n2. They might share some details about their personal finances in a general way.\n3. They would provide a detailed breakdown of their monthly expenses.\n4. They might change the subject to avoid discussing finances.",
+      "country": "Argentina",
+      "gold": "2",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Taiwanese culture, what is the similar term to hooligans?\n1. Wiseguys\n2. Eight plus nine\n3. Five-O\n4. Outlaws.",
+      "country": "Taiwan",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2."
+    },
+    {
+      "query": "In South Africa, what does leaving uneaten food on your plate typically signify?\n1. It indicates that you are saving food for later due to personal dietary habits.\n2. It's a way to show that you've had enough to eat and are satisfied.\n3. It can be interpreted as a negative reflection on the food or the host.\n4. It's considered a compliment, suggesting the meal was filling and delicious.",
+      "country": "South Africa",
+      "gold": "3",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In French culture, what is commonly consumed with meals?\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) coffee\n(ii) wine\n(iii) beer\n(iv) bread\n1. ii, iv\n2. i, iv\n3. i, iii, iv\n4. i, ii",
+      "country": "France",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Xhosa culture, how do grand children call their grandfather as a sign of respect?\n1. Grandpa= maternal or paternal parent\n2. Tat'omkhulu= Respected male elder\n3. Mr. LastName= surname of male figure\n4. Sir= respected individual",
+      "country": "South Africa",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In French culture, what is considered taboo to discuss at work?\n1. Discussing personal life situations\n2. Sharing personal hobbies.\n3. Discussing weekend plans.\n4. Discussing financial compensation details",
+      "country": "France",
+      "gold": "4",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Japanese culture, how do women tend to feel about showing their cleavage?\n1. They use it as a means of self-expression\n2. They see it as a form of empowerment\n3. They tend to feel uncomfortable\n4. They consider it a fashion statement",
+      "country": "Japan",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Singapore culture, how do you address service providers based on their gender?\n1. With terms usually reserved for relatives in other cultures\n2. Sir or Madam\n3. Mr or Mrs followed by their last name\n4. By bowing while saying their name",
+      "country": "Singapore",
+      "gold": "1",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "What is the herb the most Korean can't eat?\n1. Chive\n2. Basil\n3. Coriander\n4. Perilla",
+      "country": "South Korea",
+      "gold": "3",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "In Iranian culture, what is a significant aspect of being a good host?\n1. Insisting on feeding guests and treating them with great respect.\n2. Inviting guests to participate in cooking as a form of bonding.\n3. Encouraging guests to wash their own dishes as a sign of independence.\n4. Allowing guests to serve themselves to make them feel at home.",
+      "country": "Iran",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1."
+    },
+    {
+      "query": "In South African culture, what does a groom usually give to the bride's family as a token of appreciation?\n1. sheep\n2. diamond ring\n3. gold necklace\n4. cow",
+      "country": "South Africa",
+      "gold": "4",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Spanish culture, what is the name of the most recent dictator?\n1. Joseph Stalin\n2. Richard Nixon\n3. Francisco Franco\n4. Adolf Hitler.",
+      "country": "Spain",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "Why is inserting your pair of wooden sticks utilised directly vertically into a bowl of rice considered a faux pas in Chinese culture?\n1. It resembles wooden gates and it invites the spirits of the dead into your house.\n2. It means you dislike the food you are eating and are insulting the host or chef.\n3. It resembles the twin towers which was a tragedy.\n4. It resembles a religious ritual performed in service of the dead.",
+      "country": "China",
+      "gold": "4",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Nepali culture, how do most girls' parents approach their marriage?\n1. By choosing the spouse themselves for an arranged marriage\n2. Waiting for a proposal from a marriage broker.\n3. Through online dating apps\n4. Encouraging their daughters to marry whoever they fall in love with at college",
+      "country": "Nepal",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "What do people in Pakistan mourn on 10 Muharram?\n1. Quaid-e-Azam's death\n2. War of 1965\n3. Death of Hussain(A.S)\n4. Death of Iqbal",
+      "country": "Pakistan",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Peruvian culture, how do workers typically view their commitment to their employers?\n1. They are loyal, hard-working and engaged people.\n2. They will probably switch to a job that pays better even if the conditions are not the best.\n3. They view employment as strictly transactional, focusing on salary above all.\n4. They prioritize work-life balance and leave work at the due time.",
+      "country": "Peru",
+      "gold": "2",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1."
+    },
+    {
+      "query": "In Iranian culture, if someone you delivered an item to invites you up for a drink, what is the appropriate response?\n1. Politely decline, as accepting such invitations from strangers is uncommon.\n2. Accept and bring a bottle of wine as a gesture of appreciation.\n3. Immediately accept and suggest going to a bar instead.\n4. Ask what kind of drink to ensure it's not alcoholic due to local laws.",
+      "country": "Iran",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Czech culture, what do people do when they finish their meal?\n1. Raising their hand to notify the waiter.\n2. Putting their cutlery together next to plate\n3. Putting their cutlery next to plate\n4. Putting their cutlery together on plate",
+      "country": "Czech Republic",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In which region is the state of Arizona located, according to the United States regional classification?\n1. Midwest.\n2. Southeast\n3. Northwest\n4. Southwest",
+      "country": "United States",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "As a Zimbabwe family, who is traditionally expected to take on the financial responsibilities for women?\n1. External family members like uncles and aunts.\n2. Women themselves\n3. Shared equally between men and women\n4. Men",
+      "country": "Zimbabwe",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In a rural culture, what unique method is used to let children know it's time to come home in the evening?\n1. A specific music is played.\n2. A text message is sent to their smartphones.\n3. Parents personally go out to find them.\n4. A community bell is rung.",
+      "country": "Japan",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "How do South African coloured people traditionally celebrate their baby's first tooth?\n1. Making pancakes for the baby to eat.\n2. Gifting the baby a silver tooth fairy box.\n3. Planting a tree in the baby's honor.\n4. Hosting a large family dinner.",
+      "country": "South Africa",
+      "gold": "2",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Czech culture, what would you traditionally eat for Christmas Dinner?\n1. Fish\n2. Svickova\n3. Beer\n4. Goulash",
+      "country": "Czech Republic",
+      "gold": "1",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "What is a traditional dish in Lebanon, which is known by various names in different countries?\n1. Rice\n2. Purslane\n3. Hummus\n4. Fried Chicken and Waffles",
+      "country": "Lebanon",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What type of flavor do Bangali people generally prefer in their desserts?\n1. Bitter\n2. Sweet\n3. Sour.\n4. Salty",
+      "country": "Bangladesh",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "What do Russian people traditionally do with their shoes when they enter a house?\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) Leave shoes at the entrance\n(ii) Leave shoes at the entrance and wear the house slippers\n(iii) Keep wearing their shoes\n(iv) Only remove the shoes if the house owners tell them to do so\n1. i, ii\n2. ii, iv\n3. i, ii, iv\n4. ii, iii",
+      "country": "Russia",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1\nReasoning: Based on the cultural context, I will analyze each option step by step:\n1. i, ii: This option includes leaving shoes at the entrance and wearing house slippers, which is a common "
+    },
+    {
+      "query": "In Saudi Arabia, what is the name of the holiday characterized by making donations to charity, feasts, prayers, and family gatherings?\n1. Ramadan\n2. Mawlid al-Nabi\n3. Eid al-Fitr\n4. Eid al Adha",
+      "country": "Saudi Arabia",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Mexican culture, when they're meeting someone for the first time, how do Mexicans typically greet each other to show friendliness and warmth according to their culture?\n1. With a bow as a sign of respect\n2. With a handshake while maintaining a respectful distance\n3. By kissing on the cheek or with a hug\n4. By exchanging business cards before speaking",
+      "country": "Mexico",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What is the customary practice in Spain after finishing a meal?\n1. Quickly leaving the table after eating.\n2. Offering to help wash the dishes immediately after eating.\n3. Clearing the table and starting another activity immediately.\n4. Staying at the table for conversation after the meal is finished.",
+      "country": "Spain",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Chile culture, which sport is almost considered a religion by some of its enthusiasts?\n1. Boxing.\n2. American Football\n3. Basketball.\n4. Football (Soccer)",
+      "country": "Chile",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "In the Philippines, what aspects of community interaction are people known for?\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) To connect with neighbors and ensure neighborhood safety.\n(ii) To enjoy the seasonal decorations and festive environment.\n(iii) To hold garage sales and trade items with neighbors.\n(iv) To participate in neighborhood watch programs formally organized by local authorities.\n1. ii, iii\n2. i, ii\n3. i, iii\n4. ii, iii, iv",
+      "country": "Philippines",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2\nReasoning: Based on the cultural context, the correct answer is: 2. i, ii."
+    },
+    {
+      "query": "What is a traditional food to eat for stamina in South Korea during the hottest period of the year?\n1. Kimchi\n2. Korean BBQ\n3. Hot chicken soup\n4. Bibimbab",
+      "country": "South Korea",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In the context of beauty standards in Argentina, what is expected of women's bodies?\n1. Disregard physical form emphasis\n2. Maintain a fuller body shape\n3. Pursuing physical perfection relentlessly\n4. Physical fitness visible externally",
+      "country": "Argentina",
+      "gold": "4",
+      "pred": "3",
+      "correct": false,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Iranian culture, what is a common practice when offering something to guests?\nRead the following statements and select the option that include all the appropriate statements for this question.\n(i) Offering tea multiple times, even if they initially decline\n(ii) Offering a handshake as soon as they enter\n(iii) Asking the guest to help themselves from the fridge\n(iv) Waiting for the guest to ask for something before offering.\n1. i, iii\n2. i, ii\n3. i, iii, iv\n4. ii, iv",
+      "country": "Iran",
+      "gold": "2",
+      "pred": "3",
+      "correct": false,
+      "response": "Answer: 3\nReasoning: Based on the cultural context, I will analyze each option step by step:\n1. Offering tea multiple times, even if they initially decline: This is a common practice in many Middle Ea"
+    },
+    {
+      "query": "In Hong Kong, what is the appropriate behavior when receiving a red pocket during Chinese New Year?\n1. Politely thank the giver and say the New year greeting, and then put it in your bag or pocket without opening it.\n2. Open it immediately to show appreciation for the amount given.\n3. Share how much was received with those around you.\n4. Donate it to charity in front of the giver to show generosity.",
+      "country": "Hong Kong",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Moroccan culture, what is the favorite meal for Friday?\n1. Pizza with pepperoni.\n2. Sushi rolls\n3. Couscous with vegetables and meat\n4. Hamburgers and fries",
+      "country": "Morocco",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What is not a common way to celebrate the afterlife in Chinese culture?\n1. Throwing a gathering with music and dance.\n2. Decorating a house with lights and ornaments.\n3. Burning joss paper offerings.\n4. Lighting candles and placing them in windows.",
+      "country": "China",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1."
+    },
+    {
+      "query": "At a wedding in Scotland what would the groom normally wear?\n1. A dress\n2. Black suit\n3. Polka dot kilt\n4. Tartan kilt",
+      "country": "United Kingdom",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4."
+    },
+    {
+      "query": "What ceremony do young Zulu maidens participate in as a coming-of-age celebration where their virginity is tested and celebrated?\n1. Umhlanga Reed Dance\n2. Bat Mitzvah.\n3. Quinceañera\n4. Sweet Sixteen Party",
+      "country": "South Africa",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In a small, picturesque village in America, what traditional event do you think the community was most looking forward to celebrating annually?\n1. The annual Harvest Festival\n2. Independence Day fireworks\n3. Black Friday sales\n4. Halloween trick-or-treating",
+      "country": "United States",
+      "gold": "1",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2."
+    },
+    {
+      "query": "What is the ritual with Kutia during Christmas in the Slavic culture?\n1. Sharing Kutia with family, because Kutia is very expensive dish\n2. Eating at least three spoons of Kutia at Cristmas evening is obligatory\n3. Placing Kutia under the Christmas tree as a gift for the first visitor.\n4. Hanging a bowl of Kutia outside for Santa Claus.",
+      "country": "Ukraine",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "What type of weddings do Indians typically prefer?\n1. Quick courthouse weddings\n2. Destination weddings abroad.\n3. Small and intimate ceremonies\n4. Lavish and large weddings",
+      "country": "India",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Turkish culture, what event do the bride and her female friends and family typically participate in the day before the wedding?\n1. Bridal Shower\n2. Rehearsal Dinner.\n3. Bachelorette Party\n4. Henna Night",
+      "country": "Turkey",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "What is a common tradition for celebrating New Year's Eve in Russia?\n1. First-footing immediately after midnight.\n2. Eating 12 grapes at midnight.\n3. Preparing and enjoying a special salad called Olivier.\n4. Watching the ball drop on television.",
+      "country": "Russia",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In the USA, what is considered inappropriate when addressing a Black man?\n1. Using the term \"Buddy\"\n2. Using the term \"Mister\"\n3. Using the term \"Sir\".\n4. Using the term \"Nigga\"",
+      "country": "United States",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Peruvian culture, when is considered appropriate for women to get married?\n1. In their 20s\n2. Once they have a good job\n3. No specific age expectation\n4. After their 35s",
+      "country": "Peru",
+      "gold": "3",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "What should you do with your muddy boots freshly soiled from a hike visiting a Polish friend’s cozy apartment at the hill?\n1. Taking off your shoes\n2. Entering home with footwear\n3. Respect cultural home practices and taking caution not to step on any carpets\n4. Adopting house footwear etiquette",
+      "country": "Poland",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Dutch culture, what is one of the most celebrated milestones in a young kid's life?\n1. When they bake their first stroopwafel\n2. When they read their first book in dutch\n3. When they can ride a bicycle without training wheels\n4. When they score their first goal in soccer",
+      "country": "Netherlands",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Korean culture, when passing scissors to someone else, which part of the scissors should they hold?\n1. Neither, scissors are placed down for the other person to pick up.\n2. The handle, offering the blades to the other person.\n3. The blades, offering the handle to the other person.\n4. The middle part of the scissors, keeping both the blades and handle equally accessible.",
+      "country": "South Korea",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Japanese culture, is slurping noodles and making noises while eating considered rude?\n1. It's seen as inappropriate and a sign of poor manners.\n2. It's encouraged as a sign of enjoying the dish.\n3. It's ignored with no particular importance attached to it.\n4. It's considered rude and should be avoided.",
+      "country": "Japan",
+      "gold": "3",
+      "pred": "2",
+      "correct": false,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Spanish culture, how effective are Spanish shutters in blocking out light?\n1. They are mostly decorative and let in almost all the light.\n2. They block out almost all light to keep interiors cool and dark during the day.\n3. They let in a moderate amount of light to brighten up the room while still providing privacy.\n4. They are designed to filter out only the harsh sunlight while allowing most of the light to pass through.",
+      "country": "Spain",
+      "gold": "2",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Romanian culture, which city is the most visited by tourists?\n1. Cluj-Napoca\n2. Bucharest\n3. New York City\n4. Los Angeles",
+      "country": "Romania",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2."
+    },
+    {
+      "query": "How do people in Chile typically not celebrate their country's independence?\n1. By attending a national parade and speeches by political leaders on the independence day itself.\n2. By having a large fireworks display on the evening of the independence day.\n3. By decorating the streets with national flags and enjoying traditional dances and foods for a whole week.\n4. By gathering for a big family dinner on the eve of the independence day.",
+      "country": "Chile",
+      "gold": "2",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Japanese culture, how are people expected to communicate in public places?\n1. Speak secretively\n2. Share personal experiences to start conversations\n3. Speak loudly to show enthusiasm\n4. Use hand gestures instead of talking loudly",
+      "country": "Japan",
+      "gold": "1",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "In Javanese culture, how does someone react if you accidentally step on their foot?\n1. They tap your shoulder and point to their foot, expecting an apology.\n2. They might ignore the incident completely, not wanting to cause a scene.\n3. They gently remind you, using the most polite language possible, that your foot is on top of theirs.\n4. They loudly express their discomfort and ask you to be more careful.",
+      "country": "Indonesia",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What is typically done before a man can marry a woman in Igbo culture?\n1. Completing a home renovation project together\n2. Getting approval from friends\n3. Paying a bride price\n4. Going on a road trip together.",
+      "country": "Nigeria",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What is a traditional practice during Chinese New Year in China?\n1. Giving out green envelopes\n2. Lion dance celebration\n3. Lighting a menorah\n4. Having a cold beer",
+      "country": "China",
+      "gold": "2",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "In Korean culture, which is considered as a symbol of luck?\n1. writing someone's name in red\n2. number \"4\"\n3. crows (bird)\n4. number \"7\"",
+      "country": "South Korea",
+      "gold": "4",
+      "pred": "4",
+      "correct": true,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "What is a typical extracurricular activity for a child in Australian Asian culture?\n1. Participating in a cheerleading squad\n2. Playing the piano\n3. Playing American football\n4. Competing in rodeo events.",
+      "country": "Australia",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2."
+    },
+    {
+      "query": "What do Brazilians usually wear on their feet indoors in the cold weather?\n1. Shoes\n2. Flip-flops\n3. Barefoot\n4. Flip-flops with socks",
+      "country": "Brazil",
+      "gold": "4",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1."
+    },
+    {
+      "query": "What is the typical duration of working hours for both private and public sectors in Egypt?\n1. 7 hours.\n2. 7.5 hours\n3. 8 hours\n4. 8.5 hours",
+      "country": "Egypt",
+      "gold": "3",
+      "pred": "3",
+      "correct": true,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "In Czech culture, what is expected when entering someone's home?\n1. Enter the house with your own indoor shoes.\n2. Remove your shoes and put on your indoor shoes.\n3. Remove your shoes and accept host's indoor shoes.\n4. Remove your shoes and put on your host's shoes.",
+      "country": "Czech Republic",
+      "gold": "3",
+      "pred": "1",
+      "correct": false,
+      "response": "Answer: 1"
+    },
+    {
+      "query": "What is the national dish of the Ukrainian culture?\n1. Sushi\n2. Borscht\n3. Tacos\n4. Hamburger",
+      "country": "Ukraine",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In Taiwanese culture, what color combination is popular for flip-flops?\n1. Red and Black\n2. Green and Yellow\n3. Red and White\n4. None of the above",
+      "country": "Taiwan",
+      "gold": "4",
+      "pred": "3",
+      "correct": false,
+      "response": "Answer: 3"
+    },
+    {
+      "query": "What is the most common situation in which to say 'Sumimasen' in Japanese culture?\n1. When people thank to others\n2. When people apologise\n3. When people excuse themselves\n4. When people greet eachother",
+      "country": "Japan",
+      "gold": "2",
+      "pred": "2",
+      "correct": true,
+      "response": "Answer: 2"
+    },
+    {
+      "query": "In South Korean culture, what is said to happen to a man if he enters the kitchen for cooking or washing dishes?\n1. His penis will get smaller\n2. His penis will fell off\n3. He will find a good wife\n4. He will gain respect from family members",
+      "country": "South Korea",
+      "gold": "2",
+      "pred": "4",
+      "correct": false,
+      "response": "Answer: 4"
+    },
+    {
+      "query": "How do people traditionally greet each other in Nepali culture?\n1. Namaste\n2. Hug\n3. High five.\n4. Handshake",
+      "country": "Nepal",
+      "gold": "1",
+      "pred": "1",
+      "correct": true,
+      "response": "Answer: 1"
+    }
+  ]
+}

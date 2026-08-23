@@ -1,0 +1,129 @@
+{
+  "total_samples": 5081,
+  "task_type": "blend",
+  "judge_total": 3623,
+  "judge_correct": 2480,
+  "judge_accuracy": 0.6845155948109302,
+  "guardian_total": 3760,
+  "guardian_correct": 2445,
+  "guardian_accuracy": 0.6502659574468085,
+  "gt_distribution": {
+    "1": 1186,
+    "3": 1341,
+    "2": 1334,
+    "4": 1220
+  },
+  "judge_answer_distribution": {
+    "1": 1100,
+    "null": 1458,
+    "2": 1144,
+    "3": 1379
+  },
+  "per_country": {
+    "Algeria": {
+      "total": 304,
+      "judge_correct": 147,
+      "judge_accuracy": 0.48355263157894735,
+      "guardian_correct": 146,
+      "guardian_accuracy": 0.48026315789473684
+    },
+    "Assam": {
+      "total": 358,
+      "judge_correct": 163,
+      "judge_accuracy": 0.4553072625698324,
+      "guardian_correct": 164,
+      "guardian_accuracy": 0.4581005586592179
+    },
+    "Azerbaijan": {
+      "total": 325,
+      "judge_correct": 144,
+      "judge_accuracy": 0.4430769230769231,
+      "guardian_correct": 144,
+      "guardian_accuracy": 0.4430769230769231
+    },
+    "China": {
+      "total": 335,
+      "judge_correct": 190,
+      "judge_accuracy": 0.5671641791044776,
+      "guardian_correct": 179,
+      "guardian_accuracy": 0.5343283582089552
+    },
+    "Ethiopia": {
+      "total": 335,
+      "judge_correct": 121,
+      "judge_accuracy": 0.3611940298507463,
+      "guardian_correct": 126,
+      "guardian_accuracy": 0.3761194029850746
+    },
+    "Greece": {
+      "total": 320,
+      "judge_correct": 148,
+      "judge_accuracy": 0.4625,
+      "guardian_correct": 142,
+      "guardian_accuracy": 0.44375
+    },
+    "Indonesia": {
+      "total": 620,
+      "judge_correct": 333,
+      "judge_accuracy": 0.5370967741935484,
+      "guardian_correct": 318,
+      "guardian_accuracy": 0.5129032258064516
+    },
+    "Iran": {
+      "total": 306,
+      "judge_correct": 140,
+      "judge_accuracy": 0.45751633986928103,
+      "guardian_correct": 138,
+      "guardian_accuracy": 0.45098039215686275
+    },
+    "Mexico": {
+      "total": 334,
+      "judge_correct": 173,
+      "judge_accuracy": 0.5179640718562875,
+      "guardian_correct": 168,
+      "guardian_accuracy": 0.5029940119760479
+    },
+    "North Korea": {
+      "total": 290,
+      "judge_correct": 110,
+      "judge_accuracy": 0.3793103448275862,
+      "guardian_correct": 113,
+      "guardian_accuracy": 0.3896551724137931
+    },
+    "Northern Nigeria": {
+      "total": 249,
+      "judge_correct": 93,
+      "judge_accuracy": 0.37349397590361444,
+      "guardian_correct": 94,
+      "guardian_accuracy": 0.37751004016064255
+    },
+    "South Korea": {
+      "total": 366,
+      "judge_correct": 189,
+      "judge_accuracy": 0.5163934426229508,
+      "guardian_correct": 186,
+      "guardian_accuracy": 0.5081967213114754
+    },
+    "Spain": {
+      "total": 325,
+      "judge_correct": 155,
+      "judge_accuracy": 0.47692307692307695,
+      "guardian_correct": 156,
+      "guardian_accuracy": 0.48
+    },
+    "United Kingdom": {
+      "total": 304,
+      "judge_correct": 178,
+      "judge_accuracy": 0.5855263157894737,
+      "guardian_correct": 182,
+      "guardian_accuracy": 0.5986842105263158
+    },
+    "United States": {
+      "total": 310,
+      "judge_correct": 196,
+      "judge_accuracy": 0.632258064516129,
+      "guardian_correct": 189,
+      "guardian_accuracy": 0.6096774193548387
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "base_model": "/root/autodl-tmp/CultureMoE/Culture_Alignment/Meta-Qwen-2.5-7B-Instruct",
+  "max_length": 512,
+  "data_format": "new_format (instruction + instruction_mask + input + output + label)"
+}
